@@ -1,5 +1,7 @@
 package am.ik.rontolisp.java;
 
+import java.util.List;
+
 import org.jspecify.annotations.Nullable;
 
 /**
@@ -30,6 +32,31 @@ public interface JavaFiles {
 	 * @return the file, or {@code null} when no root has it or there is no source path
 	 */
 	default @Nullable Source library(String path) {
+		return null;
+	}
+
+	/**
+	 * The files of a package of the libraries the program uses: the {@code .java} files
+	 * directly in one directory of every root of its source path, the first root's of a
+	 * name, in the order of the roots.
+	 * @param directory the package's directory below a root, ending in {@code /}
+	 * ({@code org/example/}), or the empty string for the unnamed package
+	 * @return the files, each as {@link #library} reads it; none when there is no source
+	 * path
+	 */
+	default List<Source> libraryPackage(String directory) {
+		return List.of();
+	}
+
+	/**
+	 * Reads a file of the source tree of a program that starts at no file: one the host
+	 * holds as the program's own, the browser playground's uploads. A program given with
+	 * {@code -e} has none.
+	 * @param path the path below the top of the tree, as a class's qualified name spells
+	 * it ({@code geo/Place.java})
+	 * @return the file, or {@code null} when the tree has none or there is no tree
+	 */
+	default @Nullable Source tree(String path) {
 		return null;
 	}
 

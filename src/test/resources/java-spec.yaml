@@ -15686,7 +15686,7 @@ standalone:
                 for (Function<T, String> column : this.columns) {
                     cells.add(column.apply(value));
                 }
-                return String.join(" | ", cells);
+                return Cells.joined(cells);
             }
 
             public static String describe(Currency money) {
@@ -15695,6 +15695,25 @@ standalone:
 
             public static String mark() {
                 return new String(new int[] { 0x2713, 0x21 }, 0, 2);
+            }
+        }
+      geo/Formats.java: |
+        package geo;
+
+        import java.util.List;
+
+        public final class Formats {
+
+            private Formats() {
+            }
+        }
+
+        // a class in the file of another, which the program never names: the library
+        // was compiled whole, so its classes reach it
+        final class Cells {
+
+            static String joined(List<String> cells) {
+                return String.join(" | ", cells);
             }
         }
     provided:

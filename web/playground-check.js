@@ -32,6 +32,11 @@ const POOL = `void main() {
 }
 `;
 
+const PLACED = `void main() {
+    IO.println(new geo.Place("x"));
+}
+`;
+
 // [what is checked, language, export, arguments, what it answers (a string or a test)]
 const CHECKS = [
 	["a Java program runs on the interpreter", "java", "rontoRunProgram",
@@ -62,6 +67,12 @@ const CHECKS = [
 		(answer) => answer.startsWith("ERROR:") && answer.includes("this wait would never end")],
 	["the compile buttons run the command line's pipeline: a macro is expanded", "lisp", "rontoCompileWasm",
 		["(defmacro twice (x) `(* 2 ,x)) (print (twice 21))"], (answer) => printed(answer).includes("42")],
+	["a file is uploaded", "java", "rontoPutFile",
+		["geo/Place.java", "package geo;\npublic record Place(String name) { }\n"],
+		(answer) => answer.split("\n").includes("geo/Place.java")],
+	["the uploads are a Java program's source tree: a class it names is read from one", "java", "rontoRunProgram",
+		[PLACED, ""], "Place[name=x]\n"],
+	["and so on the compile path", "java", "rontoCompileWasm", [PLACED], (answer) => printed(answer) === "Place[name=x]\n"],
 ];
 
 // What a module the compile button answered prints: it writes through fd_write alone.

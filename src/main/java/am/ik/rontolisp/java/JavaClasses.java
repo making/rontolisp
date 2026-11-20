@@ -1650,10 +1650,14 @@ final class JavaClasses {
 			throw refused;
 		}
 		String path = name.replace('.', '/') + ".java";
-		JavaFiles.Source found = this.entry == null ? null : this.files.find(this.entry, this.root + path);
+		JavaFiles.Source found = this.entry == null ? this.files.tree(path)
+				: this.files.find(this.entry, this.root + path);
 		boolean dependency = found == null;
 		if (dependency) {
 			found = this.files.library(path);
+		}
+		if (found == null) {
+			found = declaring(name);
 		}
 		if (found == null) {
 			return null;
@@ -1698,6 +1702,49 @@ final class JavaClasses {
 			this.methodParameters = parameters;
 		}
 		return this.classes.get(name);
+	}
+
+	/**
+	 * The file of a library that declares a class not named after it, or {@code null}. A
+	 * library was compiled whole, so its classes reach such a class wherever it is
+	 * declared, and its binary jar holds the class file a program is compiled against;
+	 * its sources jar holds the class only in the file of another, which javac's
+	 * {@code -sourcepath} and a source launcher read only once that class is named. Such
+	 * a class is not {@code public} (JLS 7.6), so it is declared in its package's
+	 * directory. Every simple name a library's package resolves is first looked for as a
+	 * class of the package, so the files of that directory under the roots are read once
+	 * a package into the names their texts declare a class of, nested or not, and only a
+	 * file declaring the name asked for is lexed, for whether it does so outside every
+	 * brace.
+	 */
+	private JavaFiles.@Nullable Source declaring(String name) {
+		int dot = name.lastIndexOf('.');
+		String directory = dot < 0 ? "" : name.substring(0, dot).replace('.', '/') + "/";
+		String simpleName = name.substring(dot + 1);
+		for (JavaFiles.Source file : this.declaredIn.computeIfAbsent(directory, this::declaredNames)
+			.getOrDefault(simpleName, List.of())) {
+			if (JavaParser.declaresTopLevel(file.text(), simpleName)) {
+				return file;
+			}
+		}
+		return null;
+	}
+
+	/** The files of a library's packages by the names they declare a class of. */
+	private final Map<String, Map<String, List<JavaFiles.Source>>> declaredIn = new HashMap<>();
+
+	/**
+	 * The files of a library's package by the names they declare a class of, in the order
+	 * of the roots; the first root's of a path.
+	 */
+	private Map<String, List<JavaFiles.Source>> declaredNames(String directory) {
+		Map<String, List<JavaFiles.Source>> declared = new HashMap<>();
+		for (JavaFiles.Source file : this.files.libraryPackage(directory)) {
+			for (String simpleName : JavaParser.declaredNames(file.text())) {
+				declared.computeIfAbsent(simpleName, key -> new ArrayList<>()).add(file);
+			}
+		}
+		return declared;
 	}
 
 	/**

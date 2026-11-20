@@ -1438,11 +1438,14 @@ class JavaLoweringTest {
 				    public static String describe(Currency money, Clocked clocked) { return "a day"; }
 				    public static int deep() { return today() == null ? 0 : 1; }
 				}
-				""", "lib/Hidden.java", "package lib; class Hidden { static int three() { return 3; } }",
-				"lib/Clocked.java", """
-						package lib;
-						public class Clocked implements java.util.EventListener { }
-						""", "lib/Mark.java",
+				""", "lib/Extra.java", """
+				package lib;
+				public class Extra { }
+				class Hidden { static int three() { return 3; } }
+				""", "lib/Clocked.java", """
+				package lib;
+				public class Clocked implements java.util.EventListener { }
+				""", "lib/Mark.java",
 				"package lib; public @interface Mark { String value() default \"\"; int[] at() default { 1 }; }");
 		JavaFiles files = new JavaFiles() {
 			@Override
@@ -1454,6 +1457,17 @@ class JavaLoweringTest {
 			public JavaFiles.@Nullable Source library(String path) {
 				String text = library.get(path);
 				return text == null ? null : new JavaFiles.Source("lib.jar!/" + path, text);
+			}
+
+			@Override
+			public List<JavaFiles.Source> libraryPackage(String directory) {
+				return library.entrySet()
+					.stream()
+					.filter(file -> file.getKey().startsWith(directory)
+							&& file.getKey().indexOf('/', directory.length()) < 0)
+					.sorted(Map.Entry.comparingByKey())
+					.map(file -> new JavaFiles.Source("lib.jar!/" + file.getKey(), file.getValue()))
+					.toList();
 			}
 		};
 		// Only what is reached is lowered: the method called, not the one beside it; a
@@ -1485,9 +1499,11 @@ class JavaLoweringTest {
 				{ "new lib.Clocked();",
 						"lib.jar!/lib/Clocked.java:2:33: the class java.util.EventListener is not supported by"
 								+ " the experimental Java subset yet" },
-				// the library's classes are checked for access as the program's are
+				// the library's classes are checked for access as the program's are; one
+				// declared in the file of another is found, as its class file would be
 				{ "lib.Hidden.three();",
 						"app/Main.java:2:13: Hidden is not public in lib; cannot be accessed from outside package" },
+				{ "IO.println(lib.Lists.unused(1));", null },
 				{ "@org.marks.Checked int x = 1;", "app/Main.java:2:9: cannot find symbol: class org.marks.Checked" },
 				{ "@lib.Lists int x = 1;",
 						"app/Main.java:2:9: incompatible types: Lists cannot be converted to Annotation" } };

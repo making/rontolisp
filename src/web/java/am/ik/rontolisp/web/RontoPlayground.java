@@ -193,8 +193,8 @@ public final class RontoPlayground {
 		// The strict (error-mode) read is deliberate here, not a leftover: a #. is a read
 		// error on this page. A Scheme source is read with the uploaded files its include
 		// / define-library name, a Starlark one with the modules its load statements
-		// name, a Java one with the files of its classes.
-		List<LispVal> read = repl.language().readStrict(source, features, uploads);
+		// name, a Java one with the uploads as its source tree.
+		List<LispVal> read = repl.language().readStrict(source, features, uploads, PlaygroundRepl.STANDARDS);
 		// objc:, appkit:, metal: and scene: need the Objective-C runtime on the machine
 		// that RUNS the program, and the JVM output would need the binding's class
 		// files, which the browser build does not carry: refuse both outputs by the

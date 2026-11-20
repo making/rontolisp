@@ -54,8 +54,9 @@ reference in a call's applicability: k24 (2026-11-19); what comes after is `.tod
 k10, k12 and k26 left); YAVI compiled to wasm in both of its styles, the milestone k24 was
 asked for, and where its bytes go: k33 (2026-11-20; "YAVI compiled to wasm" below); the
 Maven plugin's `wasm` goal reading a project's
-dependencies from their sources jars, a session reading the source path: k32 (2026-11-20;
-what it left is `.todo/k44`); `LinkedHashMap`, `LinkedHashSet`, `LinkedList`: k27 (2026-11-19);
+dependencies from their sources jars, a session reading the source path: k32 (2026-11-20);
+a library's class in the file of another, the playground's uploads as a program's source
+tree, a sources jar's resources measured: k44 (2026-11-20; what it left is `.todo/k53`); `LinkedHashMap`, `LinkedHashSet`, `LinkedList`: k27 (2026-11-19);
 `java.text.MessageFormat`: k28 (2026-11-19); `java.text.Normalizer` over the normalization
 forms the front ends share: k29 (2026-11-19); a `Class` as a value, a type variable in
 scope kept apart from the one a call finds, `Name.this` as the instance of `Name`
@@ -346,7 +347,8 @@ is refused by name where it is reached, never where a class is read.** Asked for
   (`jvm-export.md`, "The plugin's `wasm` goal"); `-e` and a session read the roots
   ("A session" below). **The playground has none** (k32, 2026-11-20): its files are text
   (`rontoPutFile(name, content)`), so a jar cannot be uploaded as one, and it has no
-  resolver. Its uploaded `.java` files as a root are `.todo/k44`.
+  resolver. Its uploads are the program's source TREE instead ("The playground's uploads"
+  below).
 - **A program's file wins**: `JavaClasses.programClass` asks the source tree, then the
   roots in order (javac's order of a source path). A class of a JDK's packages is never
   looked for on either.
@@ -386,8 +388,36 @@ is refused by name where it is reached, never where a class is read.** Asked for
 - **Annotations** ("Annotations" below): of a dependency, one whose type is on no root is
   dropped, as javac reads a class file whose annotation type is missing from the class
   path without a word -- jspecify is `provided` in YAVI's pom and is not in the graph.
-- **Resources are not read**: a sources jar holds none, and `ResourceBundle` and its kind
-  are classes the library does not have, refused by name where reached (`.todo/k44`).
+- **A class in the file of another class is found** (k44, 2026-11-20;
+  `JavaClasses.declaring`): a library was compiled whole, and its binary jar holds the
+  class file, so a program and the library's own classes reach the class as they would
+  through a class path. Measured on JDK 25: `lib.Uses` calling `Hidden`, declared in
+  `lib/Lists.java`, is `cannot find symbol` under `javac -sourcepath src` and under the
+  source launcher with `lib/` in its tree, compiles and runs against the jar of the
+  library compiled whole, and a program naming `lib.Hidden` against that jar is `Hidden is
+  not public in lib`. So a ROOT is searched and the program's source tree is not (the
+  launcher's rule). Such a class is not `public` (JLS 7.6), so it is in its package's
+  directory: on a miss, the `.java` files of that directory under every root
+  (`JavaFiles.libraryPackage`, a jar opened once a package, `SourceLoader.loadArchiveEntries`,
+  its texts kept for the reads after) are read once into the names their texts spell after
+  `class`/`interface`/`enum`/`record` (`JavaParser.declaredNames`, a `String.indexOf` a
+  keyword), and only a file spelling the name asked for is lexed for a declaration outside
+  every brace (`JavaParser.declaresTopLevel`); that file is declared whole. Every simple
+  name a library's class resolves is first a miss in its package (`am.ik.yavi.core.String`),
+  so nearly every package the program reaches is read: measured on `Booking`'s lowering in
+  one process, cold, lexing every file of a package cost 0.3 s (YAVI's 380 files, 8.8 MB:
+  354 ms cold), a scan by characters 0.3 s too (305 ms), a zip opened for each entry
+  ~0.1 s; the keyword search reads all 380 in 75 ms cold, and the lowering is 5.6 s cold
+  with and without the search. The modules (`Booking`, `Member`) are the same bytes.
+- **Resources are not read.** Measured k44: a sources jar does hold them --
+  maven-source-plugin packs `src/main/resources` by default. YAVI 0.18.0's carries
+  `META-INF/services/javax.annotation.processing.Processor` and its native-image
+  `reflect-config.json`, all its binary jar has but the compiler's `yavi.kotlin_module`;
+  netty's carry `module-info.yml` and `META-INF/native-image/..`. YAVI reads none at run
+  time (its `services` entry is for javac). `Class.getResource*`, `ResourceBundle` and
+  `ServiceLoader` are refused by name where reached; a source launcher finds a resource in
+  its source tree (`Main.class.getResourceAsStream("data.txt")` beside `app/Main.java`, and
+  `"/top.txt"` at its root). What embeds one is `.todo/k53`.
 - **What the front end lacked that a library showed** (each a rule of the language, fixed
   for every program, pinned by the fixture):
   - An **exact method reference** naming a class counts in applicability by what its
@@ -550,7 +580,31 @@ alternating, then a call, 100 buffers timed): 120 declarations 10 ms a buffer, 4
   standards' roots, and `JavaClasses.programClass` with no entry file asks only `library`;
   `-e` read them already through `SourceLanguage.read`. The roots' entry lists are read once a
   session, the files again with every buffer as the whole session is lowered again.
-  `JavaClassPathCliTest#aJavaProgramCompilesItsLibrariesFromTheSourcePath`.
+  `JavaClassPathCliTest#aJavaProgramCompilesItsLibrariesFromTheSourcePath`. The
+  playground's session has its uploads as a tree ("The playground's uploads" below).
+
+## The playground's uploads (2026-11-20, k44)
+
+**The uploaded files are the source tree of the page's program, which is read from no
+file**: a class it names is read from the upload its qualified name spells (`geo/Place.java`,
+`Helper.java`), as a source launcher reads a file beside the one it starts at -- lowered
+whole, located and checked as the program's own (`Origin.PROGRAM`), on the interpreter
+(`PlaygroundRepl.run`, a buffer of the session) and on both compile buttons
+(`RontoPlayground.frontend`) alike.
+- **Why a tree and not a root**: a root's file is a library's, trusted and lowered as
+  reached ("A library from the source path"), because its authors compiled it; nobody
+  compiled an upload, and `javac -sourcepath` checks a file it reads there as one it was
+  given. The page has no file name to root a tree at, and `-e` has none either and reads
+  no file, so the tree is a standard of its own: `SourceStandards.javaSourceTree`, `""` on
+  the page (`PlaygroundRepl.STANDARDS`, a name resolved against nothing is the name as
+  uploaded), `null` everywhere else; `JavaFiles.tree` reads it where `programClass` has no
+  entry file. A buffer keeps its positions without a file name, and one declaring a
+  package is not refused for where it is not.
+- **The page uploads a file by its base name**, so an uploaded file is a class of the
+  unnamed package; `rontoPutFile("geo/Place.java", ..)` spells a package's.
+- Pinned by `PlaygroundReplTest#theJavaPickKeepsItsDeclarationsAcrossBuffersAndRunsAProgram`
+  (a run, a buffer, an upload's error at its own position) and `web/playground-check.js`
+  (the image: a run and the `.wasm` button over an upload).
 
 ## Across languages (2026-11-17, j74)
 

@@ -33,16 +33,22 @@ import am.ik.rontolisp.starlark.StarlarkStandard;
  * @param javaSourcePath the roots a Java program's libraries are read from as source, a
  * directory or a jar each, in order ({@code --java-source-path}, then the sources jars of
  * the {@code --java-source-dep} coordinates); none when the command line names none
+ * @param javaSourceTree the top of the source tree of a Java program read from no file,
+ * which a class it names is read from as a source launcher reads a file beside the one it
+ * starts at: the browser playground's uploads, by the names they were uploaded by
+ * ({@code ""}); {@code null} for none -- a program given with {@code -e} reads no other
+ * file
  */
 public record SourceStandards(SchemeStandard scheme, @Nullable String clojureConfigDir, List<String> clojureAliases,
-		@Nullable ClojureRepositories clojureRepositories, StarlarkStandard starlark, List<String> javaSourcePath) {
+		@Nullable ClojureRepositories clojureRepositories, StarlarkStandard starlark, List<String> javaSourcePath,
+		@Nullable String javaSourceTree) {
 
 	/**
 	 * Every language's default: {@code --scheme-standard rontolisp},
 	 * {@code --starlark-standard rontolisp}, no user config.
 	 */
 	public static final SourceStandards DEFAULT = new SourceStandards(SchemeStandard.RONTOLISP, null, List.of(), null,
-			StarlarkStandard.RONTOLISP, List.of());
+			StarlarkStandard.RONTOLISP, List.of(), null);
 
 	/**
 	 * The standards.
@@ -52,6 +58,8 @@ public record SourceStandards(SchemeStandard scheme, @Nullable String clojureCon
 	 * @param clojureRepositories where coordinates are fetched from, or {@code null}
 	 * @param starlark what a Starlark file is read against
 	 * @param javaSourcePath the roots of a Java program's source path
+	 * @param javaSourceTree the source tree of a Java program read from no file, or
+	 * {@code null}
 	 */
 	public SourceStandards {
 		clojureAliases = List.copyOf(clojureAliases);
@@ -79,7 +87,7 @@ public record SourceStandards(SchemeStandard scheme, @Nullable String clojureCon
 	public static SourceStandards parse(@Nullable String scheme, @Nullable String starlark) {
 		return new SourceStandards(scheme == null ? SchemeStandard.RONTOLISP : SchemeStandard.parse(scheme), null,
 				List.of(), null, starlark == null ? StarlarkStandard.RONTOLISP : StarlarkStandard.parse(starlark),
-				List.of());
+				List.of(), null);
 	}
 
 	/**
@@ -89,7 +97,7 @@ public record SourceStandards(SchemeStandard scheme, @Nullable String clojureCon
 	 */
 	public SourceStandards withClojureConfigDir(@Nullable String dir) {
 		return new SourceStandards(this.scheme, dir, this.clojureAliases, this.clojureRepositories, this.starlark,
-				this.javaSourcePath);
+				this.javaSourcePath, this.javaSourceTree);
 	}
 
 	/**
@@ -99,7 +107,7 @@ public record SourceStandards(SchemeStandard scheme, @Nullable String clojureCon
 	 */
 	public SourceStandards withClojureAliases(List<String> aliases) {
 		return new SourceStandards(this.scheme, this.clojureConfigDir, aliases, this.clojureRepositories, this.starlark,
-				this.javaSourcePath);
+				this.javaSourcePath, this.javaSourceTree);
 	}
 
 	/**
@@ -110,7 +118,7 @@ public record SourceStandards(SchemeStandard scheme, @Nullable String clojureCon
 	 */
 	public SourceStandards withClojureRepositories(@Nullable ClojureRepositories repositories) {
 		return new SourceStandards(this.scheme, this.clojureConfigDir, this.clojureAliases, repositories, this.starlark,
-				this.javaSourcePath);
+				this.javaSourcePath, this.javaSourceTree);
 	}
 
 	/**
@@ -121,7 +129,17 @@ public record SourceStandards(SchemeStandard scheme, @Nullable String clojureCon
 	 */
 	public SourceStandards withJavaSourcePath(List<String> roots) {
 		return new SourceStandards(this.scheme, this.clojureConfigDir, this.clojureAliases, this.clojureRepositories,
-				this.starlark, roots);
+				this.starlark, roots, this.javaSourceTree);
+	}
+
+	/**
+	 * These standards with the source tree of a Java program read from no file.
+	 * @param tree the top of the tree, which file names are relative to
+	 * @return the standards
+	 */
+	public SourceStandards withJavaSourceTree(String tree) {
+		return new SourceStandards(this.scheme, this.clojureConfigDir, this.clojureAliases, this.clojureRepositories,
+				this.starlark, this.javaSourcePath, tree);
 	}
 
 	/**

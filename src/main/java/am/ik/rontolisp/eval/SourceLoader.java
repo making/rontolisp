@@ -6,8 +6,11 @@ import java.nio.charset.StandardCharsets;
 import java.nio.file.Files;
 import java.nio.file.Path;
 import java.util.ArrayList;
+import java.util.Collection;
 import java.util.Enumeration;
+import java.util.LinkedHashMap;
 import java.util.List;
+import java.util.Map;
 import java.util.zip.ZipEntry;
 import java.util.zip.ZipFile;
 
@@ -223,6 +226,27 @@ public interface SourceLoader {
 	}
 
 	/**
+	 * Reads several entries of a zip archive as UTF-8 text, the archive opened once where
+	 * the loader can: a Java library's package read for the class one of its files
+	 * declares beside its own. The default reads each with {@link #loadArchiveEntry}.
+	 * @param archive the archive's path
+	 * @param entries the entries' names, as {@link #listArchive} gives them
+	 * @return the text of each entry that could be read, by name, in the order given
+	 */
+	default Map<String, String> loadArchiveEntries(String archive, Collection<String> entries) {
+		Map<String, String> read = new LinkedHashMap<>();
+		for (String entry : entries) {
+			try {
+				read.put(entry, loadArchiveEntry(archive, entry));
+			}
+			catch (IOException ex) {
+				// an entry that cannot be read is left out
+			}
+		}
+		return read;
+	}
+
+	/**
 	 * Reads one entry of a zip archive's octets. The default encodes what
 	 * {@link #loadArchiveEntry} answers in UTF-8.
 	 * @param archive the archive's path
@@ -422,6 +446,25 @@ public interface SourceLoader {
 			@Override
 			public String loadArchiveEntry(String archive, String entry) throws IOException {
 				return new String(loadArchiveEntryBytes(archive, entry), StandardCharsets.UTF_8);
+			}
+
+			@Override
+			public Map<String, String> loadArchiveEntries(String archive, Collection<String> entries) {
+				Map<String, String> read = new LinkedHashMap<>();
+				try (ZipFile zip = new ZipFile(Path.of(archive).toFile())) {
+					for (String entry : entries) {
+						ZipEntry found = zip.getEntry(entry);
+						if (found != null && !found.isDirectory()) {
+							try (InputStream in = zip.getInputStream(found)) {
+								read.put(entry, new String(in.readAllBytes(), StandardCharsets.UTF_8));
+							}
+						}
+					}
+				}
+				catch (IOException | RuntimeException ex) {
+					// what could not be read is left out
+				}
+				return read;
 			}
 
 			@Override

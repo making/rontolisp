@@ -1,6 +1,7 @@
 package am.ik.rontolisp.eval;
 
 import java.io.IOException;
+import java.util.ArrayList;
 import java.util.List;
 import java.util.Locale;
 import java.util.Map;
@@ -172,8 +173,9 @@ public enum SourceLanguage {
 			return readUntilError(source, features, file, standards, loader);
 		}
 		try {
-			return new LispReader.ReadPrefix(Java.load(source, file, javaFiles(loader, standards.javaSourcePath()),
-					SourceLanguage::warned, oneStack(features)), null);
+			return new LispReader.ReadPrefix(
+					Java.load(source, file, javaFiles(loader, standards), SourceLanguage::warned, oneStack(features)),
+					null);
 		}
 		catch (LispReadException ex) {
 			return new LispReader.ReadPrefix(List.of(), ex);
@@ -254,7 +256,7 @@ public enum SourceLanguage {
 						Starlark.read(source, file, standards.starlark(), starlarkFiles(loader)), null);
 			}
 			if (this == JAVA) {
-				return new LispReader.ReadPrefix(Java.read(source, file, javaFiles(loader, standards.javaSourcePath()),
+				return new LispReader.ReadPrefix(Java.read(source, file, javaFiles(loader, standards),
 						SourceLanguage::warned, oneStack(features)), null);
 			}
 			return new LispReader.ReadPrefix(clojure(source, features, file, standards, loader, false, null).forms(),
@@ -389,22 +391,44 @@ public enum SourceLanguage {
 
 	/**
 	 * The files of a Java program, through a loader: those of its source tree by a path
-	 * relative to the starting file's directory ({@link SourceLoader#resolve}), and those
-	 * of the libraries it uses under the roots of its source path, a directory or a jar
-	 * each, the first root that has the file. A jar's entries are listed once a read.
+	 * relative to the starting file's directory ({@link SourceLoader#resolve}), or below
+	 * the tree the standards name for a program read from no file, and those of the
+	 * libraries it uses under the roots of its source path, a directory or a jar each,
+	 * the first root that has the file. A jar's entries are listed once a read.
 	 * @param loader the loader, or {@code null} for none
-	 * @param sourcePath the roots of the program's source path, in order
+	 * @param standards the roots of the program's source path, in order, and the tree of
+	 * a program read from no file
 	 * @return the files
 	 */
-	static JavaFiles javaFiles(@Nullable SourceLoader loader, List<String> sourcePath) {
+	static JavaFiles javaFiles(@Nullable SourceLoader loader, SourceStandards standards) {
 		if (loader == null) {
 			return JavaFiles.NONE;
 		}
+		List<String> sourcePath = standards.javaSourcePath();
+		String sourceTree = standards.javaSourceTree();
 		Map<String, java.util.Set<String>> archives = new java.util.HashMap<>();
+		java.util.function.Function<String, java.util.Set<String>> entries = root -> archives.computeIfAbsent(root,
+				archive -> {
+					List<String> listed = loader.listArchive(archive);
+					return listed == null ? java.util.Set.of() : new java.util.LinkedHashSet<>(listed);
+				});
+		// a jar's entries read, by jar: a package searched is read in one opening of
+		// its jar, and a file of it read later is not read again
+		Map<String, Map<String, String>> archiveTexts = new java.util.HashMap<>();
 		return new JavaFiles() {
 			@Override
 			public JavaFiles.@Nullable Source find(String from, String path) {
 				String resolved = SourceLoader.resolve(SourceLoader.parentDir(from), path);
+				String text = text(loader, resolved);
+				return text == null ? null : new JavaFiles.Source(resolved, text);
+			}
+
+			@Override
+			public JavaFiles.@Nullable Source tree(String path) {
+				if (sourceTree == null) {
+					return null;
+				}
+				String resolved = SourceLoader.resolve(sourceTree, path);
 				String text = text(loader, resolved);
 				return text == null ? null : new JavaFiles.Source(resolved, text);
 			}
@@ -420,13 +444,16 @@ public enum SourceLanguage {
 						}
 						continue;
 					}
-					java.util.Set<String> entries = archives.computeIfAbsent(root, archive -> {
-						List<String> listed = loader.listArchive(archive);
-						return listed == null ? java.util.Set.of() : new java.util.HashSet<>(listed);
-					});
-					if (entries.contains(path)) {
+					if (entries.apply(root).contains(path)) {
+						Map<String, String> texts = archiveTexts.computeIfAbsent(root,
+								archive -> new java.util.HashMap<>());
+						String text = texts.get(path);
 						try {
-							return new JavaFiles.Source(root + "!/" + path, loader.loadArchiveEntry(root, path));
+							if (text == null) {
+								text = loader.loadArchiveEntry(root, path);
+								texts.put(path, text);
+							}
+							return new JavaFiles.Source(root + "!/" + path, text);
 						}
 						catch (IOException ex) {
 							// an entry that cannot be read is no file of the root
@@ -434,6 +461,47 @@ public enum SourceLanguage {
 					}
 				}
 				return null;
+			}
+
+			@Override
+			public List<JavaFiles.Source> libraryPackage(String directory) {
+				Map<String, JavaFiles.Source> files = new java.util.LinkedHashMap<>();
+				for (String root : sourcePath) {
+					if (loader.isDirectory(root)) {
+						List<String> listed = loader.listDirectory(SourceLoader.resolve(root, directory));
+						for (String name : listed == null ? List.<String>of() : listed) {
+							String path = directory + name;
+							if (name.endsWith(".java") && !files.containsKey(path)) {
+								String resolved = SourceLoader.resolve(root, path);
+								String text = text(loader, resolved);
+								if (text != null) {
+									files.put(path, new JavaFiles.Source(resolved, text));
+								}
+							}
+						}
+						continue;
+					}
+					List<String> paths = new ArrayList<>();
+					for (String entry : entries.apply(root)) {
+						if (entry.startsWith(directory) && entry.endsWith(".java")
+								&& entry.indexOf('/', directory.length()) < 0 && !files.containsKey(entry)) {
+							paths.add(entry);
+						}
+					}
+					Map<String, String> texts = archiveTexts.computeIfAbsent(root,
+							archive -> new java.util.HashMap<>());
+					List<String> unread = paths.stream().filter(path -> !texts.containsKey(path)).toList();
+					if (!unread.isEmpty()) {
+						texts.putAll(loader.loadArchiveEntries(root, unread));
+					}
+					for (String path : paths) {
+						String text = texts.get(path);
+						if (text != null) {
+							files.put(path, new JavaFiles.Source(root + "!/" + path, text));
+						}
+					}
+				}
+				return List.copyOf(files.values());
 			}
 
 			@Override
@@ -754,8 +822,23 @@ public enum SourceLanguage {
 	 * @return the parsed top-level forms
 	 */
 	public List<LispVal> readStrict(String source, Features features, @Nullable SourceLoader loader) {
+		return readStrict(source, features, loader, SourceStandards.DEFAULT);
+	}
+
+	/**
+	 * {@link #readStrict(String, Features, SourceLoader)} against standards of the
+	 * caller's: the browser playground's, whose Java program reads the uploaded files as
+	 * its source tree.
+	 * @param source the program text
+	 * @param features the active reader features
+	 * @param loader where named files are read from, or {@code null} when none can be
+	 * @param standards what each language is read against
+	 * @return the parsed top-level forms
+	 */
+	public List<LispVal> readStrict(String source, Features features, @Nullable SourceLoader loader,
+			SourceStandards standards) {
 		if (this != COMMON_LISP) {
-			return read(source, features, null, SourceStandards.DEFAULT, loader);
+			return read(source, features, null, standards, loader);
 		}
 		return LispReader.readAllFromString(source, features);
 	}

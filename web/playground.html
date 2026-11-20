@@ -421,7 +421,7 @@
 			</div>
 			<div class="toolbar">
 				<label for="file-upload">load files</label>
-				<input type="file" id="file-upload" multiple accept=".lisp,.lsp,.txt,.scm,.clj,.wit" disabled>
+				<input type="file" id="file-upload" multiple accept=".lisp,.lsp,.txt,.scm,.clj,.star,.java,.wit" disabled>
 				<span id="file-list" style="opacity:.7;font-size:.85em">none uploaded &mdash; then use <code id="file-hint">(load "name.lisp")</code></span>
 			</div>
 			<div id="compile-status">Compile output appears here. The downloaded file runs on a real JVM / wasm runtime.</div>
@@ -532,7 +532,7 @@
 			scheme: { samples: SCHEME_SAMPLES, first: "fibonacci", placeholder: "(+ 1 2 3)", fileHint: '(include "name.scm")' },
 			clojure: { samples: CLOJURE_SAMPLES, first: "fibonacci", placeholder: "(+ 1 2 3)", fileHint: '(load "name.clj")' },
 			starlark: { samples: STARLARK_SAMPLES, first: "fibonacci", placeholder: "1 + 2 + 3", fileHint: 'load("name.star", "f")' },
-			java: { samples: JAVA_SAMPLES, first: "fibonacci", placeholder: "1 + 2 + 3", fileHint: '(load "Main.java") at the lisp pick' },
+			java: { samples: JAVA_SAMPLES, first: "fibonacci", placeholder: "1 + 2 + 3", fileHint: 'new Place() of Place.java' },
 		};
 		const LANGUAGE_KEY = "rontolisp-language";
 

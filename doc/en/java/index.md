@@ -152,9 +152,11 @@ geo-sources.jar!/geo/Table.java:42:54: the class java.util.Currency is not suppo
 A class a library names only in a declaration, such as a parameter's type of a method the
 program never calls, is passed by. An annotation in a library whose type is not on the
 source path is dropped, as a compiler reads a class file without it: annotation-only
-dependencies need not be there. A class declared in a file named after another class is
-found once that file was read. A source file of the program wins over one of the same
-name on the source path.
+dependencies need not be there. A class a library declares in the file of another class
+is found in whichever file of its package declares it, as its class file would be: the
+library was compiled whole. In the program's own source tree, such a class is found once
+that file was read, as the `java` launcher finds it. A source file of the program wins over
+one of the same name on the source path.
 
 ## At the prompt
 
@@ -183,7 +185,11 @@ and what was declared before calls the new one: a method, an override, a subclas
 is reached by every call. A class keeps its static fields until it is declared again; then the
 variables whose type names it hold `null`. The session reads no file of a source tree; a class
 of a library on the [source path](#using-a-third-party-library) is read as a program's is.
-The playground has no source path.
+The playground has no source path. Its uploaded files are the source tree of its program
+and of its session instead: a class the program names is read from the upload its name
+spells, `Place` from `Place.java` and `geo.Place` from `geo/Place.java`, and is checked
+as the program's own. The page uploads a file by its name alone, so an uploaded class is
+in the unnamed package.
 
 ## Across languages
 

@@ -154,6 +154,77 @@ final class JavaParser {
 	}
 
 	/**
+	 * Whether a source declares a class of a name at its top level: a {@code class},
+	 * {@code interface}, {@code enum} or {@code record} followed by the name outside
+	 * every brace.
+	 * @param source the text
+	 * @param name a simple name
+	 * @return whether it declares the class; {@code false} when the text is no Java the
+	 * lexer reads
+	 */
+	static boolean declaresTopLevel(String source, String name) {
+		List<JavaToken> tokens;
+		try {
+			tokens = JavaLexer.lex(source, null);
+		}
+		catch (LispReadException ex) {
+			return false;
+		}
+		int depth = 0;
+		for (int i = 0; i + 1 < tokens.size(); i++) {
+			JavaToken token = tokens.get(i);
+			if (token.is("{")) {
+				depth++;
+			}
+			else if (token.is("}")) {
+				depth--;
+			}
+			else if (depth == 0 && token.kind() == JavaToken.Kind.IDENTIFIER && TYPE_KEYWORDS.contains(token.text())
+					&& tokens.get(i + 1).kind() == JavaToken.Kind.IDENTIFIER && tokens.get(i + 1).text().equals(name)) {
+				return true;
+			}
+		}
+		return false;
+	}
+
+	/**
+	 * The names a source's text spells after a {@code class}, {@code interface},
+	 * {@code enum} or {@code record} and white space, read off its characters without
+	 * lexing it: every class it declares, nested or not, and what a comment or a string
+	 * spells so -- a superset {@link #declaresTopLevel} decides on.
+	 * @param source the text
+	 * @return the names
+	 */
+	static Set<String> declaredNames(String source) {
+		Set<String> names = new java.util.HashSet<>();
+		int n = source.length();
+		// a search for each keyword: the text is long, and most of it is no keyword
+		for (String keyword : TYPE_KEYWORDS) {
+			for (int at = source.indexOf(keyword); at >= 0; at = source.indexOf(keyword, at + keyword.length())) {
+				int name = at + keyword.length();
+				if (at > 0 && Character.isJavaIdentifierPart(source.charAt(at - 1))) {
+					continue;
+				}
+				int after = name;
+				while (name < n && Character.isWhitespace(source.charAt(name))) {
+					name++;
+				}
+				if (name == after || name == n || !Character.isJavaIdentifierStart(source.charAt(name))) {
+					continue;
+				}
+				int end = name;
+				while (end < n && Character.isJavaIdentifierPart(source.charAt(end))) {
+					end++;
+				}
+				names.add(source.substring(name, end));
+			}
+		}
+		return names;
+	}
+
+	private static final List<String> TYPE_KEYWORDS = List.of("class", "interface", "enum", "record");
+
+	/**
 	 * Parses members the front end writes for a class itself -- a record's
 	 * {@code equals}, an enum's {@code values()} --, every node at one position of the
 	 * program.

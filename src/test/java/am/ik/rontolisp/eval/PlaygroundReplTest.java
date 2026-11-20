@@ -169,6 +169,19 @@ class PlaygroundReplTest {
 		assertThat(repl.eval("String.valueOf(xs[0])")).isEqualTo("$3 ==> \"6\"");
 		assertThat(new PlaygroundRepl(NO_FILES).pick(SourceLanguage.JAVA).run("void main() { IO.println(1 + 2); }"))
 			.isEqualTo("3\n");
+		// The uploads are the source tree of a program the page reads from no file: a
+		// class it names, or a buffer of its session, is read from the upload its name
+		// spells and checked as the program's own.
+		PlaygroundRepl uploaded = new PlaygroundRepl(
+				files(Map.of("geo/Place.java", "package geo; public record Place(String name) { }", "Helper.java",
+						"class Helper { static int twice(int n) { return 2 * n; } }", "Bad.java",
+						"class Bad { static int unused() { return \"s\"; } }")))
+			.pick(SourceLanguage.JAVA);
+		assertThat(uploaded.run("void main() { IO.println(new geo.Place(\"x\").name() + Helper.twice(2)); }"))
+			.isEqualTo("x4\n");
+		assertThat(uploaded.eval("new geo.Place(\"y\")")).isEqualTo("$1 ==> Place[name=y]");
+		assertThatThrownBy(() -> uploaded.run("void main() { Bad.unused(); }"))
+			.hasMessage("Bad.java:1:42: incompatible types: String cannot be converted to int");
 		// Where the host has one stack, a program that starts threads is handed to what
 		// runs it there; any other program, and every program of a host with threads,
 		// is the interpreter's.

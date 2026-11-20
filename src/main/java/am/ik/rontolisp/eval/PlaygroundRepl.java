@@ -68,6 +68,15 @@ public final class PlaygroundRepl {
 			+ "a buffer of this session runs on the page's one stack, where no thread can wait for another "
 			+ "(put the code in a main method and run the program)";
 
+	/**
+	 * What the page's sources are read against: every language's default, and as the
+	 * source tree of a Java program, which the page reads from no file, the uploaded
+	 * files by the names they were uploaded by -- a class the program names is read from
+	 * the upload its qualified name spells ({@code geo/Place.java}), as a source launcher
+	 * reads a file beside the one it starts at.
+	 */
+	public static final SourceStandards STANDARDS = SourceStandards.DEFAULT.withJavaSourceTree("");
+
 	private final ByteArrayOutputStream buffer = new ByteArrayOutputStream();
 
 	private final PrintStream out = new PrintStream(this.buffer, true, StandardCharsets.UTF_8);
@@ -183,8 +192,8 @@ public final class PlaygroundRepl {
 		this.buffer.reset();
 		try {
 			boolean markers = SourceLanguage.usesReadEvalMarkers(source);
-			List<LispVal> forms = this.language.read(source, this.evaluator.sourceFeatures(), null,
-					SourceStandards.DEFAULT, this.loader);
+			List<LispVal> forms = this.language.read(source, this.evaluator.sourceFeatures(), null, STANDARDS,
+					this.loader);
 			if (this.oneStack != null && this.language == SourceLanguage.JAVA && JavaLibrary.startsThreads(forms)) {
 				// what reading the program wrote on the page -- its warnings -- comes
 				// first
@@ -260,7 +269,7 @@ public final class PlaygroundRepl {
 
 	private SourceSession session() {
 		return this.sessions.computeIfAbsent(this.language, picked -> {
-			SourceSession session = new SourceSession(picked, SourceStandards.DEFAULT, this.loader);
+			SourceSession session = new SourceSession(picked, STANDARDS, this.loader);
 			session.attach(this.evaluator);
 			return session;
 		});
