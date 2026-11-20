@@ -220,7 +220,8 @@ final class JavaIntrinsics {
 	/** The letters of a pattern each question of Patterns asks for. */
 	private static final Map<String, String> PATTERN_LETTERS = Map.of("java.time.format.Patterns.weeks()", "YwWec",
 			"java.time.format.Patterns.quarters()", "Qq", "java.time.format.Patterns.julian()", "g",
-			"java.time.format.Patterns.zones()", "zv", "java.time.format.Patterns.periods()", "B");
+			"java.time.format.Patterns.zones()", "zv", "java.time.format.Patterns.periods()", "B",
+			"java.time.format.Patterns.localizedOffsets()", "OZ");
 
 	/**
 	 * The questions answered by whether the program makes an instance of a class of the
@@ -234,6 +235,23 @@ final class JavaIntrinsics {
 			"java.time.format.Step.zoneTexts()", "java.time.format.Step.ZoneText");
 
 	private static final String PARSED_OTHERS = "java.time.format.Parsed.others()";
+
+	/**
+	 * The questions answered by whether the program reaches a method of the library: the
+	 * characters of a formatter's numbers where it can give one a decimal style, the
+	 * cutting of the fields read where it can name the fields to resolve.
+	 */
+	private static final Map<String, String> REACHES = Map.of("java.time.format.DateTimeFormatter.decimals()",
+			FORMATTER + ".withDecimalStyle", "java.time.format.Parsed.filtered()", FORMATTER + ".withResolverFields",
+			"java.time.format.Parsed.lenients()", FORMATTER + ".withResolverStyle");
+
+	/**
+	 * Whether reaching a method of the library, by its class and name, answers a
+	 * question.
+	 */
+	static boolean watched(String member) {
+		return REACHES.containsValue(member);
+	}
 
 	private static final String ZONED = "java.time.ZonedDateTime";
 
@@ -256,7 +274,9 @@ final class JavaIntrinsics {
 			default -> CALENDARS.contains(member) ? Boolean.valueOf(lowering.asksCalendars())
 					: PATTERN_LETTERS.containsKey(member)
 							? Boolean.valueOf(lowering.namesLetter(PATTERN_LETTERS.get(member)))
-							: MADE.containsKey(member) ? Boolean.valueOf(lowering.makesClass(MADE.get(member))) : null;
+							: MADE.containsKey(member) ? Boolean.valueOf(lowering.makesClass(MADE.get(member)))
+									: REACHES.containsKey(member)
+											? Boolean.valueOf(lowering.reaches(REACHES.get(member))) : null;
 		};
 	}
 
@@ -2091,6 +2111,8 @@ final class JavaIntrinsics {
 		MADE.forEach((question, made) -> natives.put(question,
 				(lowering, call) -> lowering.makesClass(made) ? JavaForms.T : JavaForms.NIL));
 		natives.put(PARSED_OTHERS, (lowering, call) -> lowering.makesOtherFields() ? JavaForms.T : JavaForms.NIL);
+		REACHES.forEach((question, member) -> natives.put(question,
+				(lowering, call) -> lowering.reaches(member) ? JavaForms.T : JavaForms.NIL));
 		natives.put("java.time.format.Step.region0(String)", library(ZONE_ID, "region"));
 		natives.put("java.time.format.Step.held0()", library(ZONE_CHANGES, "held"));
 		natives.put("java.time.format.Step.regional()",

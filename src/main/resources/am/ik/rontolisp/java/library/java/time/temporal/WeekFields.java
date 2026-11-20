@@ -61,6 +61,10 @@ public final class WeekFields implements Serializable {
     }
 
     public static synchronized WeekFields of(DayOfWeek firstDayOfWeek, int minimalDaysInFirstWeek) {
+        if (firstDayOfWeek == null) {
+            throw new NullPointerException(
+                    "Cannot invoke \"java.time.DayOfWeek.toString()\" because \"firstDayOfWeek\" is null");
+        }
         if (minimalDaysInFirstWeek < 1 || minimalDaysInFirstWeek > 7) {
             throw new IllegalArgumentException("Minimal number of days is invalid");
         }

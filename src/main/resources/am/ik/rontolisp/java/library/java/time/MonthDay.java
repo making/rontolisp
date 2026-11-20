@@ -60,6 +60,7 @@ public final class MonthDay implements TemporalAccessor, TemporalAdjuster, Compa
     }
 
     public static MonthDay from(TemporalAccessor temporal) {
+        Objects.requireNonNull(temporal, "temporal");
         if (temporal instanceof MonthDay monthDay) {
             return monthDay;
         }

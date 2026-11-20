@@ -581,18 +581,34 @@ class JavaLoweringTest {
 				    }
 				}
 				""";
+		// The same for an offset as GMT and its hours (O, ZZZZ); and a formatter's
+		// decimal
+		// style, the fields it resolves and resolving leniently are in a program that
+		// reaches withDecimalStyle, withResolverFields and withResolverStyle.
 		assertThat(lower(patterned.formatted("\"uuuu'Y'\"", ""), "L15.java"))
 			.noneMatch(form -> form.contains("WeekFields") || form.contains("IsoFields")
 					|| form.contains("JulianFields") || form.contains("Parsed.resolveOthers")
 					|| form.contains("IsoChronology") || form.contains("ZoneNames") || form.contains("Step.DayPeriod")
-					|| form.contains("OfPeriod()|"));
+					|| form.contains("OfPeriod()|") || form.contains("Step.GmtOffset") || form.contains("getZeroDigit")
+					|| form.contains("Parsed.among") || form.startsWith("(DEFUN |java.time.format.Parsed.weekDay(")
+							&& form.contains("java.time.DayOfWeek.of(int)"));
 		assertThat(lower(patterned.formatted("args[0]", ".query(TemporalQueries.chronology())"), "L15.java"))
 			.anyMatch(form -> form.startsWith("(DEFUN |java.time.temporal.WeekFields.of(java.time.DayOfWeek,int)| "))
 			.anyMatch(form -> form.startsWith("(DEFUN |java.time.format.Parsed.resolveOthers()| "))
 			.anyMatch(form -> form.startsWith("(DEFUN |java.time.format.Parsed.query(")
 					&& form.contains("java.time.chrono.IsoChronology.INSTANCE"))
 			.anyMatch(form -> form.startsWith("(DEFUN |java.time.format.ZoneNames.read(java.time.format.Reading,"))
-			.anyMatch(form -> form.startsWith("(DEFUN |java.time.format.Parsed.middleOfPeriod()| "));
+			.anyMatch(form -> form.startsWith("(DEFUN |java.time.format.Parsed.middleOfPeriod()| "))
+			.anyMatch(form -> form.startsWith("(DEFUN |java.time.format.Step.GmtOffset.parse("));
+		assertThat(lower(patterned.formatted("\"uuuu'Y'\").withDecimalStyle(java.time.format.DecimalStyle.STANDARD)"
+				+ ".withResolverFields(java.time.temporal.ChronoField.YEAR)"
+				+ ".withResolverStyle(java.time.format.ResolverStyle.LENIENT", ""), "L15.java"))
+			.anyMatch(form -> form.startsWith("(DEFUN |java.time.format.Reading.numeral(int)| ")
+					&& form.contains("getZeroDigit"))
+			.anyMatch(form -> form.startsWith("(DEFUN |java.time.format.Parsed.resolve(")
+					&& form.contains("Parsed.among"))
+			.anyMatch(form -> form.startsWith("(DEFUN |java.time.format.Parsed.weekDay(")
+					&& form.contains("java.time.DayOfWeek.of(int)"));
 		String localized = """
 				import java.time.LocalTime;
 				import java.time.format.*;

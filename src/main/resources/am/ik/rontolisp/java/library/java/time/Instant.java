@@ -21,6 +21,7 @@ import java.time.temporal.TemporalQueries;
 import java.time.temporal.TemporalQuery;
 import java.time.temporal.TemporalUnit;
 import java.time.temporal.UnsupportedTemporalTypeException;
+import java.util.Objects;
 
 public final class Instant implements Temporal, TemporalAdjuster, Comparable<Instant>, Serializable {
 
@@ -82,6 +83,7 @@ public final class Instant implements Temporal, TemporalAdjuster, Comparable<Ins
     }
 
     public static Instant from(TemporalAccessor temporal) {
+        Objects.requireNonNull(temporal, "temporal");
         if (temporal instanceof Instant instant) {
             return instant;
         }

@@ -192,6 +192,14 @@ interface JavaEmitter {
 		boolean makesOtherFields();
 
 		/**
+		 * Whether the program reaches a method of the library's Java source, by its class
+		 * and name ({@code java.time.format.DateTimeFormatter.withDecimalStyle}): one the
+		 * library watches ({@code JavaIntrinsics}), the first reach lowering the program
+		 * again.
+		 */
+		boolean reaches(String member);
+
+		/**
 		 * What {@code getResourceAsStream} of a class object answers: the stream of the
 		 * resource found beside the class it stands for at run time, or {@code null}.
 		 */

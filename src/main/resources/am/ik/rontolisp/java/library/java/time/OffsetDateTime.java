@@ -93,6 +93,7 @@ public final class OffsetDateTime implements Temporal, TemporalAdjuster, Compara
     }
 
     public static OffsetDateTime from(TemporalAccessor temporal) {
+        Objects.requireNonNull(temporal, "temporal");
         if (temporal instanceof OffsetDateTime dateTime) {
             return dateTime;
         }

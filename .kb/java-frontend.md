@@ -2524,8 +2524,8 @@ the sizes: `.todo/artefacts/k52-java-time-what-the-formatter-left/`.
   (the instants alone); `Year.isValidMonthDay` / `atMonthDay`; `getDisplayName` of
   `Month`, `DayOfWeek` and `Era` (a formatter's words), of `ChronoField` (CLDR's names of
   eight fields, the root's capitalized) and of a field of weeks (`week`).
-- **The calendar**: `Chronology`, `IsoChronology` (no `AbstractChronology`;
-  `resolveDate` refused), `Era`, `IsoEra`, `ChronoPeriod` (`Period` is one: its class
+- **The calendar**: `Chronology`, `IsoChronology` (`AbstractChronology` and `resolveDate`
+  came with k70), `Era`, `IsoEra`, `ChronoPeriod` (`Period` is one: its class
   object costs `Booking.java` 459 B). Read off the answers: `ChronoLocalDate.from` of a
   value of no calendar names `class java.time.LocalTime`; `epochSecond` refuses the year,
   the month, the day of the month, the hour, the minute, the second, then the date;
@@ -2701,13 +2701,124 @@ three only where it can make the part that writes it.** Provenance:
 - **The grid** (`Grid.java`, 2,350 lines): the interpreter (63 s), the JVM (5.7 s), wasm
   (5.6 s, 1,199,318 B) and the component (5.5 s) print a JDK's lines (the JDK 3.7 s, all on
   a loaded machine); the k35, k42, k43 and k52 grids print theirs as before.
-- Not there: `.todo/k70` (`DecimalStyle`, `toFormat`, `ParsePosition`, `withResolverFields`,
-  `IsoChronology.resolveDate`, the deviations k43 and k52 left, the cost of a computed
-  pattern, the table of every region's names).
+- What was not there came with k70 ("java.time: what k57 left"), but the localized pattern
+  of a requested template (`.todo/k77`) and the cost leads (`.todo/k79`).
 - Pins: java-spec `localized-forms-a-zones-name-in-words-and-a-days-period` (standalone,
   47 lines); `JavaZoneRulesTest` (the shipped names are the JDK's; a program's tables hold
   what it holds); `JavaLoweringTest#theLibraryIsJavaSourceLoweredAsFarAsTheProgramReaches`
   (the letters, a localized form's time).
+
+## java.time: what k57 left (2026-11-21, k70)
+
+**Invariant: a formatter writes and reads numbers in the characters of its `DecimalStyle`,
+reads from a `ParsePosition` resolved or not, serves as a `java.text.Format` and cuts the
+fields it read to the ones it resolves; `IsoChronology` and a program's `AbstractChronology`
+make a date of a map of fields -- all as a JDK 25 answers; a program pays for each only where
+it reaches the member that makes it.** Provenance:
+[java-frontend-provenance.md](java-frontend-provenance.md). The grid and the sizes:
+`.todo/artefacts/k70-java-time-what-k57-left/`.
+
+- **A decimal style** (`DecimalStyle`, `withDecimalStyle`): each locale `Locale` has answers
+  `STANDARD` itself (`DecimalStyle[0+-.]`; the hash is the four characters added up, 182);
+  `getAvailableLocales` is a new set of the five. Written in the style's digits counted from
+  its zero, its signs and its separator: a number (a value, a reduced one, a week of the
+  locale's, the number of a word with none) and a fraction, the pad character not; an
+  offset, a localized offset, an instant, a zone and a literal in ASCII. Read: the style's
+  digits alone (not ASCII, not another case), the positive sign tested first (one character
+  for both signs is positive, a digit as a sign is a sign), an instant in the style though
+  written in ASCII. `localizedBy` takes the locale's style, `withLocale` keeps the
+  formatter's. The formatter holds null for the standard one; `Writing.localize` rewrites
+  what a number wrote, `Reading.numeral` reads a digit.
+- **A reading from a position** (`parse(text, ParsePosition)`, `parseUnresolved`): an index
+  outside `0..length` is `StringIndexOutOfBoundsException` (`Index 30 out of bounds for length
+  19`); a failure notes the error index and leaves the index, a success moves it, the rest of
+  the text unread. Unresolved, a `Parsed` shows `null` for its calendar and answers none to
+  `chronology()`. `parse` at a position refuses where the position already held an error
+  index too, throws every index error as it is, a part's too, and wraps anything else; the
+  other `parse` members wrap an index error as well.
+- **A formatter as a `java.text.Format`** (`toFormat`, `DateTimeFormatter$ClassicFormat`):
+  `format` refuses a value that is no `TemporalAccessor`, wraps the formatter's refusal in an
+  `IllegalArgumentException` with its cause and sets the `FieldPosition` to 0 and 0;
+  `parseObject(String)` answers the resolved `Parsed`, or a query's value. Without a query a
+  refusal of where the text stops or goes on is a `ParseException` at its index and any other
+  (a part's, the resolving's) one at 0 with the cause; with a query the parse's refusal at its
+  index. `parseObject(String, ParsePosition)` answers null for whatever a reading or the
+  resolving throws, making the error index 0 where it is none (a null position is the
+  helpful NPE of `getErrorIndex`). Read off the answers: `ParsePosition`'s hash
+  `(errorIndex << 16) | index`, `FieldPosition`'s `(field << 24) | (begin << 16) | end` (the
+  attribute not in it), `Format.parseObject(String)`'s `Format.parseObject(String) failed`
+  at the error index. No `clone`: the subset has no `Cloneable` (`.todo/k16`).
+- **The fields resolved** (`withResolverFields`): the fields read are cut to those given
+  before anything is resolved; null for all, an empty array for none, a null kept; the same
+  fields answer the same formatter. They are an array, each field once (`Parsed.among`, by
+  `equals`); the set `getResolverFields` answers is made the first time it is asked. Measured:
+  a `HashSet` held put every class's `hashCode` in the program, 449,446 B of wasm against
+  415,823.
+- **The date fields over a map** (`Chronology.resolveDate`, `AbstractChronology`, and
+  `IsoChronology` now one): the documented combinations in the documented order -- an epoch
+  day first, its other fields left to be checked; a proleptic month; a year of an era; then a
+  year with a month and a day, a week of a month, a day of the year, a week of the year --
+  each field taken out of the map as it is checked, so what is left after a refusal is a
+  JDK's. ISO's answers two things otherwise than the generic one: an era of another value is
+  `Invalid value for era: 2` (the generic `Invalid value for Era (valid values 0 - 1): 2`),
+  and leniently a proleptic month is not checked. **`Parsed` keeps its own copy over its
+  arrays**: through the map, a program reading a date by a pattern was 56 KB larger (403,287
+  -> 459,364 B), so the algorithm is written twice and the grid holds both to a JDK.
+- **Leniently, a day of the week in an aligned week is the day before the one asked**
+  (`AbstractChronology.leniently`, `Parsed.weekDay`): from the week's start, the next or same
+  day of the week `d - 1`, a week further for each seven past the last, and `Invalid value for
+  DayOfWeek: 0` where `(d - 1 + 6)` truncated modulo seven is none (from `d = -6` down, every
+  seventh). 136,518 answers of 136,518 asked over years, months, weeks and days. k52's probe
+  "found no one rule" because its rule was the day of the calendar's week a day earlier, which
+  agrees only where the day lies in the start's week. Strictly and smartly, the day itself.
+- **The era `CE` leniently in English** is 1, the root's word; `BCE` is not read (`BC` is).
+- **A localized offset is read as a JDK reads it**: no part checked against its range
+  (`GMT+25:00`, `GMT+01:60` read); in full the hours and the minutes are two digits each, both
+  characters of a pair read before either is tested, so a text ending inside them is
+  `StringIndexOutOfBoundsException` at the text's length (`GMT+1` 5, `GMT+01:` 7, `GMT+x` 5;
+  within a pad, the pad's end); the seconds only where they stand whole; short, an hour of one
+  digit or two and the minutes and seconds where they stand. k43 refused such a text at its
+  start.
+- **Asked and unchanged**: a fraction of no fixed width right after a run does not end it,
+  its first keeping the fixed widths' digits; the clocks' `equals` and `hashCode` (a system
+  clock's zone + 1, a fixed one's instant ^ zone, an offset one's clock ^ duration, a ticking
+  one's clock ^ the tick's nanoseconds) were a JDK's already, `InstantSource.system()`'s is an
+  object's.
+- **The null refusals** of the formatter and the builder, of every class's `from`, of the
+  adjusters of a day of the week, `WeekFields.of` and ISO's calendar are a JDK's words, the
+  helpful ones (`Cannot invoke "java.time.DayOfWeek.getValue()" because "dayOfWeek" is null`)
+  written out; `appendGenericZoneText(style, null)` is no preferred zones.
+- **A calendar of the program's own**: the members a JDK's `Chronology` has as defaults are
+  defaults here (`date` and `dateYearDay` of an era, `dateNow`, `epochSecond`, which refuses the
+  offset, the time, then the date); `localDateTime`, `zonedDateTime` and `period` need another
+  calendar's date-times and periods and are refused (`UnsupportedOperationException`),
+  `.todo/k78`.
+- **Who pays** (`JavaIntrinsics.REACHES`, `JavaLowering.reaches`: a question answered by
+  whether the program reaches a member, the first reach lowering it again):
+  `DateTimeFormatter.decimals()` by `withDecimalStyle`, `Parsed.filtered()` by
+  `withResolverFields`, `Parsed.lenients()` by `withResolverStyle` -- the one way to a lenient
+  formatter, behind which only the lenient week rule is so far (`.todo/k79`) -- and
+  `Patterns.localizedOffsets()` by the letters `O` and `Z` (`GmtOffset`, 3.7 KB, was in every
+  program of a pattern).
+- **What a program pays** (wasm, base `358f6b493` -> after): `LocalDate.parse` of a text,
+  `ZonedDateTime` in UTC and in Tokyo, `plusDays` the same bytes; a date written by a pattern
+  306,048 -> 304,922, read 403,287 -> 402,498; a pattern computed where the program runs,
+  written and read, 508,946 -> 512,488; `ISO_LOCAL_DATE_TIME.format` 270,570 -> 271,385,
+  `LocalDate.parse(.., ISO_LOCAL_DATE)` 341,894 -> 342,408, `ZonedDateTime.parse` of
+  `ISO_ZONED_DATE_TIME` in Tokyo 421,883 -> 423,262; YAVI's `Member.java` and `Booking.java`
+  21 and 23 B more, k43's `yavi/Event.java` 989,578 -> 994,489 (it passes a pattern on, so it
+  names every letter and reaches `withResolverStyle`). The new members: a decimal style
+  309,258, `toFormat` 320,157, a reading from a position 402,793, `withResolverFields`
+  415,823.
+- **The grid** (`Grid.java`, 998 lines): the interpreter (85 s), the JVM (6 s, a 379,403 B
+  jar), wasm (5 s, 1,084,939 B) and the component (5 s) print a JDK's lines (the JDK 3 s); the
+  k35, k43, k52 and k57 grids print theirs as before.
+- Not there: the localized pattern of a requested template (`ofLocalizedPattern`,
+  `appendLocalized` and `getLocalizedDateTimePattern` of one): `.todo/k77`; a zone's name
+  written as an offset is the one of the table's making: `.todo/k80`.
+- Pins: java-spec `a-formatters-decimal-style-a-reading-from-a-position-the-fields-it-resolves-and-a-calendars-map`
+  (standalone, 54 lines); `JavaLoweringTest#theLibraryIsJavaSourceLoweredAsFarAsTheProgramReaches`
+  (the four questions).
 
 ## java.util.Date and java.sql (2026-11-20, k37)
 

@@ -112,6 +112,8 @@ public final class ZonedDateTime implements Temporal, ChronoZonedDateTime<LocalD
     }
 
     public static ZonedDateTime ofInstant(Instant instant, ZoneId zone) {
+        Objects.requireNonNull(instant, "instant");
+        Objects.requireNonNull(zone, "zone");
         return create(instant.getEpochSecond(), instant.getNano(), zone);
     }
 
@@ -158,6 +160,10 @@ public final class ZonedDateTime implements Temporal, ChronoZonedDateTime<LocalD
     }
 
     public static ZonedDateTime from(TemporalAccessor temporal) {
+        if (temporal == null) {
+            throw new NullPointerException(
+                    "Cannot invoke \"java.time.temporal.TemporalAccessor.query(java.time.temporal.TemporalQuery)\" because \"temporal\" is null");
+        }
         if (temporal instanceof ZonedDateTime dateTime) {
             return dateTime;
         }

@@ -257,6 +257,10 @@ public abstract class ZoneId implements Serializable {
     }
 
     public static ZoneId from(TemporalAccessor temporal) {
+        if (temporal == null) {
+            throw new NullPointerException(
+                    "Cannot invoke \"java.time.temporal.TemporalAccessor.query(java.time.temporal.TemporalQuery)\" because \"temporal\" is null");
+        }
         if (temporal instanceof ZonedDateTime dateTime) {
             return dateTime.getZone();
         }

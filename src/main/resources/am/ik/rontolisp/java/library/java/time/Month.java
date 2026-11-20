@@ -16,6 +16,7 @@ import java.time.temporal.TemporalQueries;
 import java.time.temporal.TemporalQuery;
 import java.time.temporal.UnsupportedTemporalTypeException;
 import java.util.Locale;
+import java.util.Objects;
 
 // The twelve months of a year.
 public enum Month implements TemporalAccessor, TemporalAdjuster {
@@ -30,6 +31,7 @@ public enum Month implements TemporalAccessor, TemporalAdjuster {
     }
 
     public static Month from(TemporalAccessor temporal) {
+        Objects.requireNonNull(temporal, "temporal");
         if (temporal instanceof Month month) {
             return month;
         }

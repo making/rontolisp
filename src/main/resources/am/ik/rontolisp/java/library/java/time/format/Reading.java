@@ -5,7 +5,9 @@
 // A text being read by a formatter: the fields read so far, in the order they were read,
 // the zone, and how letters and numbers are read at this point. An optional part that
 // fails is undone by restoring a copy; a setting changed inside any part stays changed
-// after it (a JDK's answer).
+// after it (a JDK's answer). A number, a fraction and an instant are read in the
+// formatter's decimal style, the digits from its zero and no other; an offset in the
+// standard one (a JDK 25's answers).
 package java.time.format;
 
 import java.time.ZoneId;
@@ -41,6 +43,9 @@ final class Reading {
 
     boolean leapSecond;
 
+    /** The formatter's decimal style where it has one of its own, or null for the standard one. */
+    DecimalStyle decimals;
+
     Reading(CharSequence text, int texts) {
         this.text = text;
         this.length = text.length();
@@ -50,6 +55,7 @@ final class Reading {
     Reading copy() {
         Reading copy = new Reading(text, texts);
         copy.length = length;
+        copy.decimals = decimals;
         copy.caseSensitive = caseSensitive;
         copy.strict = strict;
         copy.fields = fields.clone();
@@ -119,11 +125,26 @@ final class Reading {
         return true;
     }
 
+    /** Whether an ASCII digit stands at a position: what an offset is written in. */
     boolean digit(int at) {
         if (at >= length) {
             return false;
         }
         char c = text.charAt(at);
         return c >= '0' && c <= '9';
+    }
+
+    /** The digit of the decimal style standing at a position, or -1. */
+    int numeral(int at) {
+        if (at >= length) {
+            return -1;
+        }
+        int digit = text.charAt(at) - '0';
+        if (DateTimeFormatter.decimals()) {
+            if (decimals != null) {
+                digit = text.charAt(at) - decimals.getZeroDigit();
+            }
+        }
+        return digit >= 0 && digit <= 9 ? digit : -1;
     }
 }

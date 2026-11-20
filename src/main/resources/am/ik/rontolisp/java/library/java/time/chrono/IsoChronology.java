@@ -4,7 +4,9 @@
 //
 // The proleptic ISO calendar, whose dates are java.time.LocalDate. There is one, so it
 // is equal to itself alone and hashes as an object does: a JDK's hash code is made of
-// the identity of a class too.
+// the identity of a class too. Its dates are made of a map's fields as every calendar's
+// are, but for an era of another value and, leniently, a proleptic month out of range
+// (AbstractChronology.resolve).
 package java.time.chrono;
 
 import java.io.Serializable;
@@ -17,13 +19,16 @@ import java.time.Year;
 import java.time.ZoneId;
 import java.time.ZoneOffset;
 import java.time.ZonedDateTime;
+import java.time.format.ResolverStyle;
 import java.time.temporal.ChronoField;
 import java.time.temporal.TemporalAccessor;
+import java.time.temporal.TemporalField;
 import java.time.temporal.ValueRange;
 import java.util.List;
+import java.util.Map;
 import java.util.Objects;
 
-public final class IsoChronology implements Chronology, Serializable {
+public final class IsoChronology extends AbstractChronology implements Serializable {
 
     public static final IsoChronology INSTANCE = new IsoChronology();
 
@@ -107,6 +112,10 @@ public final class IsoChronology implements Chronology, Serializable {
     }
 
     public ValueRange range(ChronoField field) {
+        if (field == null) {
+            throw new NullPointerException(
+                    "Cannot invoke \"java.time.temporal.ChronoField.range()\" because \"field\" is null");
+        }
         return field.range();
     }
 
@@ -128,20 +137,20 @@ public final class IsoChronology implements Chronology, Serializable {
                 - zoneOffset.getTotalSeconds();
     }
 
-    public long epochSecond(Era era, int yearOfEra, int month, int dayOfMonth, int hour, int minute, int second,
-            ZoneOffset zoneOffset) {
-        return epochSecond(prolepticYear(era, yearOfEra), month, dayOfMonth, hour, minute, second, zoneOffset);
-    }
 
     public boolean isIsoBased() {
         return true;
     }
 
-    public int compareTo(Chronology other) {
-        return getId().compareTo(other.getId());
+    public LocalDate resolveDate(Map<TemporalField, Long> fieldValues, ResolverStyle resolverStyle) {
+        return (LocalDate) resolve(this, fieldValues, resolverStyle, true);
     }
 
-    public String toString() {
-        return getId();
+    public boolean equals(Object obj) {
+        return obj == this;
+    }
+
+    public int hashCode() {
+        return System.identityHashCode(this);
     }
 }
