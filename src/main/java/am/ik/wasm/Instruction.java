@@ -575,6 +575,9 @@ public interface Instruction {
 	/** {@code I64_EXTEND16_S} (0xC3): sign-extends the low 16 bits of an i64. */
 	int I64_EXTEND16_S = 0xC3;
 
+	/** {@code I64_EXTEND32_S} (0xC4): sign-extends the low 32 bits of an i64. */
+	int I64_EXTEND32_S = 0xC4;
+
 	// Misc prefix (saturating truncation / bulk memory group)
 	/** {@code MISC_PREFIX} (0xFC). */
 	int MISC_PREFIX = 0xFC;

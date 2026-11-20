@@ -139,11 +139,16 @@ final class WasmLetCompiler {
 		// eval mirror reads. The init is analyzed in the scope it is evaluated in (outer
 		// exact/counted locals, declared arrays); an assignment in the body only by what
 		// its shape bounds alone (a literal mask, an ldb), the body's own bindings being
-		// invisible to a scope-blind scan.
+		// invisible to a scope-blind scan. A binding the body's head declares an integer
+		// range of is exact over that range wherever no proof is as narrow: each store
+		// then checks what its value's shape does not prove (RawLocal.declared).
 		Map<String, WasmIntFusionCompiler.Range> exactRanges = new HashMap<>();
+		Set<String> checkedExact = new HashSet<>();
 		if (WasmIntFusionCompiler.speedTradesEnabled(ctx) && !ctx.dynamic && !async && ctx.asyncResume == null
 				&& !ctx.topLevel && !Boolean.getBoolean("rontolisp.debug.norawlocals")
 				&& bindings instanceof LispCons exactScan) {
+			Map<String, am.ik.rontolisp.compiler.DeclaredIntegerTypes.Interval> declaredIntervals = am.ik.rontolisp.compiler.DeclaredIntegerTypes
+				.declared(bodyExprs, ctx.closRegistry);
 			Set<String> seenNames = new HashSet<>();
 			Set<String> duplicateNames = new HashSet<>();
 			for (LispVal binding : exactScan.toList()) {
@@ -161,20 +166,31 @@ final class WasmLetCompiler {
 				}
 				WasmIntFusionCompiler.Range range = WasmIntFusionCompiler.valueRange(pairList.get(1), ctx,
 						free -> outerExactRange(free, ctx), true);
-				if (range == null) {
+				am.ik.rontolisp.compiler.DeclaredIntegerTypes.Interval declared = declaredIntervals.get(name);
+				if (range == null && declared == null) {
 					continue;
 				}
 				List<LispVal> assigned = WasmCountedLoopCompiler.plainAssignedValues(bodyExprs, name);
 				if (assigned == null) {
 					continue;
 				}
-				for (LispVal value : assigned) {
-					WasmIntFusionCompiler.Range r = WasmIntFusionCompiler.valueRange(value, ctx, free -> null, false);
-					if (r == null) {
-						range = null;
-						break;
+				for (int i = 0; range != null && i < assigned.size(); i++) {
+					WasmIntFusionCompiler.Range r = WasmIntFusionCompiler.valueRange(assigned.get(i), ctx, free -> null,
+							false);
+					range = r == null ? null : new WasmIntFusionCompiler.Range(Math.min(range.lo(), r.lo()),
+							Math.max(range.hi(), r.hi()));
+				}
+				if (declared != null && (range == null || range.lo() < declared.lo() || range.hi() > declared.hi())) {
+					// the init a first assignment
+					List<LispVal> scope = new ArrayList<>();
+					scope.add(new LispCons(new LispSymbol(LispNames.SETQ), new LispCons(pairList.get(0),
+							new LispCons(pairList.get(1), am.ik.rontolisp.LispNil.INSTANCE))));
+					scope.addAll(bodyExprs);
+					range = WasmIntFusionCompiler.readMostlyRaw(name, scope)
+							? new WasmIntFusionCompiler.Range(declared.lo(), declared.hi()) : null;
+					if (range != null) {
+						checkedExact.add(name);
 					}
-					range = new WasmIntFusionCompiler.Range(Math.min(range.lo(), r.lo()), Math.max(range.hi(), r.hi()));
 				}
 				if (range != null) {
 					exactRanges.put(name, range);
@@ -295,8 +311,9 @@ final class WasmLetCompiler {
 				WasmIntFusionCompiler.Range exact = exactRanges.get(name);
 				if (exact != null) {
 					// Exact binding: an i64 slot alone, its value always in range.
-					WasmIntFusionCompiler.RawLocal raw = WasmIntFusionCompiler.RawLocal.exact(ctx.allocI64Temp(),
-							exact.lo(), exact.hi());
+					WasmIntFusionCompiler.RawLocal raw = checkedExact.contains(name)
+							? WasmIntFusionCompiler.RawLocal.declared(ctx.allocI64Temp(), exact.lo(), exact.hi())
+							: WasmIntFusionCompiler.RawLocal.exact(ctx.allocI64Temp(), exact.lo(), exact.hi());
 					WasmIntFusionCompiler.compileRawStore(pairList.get(1), ctx, raw);
 					rawRegistrations.put(name, raw);
 					continue;
@@ -411,6 +428,33 @@ final class WasmLetCompiler {
 		Map<String, am.ik.rontolisp.compiler.DeclaredArrayTypes.Kind> newDeclaredArrays = null;
 		Set<String> savedArrayLocals = ctx.arrayLocals;
 		Set<String> newArrayLocals = null;
+		// The integer ranges declared for the body, bound and free names alike, scoped as
+		// the array kinds are: a fused site takes such a variable with no bail
+		// (WasmIntFusionCompiler.trustedRange).
+		Map<String, WasmIntFusionCompiler.Range> savedDeclaredIntegers = ctx.declaredIntegers;
+		Map<String, WasmIntFusionCompiler.Range> newDeclaredIntegers = null;
+		if (letVarNames.stream().anyMatch(savedDeclaredIntegers::containsKey)) {
+			newDeclaredIntegers = new HashMap<>(savedDeclaredIntegers);
+			newDeclaredIntegers.keySet().removeAll(letVarNames);
+		}
+		if (!ctx.topLevel && !async && ctx.asyncResume == null) {
+			Map<String, am.ik.rontolisp.compiler.DeclaredIntegerTypes.Interval> intervals = am.ik.rontolisp.compiler.DeclaredIntegerTypes
+				.declared(bodyExprs, ctx.closRegistry);
+			for (Map.Entry<String, am.ik.rontolisp.compiler.DeclaredIntegerTypes.Interval> entry : intervals
+				.entrySet()) {
+				if (ctx.specialVars.contains(entry.getKey())) {
+					continue;
+				}
+				if (newDeclaredIntegers == null) {
+					newDeclaredIntegers = new HashMap<>(savedDeclaredIntegers);
+				}
+				newDeclaredIntegers.put(entry.getKey(),
+						new WasmIntFusionCompiler.Range(entry.getValue().lo(), entry.getValue().hi()));
+			}
+		}
+		if (newDeclaredIntegers != null) {
+			ctx.declaredIntegers = newDeclaredIntegers;
+		}
 		for (String name : letVarNames) {
 			if (savedDeclaredArrays.containsKey(name)) {
 				if (newDeclaredArrays == null) {
@@ -577,6 +621,7 @@ final class WasmLetCompiler {
 		ctx.localIntLambdas = savedLocalLambdas;
 		ctx.rawLocals = savedRawLocals;
 		ctx.declaredArrays = savedDeclaredArrays;
+		ctx.declaredIntegers = savedDeclaredIntegers;
 		ctx.arrayLocals = savedArrayLocals;
 		ctx.nextI64Local = savedNextI64Local;
 		ctx.boundSpecials = savedBoundSpecials;

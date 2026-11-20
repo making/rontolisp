@@ -196,6 +196,19 @@ final class WasmLambdaCompiler {
 			paramNames.forEach(shadowed::remove);
 			ctx.localIntLambdas = shadowed;
 		}
+		// and so must a declared range or array kind of an outer variable
+		Map<String, WasmIntFusionCompiler.Range> savedDeclaredIntegers = ctx.declaredIntegers;
+		if (paramNames.stream().anyMatch(savedDeclaredIntegers::containsKey)) {
+			Map<String, WasmIntFusionCompiler.Range> shadowed = new HashMap<>(savedDeclaredIntegers);
+			paramNames.forEach(shadowed::remove);
+			ctx.declaredIntegers = shadowed;
+		}
+		Map<String, am.ik.rontolisp.compiler.DeclaredArrayTypes.Kind> savedDeclaredArrays = ctx.declaredArrays;
+		if (paramNames.stream().anyMatch(savedDeclaredArrays::containsKey)) {
+			Map<String, am.ik.rontolisp.compiler.DeclaredArrayTypes.Kind> shadowed = new HashMap<>(savedDeclaredArrays);
+			paramNames.forEach(shadowed::remove);
+			ctx.declaredArrays = shadowed;
+		}
 
 		for (int i = 0; i < positional; i++) {
 			String name = paramNames.get(i);
@@ -265,6 +278,8 @@ final class WasmLambdaCompiler {
 		ctx.boxedVars = savedBoxed;
 		ctx.rawLocals = savedRawLocals;
 		ctx.localIntLambdas = savedLocalLambdas;
+		ctx.declaredIntegers = savedDeclaredIntegers;
+		ctx.declaredArrays = savedDeclaredArrays;
 	}
 
 	/**

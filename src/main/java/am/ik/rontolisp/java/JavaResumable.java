@@ -219,7 +219,7 @@ final class JavaResumable {
 			"SYMBOL-MACROLET", "MULTIPLE-VALUE-BIND", "MULTIPLE-VALUE-CALL", "MULTIPLE-VALUE-PROG1", "PROGV",
 			"HANDLER-BIND", "RESTART-CASE", "IGNORE-ERRORS", "DOTIMES", "DOLIST", "DO", "DO*", "LOOP", "CASE", "ECASE",
 			"TYPECASE", "ETYPECASE", "WHEN", "UNLESS", "PROG", "PROG*", "PROG2", "RETURN", "PSETQ", "INCF", "DECF",
-			"PUSH", "POP", "THE", "LOCALLY", "EVAL-WHEN", "DESTRUCTURING-BIND", "DEFUN", "DEFVAR", "DEFSTRUCT",
+			"PUSH", "POP", "LOCALLY", "EVAL-WHEN", "DESTRUCTURING-BIND", "DEFUN", "DEFVAR", "DEFSTRUCT",
 			"%REPORTING-UNCAUGHT");
 
 	/**
@@ -227,7 +227,7 @@ final class JavaResumable {
 	 * each.
 	 */
 	private static final Set<String> SPINE = Set.of("PROGN", "IF", "AND", "OR", "PROG1", "BLOCK", "RETURN-FROM", "SETQ",
-			"LET", "LET*", "COND", "WHILE", "HANDLER-CASE", "UNWIND-PROTECT", "SETF");
+			"LET", "LET*", "COND", "WHILE", "HANDLER-CASE", "UNWIND-PROTECT", "SETF", "THE");
 
 	/**
 	 * A function of the program: a {@code defun}, a lambda, or what runs at top level.
@@ -1301,6 +1301,10 @@ final class JavaResumable {
 				return rebuilt(parts, 1);
 			case "BLOCK", "RETURN-FROM":
 				return rebuilt(parts, 2);
+			case "THE":
+				// an await stands in no the: what it asserts a resumable body has no
+				// fused site to read
+				return spine(parts.get(2));
 			case "SETQ": {
 				List<LispVal> rewritten = new ArrayList<>(parts.size());
 				rewritten.add(parts.get(0));

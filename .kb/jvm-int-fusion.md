@@ -42,9 +42,13 @@ enclosing expression's pending operands.
   (`.kb/clojure-frontend.md`). The fallback is the lowering's arm
   (`LispMacroExpander.expandMaskSignedField`: `logxor` with `-2^(k-1)`, `logand` with `2^k - 1`,
   `+` of `-2^(k-1)`) through `_logxor`/`_logand`/`_add`, so a non-integer reports as `LOGXOR`
-  exactly as the unfused lowering and the interpreter's builtin do. Over a lone leaf it declines
-  (`hasConstOperand` does not count the size): the site would only re-box. Any other size is a
-  leaf the lowering owns. Pinned by
+  exactly as the unfused lowering and the interpreter's builtin do. Over a lone leaf it is
+  fused too since 2026-11-20 (it declined until then: the site would only re-box): the
+  lowering it declined to is inline at every site, where the fused site is one call of a
+  method shared by shape. Every integral wrap of the Java front end is such a field
+  ([java-frontend.md](java-frontend.md), "Numbers"): `Zone.class` 282,879 B declining,
+  271,945 fused (278,339 with the old `int` mask). Any other size is a leaf the lowering
+  owns. Pinned by
   `JvmLispCompilerTest.aMaskedSignedFieldOverAProductMultipliesInOneUncheckedLong` (an `LMUL` in a
   fused method; default and size levels print SBCL's values, `testsupport/MaskSignedFieldProgram`).
 
