@@ -46,6 +46,7 @@ public interface List<E> extends SequencedCollection<E> {
     }
 
     default void replaceAll(UnaryOperator<E> operator) {
+        Objects.requireNonNull(operator);
         int n = size();
         for (int i = 0; i < n; i++) {
             set(i, operator.apply(get(i)));

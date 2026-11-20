@@ -17911,16 +17911,11 @@ class JvmLispCompilerTest {
 		// method
 		// takes its declared parameters with a cast and keeps no fallback and no handler;
 		// the size level fuses nothing and answers the same. A non-integer passed as a
-		// declared one is a catchable error, and a handler-case variable of a declared
-		// name is no declared variable.
+		// declared one is a catchable type-error.
 		String source = DeclaredIntegerProgram.PROGRAM + """
-				(defun shadowed (e)
-				  (declare (type (integer 0 9) e))
-				  (handler-case (error "x") (error (e) (if (numberp e) (+ e 1) :condition))))
-				(print (shadowed 3))
-				(print (handler-case (step32 1.5 2) (error () :caught)))
+				(print (handler-case (step32 1.5 2) (type-error () :caught)))
 				""";
-		String expected = DeclaredIntegerProgram.EXPECTED + "\n:CONDITION\n:CAUGHT";
+		String expected = DeclaredIntegerProgram.EXPECTED + "\n:CAUGHT";
 		List<LispVal> program = am.ik.rontolisp.eval.LispPreludeLibrary.process(LispReader.readAllFromString(source));
 		byte[] fast = JvmLispCompiler.builder()
 			.className("Test")

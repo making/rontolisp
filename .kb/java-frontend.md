@@ -50,8 +50,8 @@ collectors and the inference they need, `Name.class::isInstance` / `::cast`: k12
 (2026-11-19); a library read as source from the program's source path and lowered as far
 as the program reaches it, annotation types and type annotations, an exact method
 reference in a call's applicability: k24 (2026-11-19); what comes after is `.todo/k15`,
-`k16`, `k17`, `k18`, `k19`, `k20`, `k21`, `k22` and `k60` (what k00, k11, k06, k07, k08,
-k10, k12, k26, k47 and k55 left); YAVI compiled to wasm in both of its styles, the milestone k24 was
+`k16`, `k17`, `k18`, `k19`, `k20`, `k21`, `k22`, `k71` and `k72` (what k00, k11, k06, k07,
+k08, k10, k12, k26, k47, k55 and k60 left); YAVI compiled to wasm in both of its styles, the milestone k24 was
 asked for, and where its bytes go: k33 (2026-11-20; "YAVI compiled to wasm" below); the
 Maven plugin's `wasm` goal reading a project's
 dependencies from their sources jars, a session reading the source path: k32 (2026-11-20);
@@ -82,7 +82,10 @@ views, the wrappers of them, `ConcurrentSkipListMap` / `Set`, `Map.remove` and `
 value, `EnumSet` and `EnumMap`, `Random`'s bytes, floats and draws between bounds: k47
 (2026-11-20; "The sorted collections", "The enum collections" below); the sequenced
 collections and their reversed views, with what their probes found in the collections
-beside them: k55 (2026-11-20; "The sequenced collections" below).
+beside them: k55 (2026-11-20; "The sequenced collections" below); the collections of no
+element, of one and of n copies of `Collections`, `singletonMap`, the refusals of
+`List.of`'s list, a bridge's cast and `PriorityQueue`: k60 (2026-11-20; "The collections of
+Collections, a bridge's cast and PriorityQueue" below).
 
 ## Where it sits
 
@@ -1084,6 +1087,13 @@ lub of the lowers, else an upper, else OPEN.
   none taking it is the first error. A failure, not a success, marks it, so a program that
   lowered keeps its forms and its cost. Rejected as before: lowering every such argument a
   second time.
+- **Such a call tried against a candidate is tried against what the target says** (k60,
+  `tried`): with several candidates of the arity, a parameter of the candidate nothing else
+  said of takes what the type the call is wanted as says through the candidate's return type
+  (the class's type for a creation with `<>`). `PriorityQueue<P> q = new
+  PriorityQueue<>(Comparator.comparingInt(p -> p.rank()))` was `Object.rank() is not
+  supported` against all five constructors of one argument, and so was a `TreeSet` or a
+  `TreeMap` of such a comparator.
 - **One such call given for a variable arity parameter is tried against the array first**
   (k39, 2026-11-20): the phases taking it as the array come before the one taking it as
   an element, so a variable arity candidate takes a waiting argument at its last parameter
@@ -1404,7 +1414,7 @@ measured programs.
 - A method reference naming a class fits a functional interface by its arity when a call has
   several candidates (`takes`): `thenComparing(Point::label)` against `thenComparing(Comparator)`.
 - Sizes on wasm (2026-11-17, before / after): a list added to and read 3,732 / 25,592; one
-  printed 43,929 / 56,779; a `HashMap` put and read 37,802 / 57,847. `.todo/k60` holds what is
+  printed 43,929 / 56,779; a `HashMap` put and read 37,802 / 57,847. `.todo/k71` holds what is
   left and the leads.
 - **The library is Java a JDK compiles** (j79, decided by measuring): javac of JDK 25 takes
   all 139 files as a patch of its own `java.base` (`--patch-module java.base=<library>`) with
@@ -1516,7 +1526,7 @@ measured programs.
   `toUpperCase` / `toLowerCase` (the host's fold is uniform), and `digit` /
   `getNumericValue`, which still ask the host: a digit outside ASCII is read on the
   interpreter and the JVM and not on wasm, `Integer.parseInt` with it (`deviations.md`,
-  `.todo/k60`: a table there would be in every program that parses a number).
+  `.todo/k71`: a table there would be in every program that parses a number).
 - **`%h` hands the format the program's `hashCode()` only where the control may ask**
   (`JavaIntrinsics.formatted`): `%java-format` takes the function as its fourth argument,
   `nil` when the control is a constant with no `%h`. The arm itself is 401 B in every
@@ -1542,7 +1552,7 @@ measured programs.
   adjustments, the arithmetic over 17 durations, 103 texts through `parse` with each
   refusal's message, index and cause -- prints a JDK 25's lines on the four backends
   (`.todo/artefacts/k05-java-front-end-what-the-everyday-members-and-utf-16-slice-left/Dur.java`).
-  Not there: `dividedBy` (`.todo/k60`). `between`, `of` / `get` of a `TemporalUnit` and
+  Not there: `dividedBy` (`.todo/k71`). `between`, `of` / `get` of a `TemporalUnit` and
   `truncatedTo` came with the rest of `java.time` (k35, "java.time" below), which left
   a program of a `Duration` alone as it was (155,029 B of wasm before and after).
   `Thread.sleep(Duration)` is there (a duration below zero is no sleep, zero is one an
@@ -1622,7 +1632,7 @@ measured programs.
   first, so an array too short keeps the high one's place) / `codePointAt` of an array
   / `reverseBytes`, `OptionalLong` and `HttpHeaders.firstValueAsLong`: each in
   `Support` or a source class, 866 probe lines identical to JDK 25 on four backends
-  (`Members.java` beside `Dur.java`). Still refused: `.todo/k60`.
+  (`Members.java` beside `Dur.java`). Still refused: `.todo/k71`.
 
 ## The sorted collections (2026-11-20, k47)
 
@@ -1754,9 +1764,9 @@ are `.todo/artefacts/k55-java-front-end-what-the-stream-members-and-the-sorted-c
   `remove(o)` takes the last equal, `sort` sorts the list by the reverse order; a walk is the
   list's own `listIterator` walked back (`Backward`, whose `add` steps back over what it
   added), so a change behind it is the list's `ConcurrentModificationException`; `removeIf`,
-  `replaceAll`, `retainAll` and `clear` are the list's. The view of an
-  `ImmutableCollections.ListN` refuses every change at once, as the list does (a JDK's of
-  `List.of`; here also of `emptyList`, `singletonList` and `nCopies`, `deviations.md`).
+  `replaceAll` and `clear` are the list's; `removeAll` and `retainAll` walk the view (k60). The
+  view of an `ImmutableCollections.ListN` refuses every change at once, as the list does (a
+  JDK's of `List.of`).
   `LinkedList.reversed()` is a `LinkedList` (`LinkedList.Reversed`, which holds no cell:
   a member with an index is the list's view's, one with an end the list's of the other end).
 - **A deque's view** (`ReversedDeque`): every member calls the deque's of the other end
@@ -1817,6 +1827,95 @@ are `.todo/artefacts/k55-java-front-end-what-the-stream-members-and-the-sorted-c
   above); `JvmLispCompilerTest#aCycleTheRootDoesNotCloseDispatchesOnAMemberIndex` (the view's
   `next` and `previous` call each other's, which made a JVM tail group of members of two
   arities: [jvm-self-tail-calls.md](jvm-self-tail-calls.md)).
+
+## The collections of Collections, a bridge's cast and PriorityQueue (2026-11-20, k60)
+
+**Invariant: the collections of no element, of one and of n copies of `Collections` are
+classes of their own over the abstract collections, so a change is refused where it would
+change something and answered where it would not; the list of `List.of` refuses every change
+and a null asked for; an arm of a dispatcher whose body takes a narrower type than the method
+called tests the argument as a JDK's bridge method casts it; `PriorityQueue` is a binary
+heap whose order is a JDK's.** Written
+from the API documentation and JDK 25's answers to probes
+([java-frontend-provenance.md](java-frontend-provenance.md)); the probes are
+`.todo/artefacts/k60-java-front-end-what-k55-left/`.
+
+- **`Collections`**: `EmptyList`, `SingletonList`, `CopiesList`, `EmptySet`, `SingletonSet`,
+  `EmptyMap`, `SingletonMap` (`singletonMap` new), the empty iterators and enumeration
+  (`emptyIterator`, `emptyListIterator`, `emptyEnumeration`; `Enumeration.asIterator`); the
+  empty ones are one object each. What each refuses at once and with which words is a JDK's
+  answer (`Imm.java`, 1,406 lines over 22 collections): `singletonList`'s and `singleton`'s
+  `removeIf` and the iterator of one element refuse at once, `emptyList`'s `get` says
+  `Index: 0`, `singletonList`'s `Index: 1, Size: 1`, `nCopies`' is `checkIndex`'s, the views
+  of a map of one mapping are sets of one element (`values()` too). Their reversed views are
+  the changing ones (a JDK's are). Each has only the members whose answers are not its
+  abstract class's, and what several answer alike is a member of a class above them
+  (`Few`, `FewSet`, `FewMap`), one arm of a dispatcher: the five classes' spliterators as
+  five arms were 1.3 KB of YAVI's schema example, an empty list walked by `AbstractList`'s
+  iterator 1.3 KB of a program of none other.
+- **The defaults check for null as specified**: `Iterable.forEach`, `Collection.removeIf`,
+  `List.replaceAll`, `Map.forEach` / `replaceAll`, `AbstractCollection.removeAll` /
+  `retainAll`; `AbstractList.addAll(int, ..)` checks its index first. `Objects.requireNonNull(o)`
+  is `native`, `(or o (%java-npe))`: the run time's `NullPointerException`, so no exception
+  object is made where nothing is null.
+- **`List.of`'s list** (`ListN`): `get` is its array's read, the JDK's
+  `ArrayIndexOutOfBoundsException` for 0 and 3+ elements (577 -> 240 B of wasm; the words of
+  a list of one or two were 440 B more in every `List.of` program and are not made); a null
+  asked for is refused, and so are `addAll(int, ..)`, `removeIf`, `replaceAll`,
+  `removeFirst` / `removeLast` at once; `subList` is a `SubList`, a copy refusing an index
+  with `checkIndex`'s words. `Unchanging` and `ListView` refuse `addAll` at once,
+  `ListView.subList` is a `ListView`.
+- **Reversed views**: `removeAll` / `retainAll` walk the view and remove through its
+  iterator, as a JDK's do (through `Arrays.asList`, `unmodifiableList`); `removeFirst` /
+  `removeLast` of an empty view refuse before a change. `CopyOnWriteArrayList.reversed()` is
+  a view of its own handing the list the index of the other end unchecked (`get(-1)` of six:
+  `Index 6 out of bounds for length 6`), its walk the snapshot backward. `Arrays.asList`'s
+  list is named `Arrays.ArrayList`.
+- **A bridge's cast**: an arm whose body takes a parameter narrower, erased, than the method
+  called (`Integer.compareTo(Integer)` for `Comparable.compareTo(Object)`, a program's
+  `compareTo(Version)`, `JavaLowering.bridged`) tests it: `null` or an instance passes,
+  anything else is `%cast-refused`, one function of the program raising the
+  `ClassCastException` of a failed cast. A call going straight to its one body tests
+  nothing, nor a lambda. Measured (wasm bytes): a program sorting strings 157,884 -> 158,398
+  (three arms), a `TreeSet` 142,377 -> 142,876, navigation 140,531 -> 141,065. A
+  dispatcher made for the one body too was 2.6 KB in a program putting into an `EnumMap`
+  through `Map` (the class names of any value it then needs): not made.
+- **`PriorityQueue`** (and `AbstractQueue`, as the specification states its members): a
+  binary heap in an array (Williams 1964; a collection in no order made a heap by Floyd's
+  1964 sinking, and so are the survivors of `removeIf` / `removeAll` / `retainAll`, kept in
+  their order). Which of equal elements goes where, which pairs the comparator is asked
+  about and the order of a walk that removes are a JDK's answers: an element climbs while it
+  is less than its parent, sinks below the lesser child (the left of two equal) while it is
+  greater; a removal puts the last element in the hole, sinking it or else climbing it, and
+  one that climbed behind a walk is given after the array, in the order moved (`PQOrder`,
+  60,000 steps; `PQWalk`, 2,000 walks; `PQSeeded`, a 48,400-line transcript, every line a
+  JDK's on the four backends). A walk checks the changes at `next` and `remove`, `hasNext`
+  not; `forEach` and a bulk removal ask every element of the array there was and then refuse
+  a change made meanwhile (`removeIf` of nothing is a change, a JDK's answer). With no
+  comparator an element added is cast to `Comparable` first, the first one too; one of a
+  collection is not (a queue of one `Object` is made). Its spliterator is
+  `SIZED|SUBSIZED|NONNULL` and does not split. Sizes: a program adding and polling 138,238 B
+  of wasm; 1,000,000 adds and polls of `Integer`s 5.0 s on wasm, 3.7 s as a JVM class, 0.57
+  s under a JDK.
+- **Measured** (wasm bytes; the size programs of k12, k26, k47 and k55): unchanged but those
+  above and a program over `List.of`, smaller (`MapOnly` 137,639 -> 137,302, `FlatOnly`
+  127,939 -> 126,933, `SzRemoveAll` 157,547 -> 156,534, `SzUnmodSet` 104,824 -> 104,124).
+  YAVI's examples: `Member.java` 663,174 -> 662,353, `Booking.java` 1,204,473 -> 1,208,802
+  (`singletonList`'s class, the bridged arms of its own validators, `Iterable.forEach`
+  with a null check). Measured and not made: a null asked of `Set.of` and `Map.of` refused
+  (some 300 B in a program asking them), `Map.of`'s keys and values as `AbstractMap`'s views
+  (500 B), `Arrays.asList`'s iterator of its own for the words `remove` (0.9 to 1.4 KB in a
+  program walking it and another list).
+- **Left** (`deviations.md`, `.todo/k71`): a list of `List.of` of one or two refuses an index
+  with the array's words; `List.of`'s iterator's `remove()` before `next()` is
+  `IllegalStateException`; `Set.of` and `Map.of` answer a null, and `Map.of`'s views refuse a
+  change that changes nothing; `Arrays.asList` refuses a removal with no message;
+  `Stream.toList()` is `unmodifiableList`'s list (`rontolisp.internal` reaches no class of
+  `java.util` that is not public); the empty `List.of()` is a new object; an `AbstractList`
+  iterator past the end has no cause (a `catch` there would be in every program walking such
+  a list); a map's views are new at each call, so `values().equals(values())` is `false`.
+- Pins: java-spec `a-deque-an-optional-the-utilities-and-the-older-classes` (`immutables()`,
+  `priorities()`), `JavaLoweringTest#typeParametersLambdasAndBoxes` (the bridged arms).
 
 ## java.math (2026-11-20, k31)
 
@@ -1924,7 +2023,7 @@ leaves open is a JDK 25's answers to a grid.
   the scientific forms 2.5 KB, `_dispatch_5` 0.5 KB.
   Found beside it: the zeros of a width were written ahead of a negative number's
   parenthesis (`%(010d` of -5 was `0000000(5)`), now inside it as a JDK writes them.
-- Not there (`.todo/k60`): the primes (`isProbablePrime`, `nextProbablePrime`,
+- Not there (`.todo/k72`): the primes (`isProbablePrime`, `nextProbablePrime`,
   `probablePrime`, the constructors of random bits), refused by name.
 - Pins: the `standalone:` case `big-integers-and-decimals-compute-round-and-print-exactly`
   (a file of its own: a class under `Number` changes how the corpus program lowers
@@ -2045,7 +2144,7 @@ documentation; what it leaves open is a JDK 25's answers to a grid. `java.time.c
   fixed clock, a field's predicate), texts, values already of the type and numbers for
   the year -- prints a JDK's 77 lines on the four: wasm 1,256,341 B.
 - The classes k35 left came with k52 ("java.time: what the formatter left" below).
-  `Duration.dividedBy` stays `.todo/k60`'s. The formatter and the queries came with k43
+  `Duration.dividedBy` stays `.todo/k71`'s. The formatter and the queries came with k43
   ("java.time: the formatter" below).
 - Pins: java-spec `dates-times-and-instants-are-read-from-their-texts-and-computed-with`
   (146 lines of the grid's kinds); a class the subset lacks is `java.util.Currency` and
@@ -2751,7 +2850,7 @@ holds none of it.** No files: `File`, `FileReader`, `java.nio.file` stay refused
   string CONSTANT holding one is `?` on wasm. Measured 2026-11-18 (j98): the two halves
   of a pair appended to a `StringBuilder` one `char` after the other are a string of
   length 2 on the interpreter, 1 on the JVM (a JDK: 2 units, here one character), and
-  on wasm no `equals` of the character they spell (`.todo/k60`).
+  on wasm no `equals` of the character they spell (`.todo/k71`).
 - **`Double.longBitsToDouble`, `Float.intBitsToFloat`** are `%java-bits-binary` over
   `%java-nearest-binary` (exact, the subnormals included).
 - **Measured** (2026-11-17, the box and method of "Measured" below; wasm / class bytes, then
@@ -2908,7 +3007,7 @@ the probes are `.todo/artefacts/k12-java-front-end-what-the-time-limits-and-dura
   (`JavaLoweringTest#theLibraryIsJavaSourceLoweredAsFarAsTheProgramReaches`), but its
   class table reads 97 files of the library where it read 46 -- `Collection` names
   `Stream`, and a class's member types are read with it: 1.89 -> 1.95 s for a program of
-  one list on the interpreter (`.todo/k60`).
+  one list on the interpreter (`.todo/k71`).
 - **`String.compareTo(null)` throws** (k12: it answered 1, found by `sorted()` over a
   `null`): `%java-string-compare` and `-ignore-case` test their argument, 23 B of wasm
   in a program comparing strings.
@@ -2971,7 +3070,7 @@ the probes are `.todo/artefacts/k12-java-front-end-what-the-time-limits-and-dura
   stream's spliterator differs from a JDK's in the marks named in `deviations.md`, in
   its estimate where the count is not known (`Long.MAX_VALUE`; a JDK's is its
   source's), in being no source's own (`StreamSupport.stream(s, false).spliterator()
-  != s`), and `sorted()` always takes every element. Lead (`.todo/k60`): marks kept
+  != s`), and `sorted()` always takes every element. Lead (`.todo/k71`): marks kept
   only in a program that asks for one, which needs a member of the library lowered by
   what the program reaches, as the third function of a format is.
 - **The streams of a `Random`** (k26; `IntFlow.drawn` and its kin: so many elements of
@@ -2995,7 +3094,7 @@ the probes are `.todo/artefacts/k12-java-front-end-what-the-time-limits-and-dura
   `ConcurrentHashMap` with two more marks (`Collectors.grouped`, `once`, `merged`):
   `CONCURRENT`, `UNORDERED`, and `IDENTITY_FINISH` where the downstream has it. A JDK
   checks no argument of them for `null` when the collector is made (`Conmap.java`).
-- **Not there** (`.todo/k60`): a pipeline run in halves (`parallel()` is a flag), the
+- **Not there** (`.todo/k71`): a pipeline run in halves (`parallel()` is a flag), the
   marks of a stream's spliterator, a collector's `finisher` skipped under
   `IDENTITY_FINISH`.
 
@@ -3122,7 +3221,7 @@ member) or is refused where the request is sent (`deviations.md`, "The HTTP clie
   and in the client), with one 489,891 B. A program's own `HttpRequest` class stating a
   `timeout()` is refused by name where no builder was given one. A component that
   serves cannot time a request (an `IOException` with fetch's refusal: `.todo/148`).
-- **Not made** (`.todo/k60`): bodies as they arrive (`ofInputStream` reads a body
+- **Not made** (`.todo/k71`): bodies as they arrive (`ofInputStream` reads a body
   already in, `ofLines`, a program's own `BodySubscriber`), the `--host-fetch` reactor
   as a leg, `URI`'s constructors of several parts.
 

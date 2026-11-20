@@ -159,12 +159,19 @@ class ReversedList<E> extends AbstractList<E> {
         return list.getFirst();
     }
 
+    // an end of nothing is refused before a change is
     public E removeFirst() {
+        if (list.isEmpty()) {
+            throw new NoSuchElementException();
+        }
         change();
         return list.removeLast();
     }
 
     public E removeLast() {
+        if (list.isEmpty()) {
+            throw new NoSuchElementException();
+        }
         change();
         return list.removeFirst();
     }
@@ -179,14 +186,15 @@ class ReversedList<E> extends AbstractList<E> {
         return list.removeIf(filter);
     }
 
+    // these two walk the view and remove through its iterator, as a JDK's view does
     public boolean removeAll(Collection<?> c) {
         change();
-        return list.removeAll(c);
+        return super.removeAll(c);
     }
 
     public boolean retainAll(Collection<?> c) {
         change();
-        return list.retainAll(c);
+        return super.retainAll(c);
     }
 
     public void replaceAll(UnaryOperator<E> operator) {

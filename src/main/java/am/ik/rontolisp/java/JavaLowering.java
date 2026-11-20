@@ -298,6 +298,9 @@ final class JavaLowering implements JavaEmitter.Context {
 
 	private static final LispSymbol CLASS_NAME = new LispSymbol("%class-name");
 
+	/** The function refusing a value a bridge casts: {@link #castRefused}. */
+	private static final LispSymbol CAST_REFUSED = new LispSymbol("%cast-refused");
+
 	private static final LispSymbol SIMPLE_NAME = new LispSymbol("%simple-name");
 
 	private static final LispSymbol LISP_ERROR = new LispSymbol("%lisp-error");
@@ -384,6 +387,11 @@ final class JavaLowering implements JavaEmitter.Context {
 	private final Set<JavaClass> interfaceTests = new LinkedHashSet<>();
 
 	private final Set<LispSymbol> generated = new LinkedHashSet<>();
+
+	/**
+	 * The definition of {@link #CAST_REFUSED}, as the last bridge asking for it made it.
+	 */
+	private @Nullable LispVal castRefusal;
 
 	/**
 	 * The name functions asked of a value that can be something other than an instance of
@@ -2181,6 +2189,9 @@ final class JavaLowering implements JavaEmitter.Context {
 					this.namesOfAny.contains(name) ? runtimeCall("class-name", RECEIVER, name == CLASS_NAME ? T : NIL)
 							: runtimeCall("no-receiver", RECEIVER, string("getClass()"))));
 			forms.add(list(cl("defun"), name, list(RECEIVER), list(arms)));
+		}
+		if (this.generated.contains(CAST_REFUSED)) {
+			forms.add(Objects.requireNonNull(this.castRefusal));
 		}
 		if (this.generated.contains(LISP_ERROR)) {
 			// the exception the table names, made as the program's object; nil for one
@@ -5387,6 +5398,37 @@ final class JavaLowering implements JavaEmitter.Context {
 	}
 
 	/**
+	 * The call raising the {@code ClassCastException} of a value that is no {@code to},
+	 * as {@link #castFailure(LispSymbol, JavaType)} raises it, through one function of
+	 * the program taking the value and the class's name: a bridge has one in each arm.
+	 */
+	private LispVal castRefused(LispSymbol value, JavaType to) {
+		String target = to instanceof ClassType type ? type.declaration().binaryName : null;
+		if (target == null) {
+			return raise(castFailure(value, to));
+		}
+		LispSymbol refused = new LispSymbol("%v");
+		LispSymbol name = new LispSymbol("%t");
+		this.generated.add(CLASS_NAME);
+		this.namesOfAny.add(CLASS_NAME);
+		this.generated.add(CAST_REFUSED);
+		LispVal message = call("%string-concat", call("%string-concat", string("class "), list(CLASS_NAME, refused)),
+				call("%string-concat", string(" cannot be cast to class "), name));
+		if (!this.classes.lambdaTargets.isEmpty()) {
+			List<LispVal> lambda = new ArrayList<>();
+			lambda.add(cl("or"));
+			lambda.add(call("functionp", refused));
+			for (JavaClass tagged : this.classes.taggedLambdas) {
+				lambda.add(list(lambdaTest(tagged), refused));
+			}
+			message = call("if", lambda.size() == 2 ? lambda.get(1) : list(lambda), NIL, message);
+		}
+		this.castRefusal = list(cl("defun"), CAST_REFUSED, list(refused, name),
+				raise(list(creator("java.lang.ClassCastException"), message)));
+		return list(CAST_REFUSED, value, string(target));
+	}
+
+	/**
 	 * A constant converted to a primitive type as a cast converts it: a floating value to
 	 * an integral type through {@code int} or {@code long}, toward zero and saturating.
 	 */
@@ -6374,7 +6416,7 @@ final class JavaLowering implements JavaEmitter.Context {
 	 */
 	private @Nullable Inference applicable(Method candidate, @Nullable JavaType site, List<JavaType> explicit,
 			List<TypeParameter> inferred, List<@Nullable Typed> typed, List<Expression> arguments, boolean boxing,
-			boolean spread, boolean contested, Late late) {
+			boolean spread, boolean contested, Late late, @Nullable JavaType expected, @Nullable JavaType made) {
 		int count = arguments.size();
 		if (spread ? !candidate.varargs || count < candidate.parameters.size() - 1
 				: candidate.parameters.size() != count) {
@@ -6413,7 +6455,8 @@ final class JavaLowering implements JavaEmitter.Context {
 				// with one argument for a variable arity parameter, the phases taking it
 				// as the array come first: a call that does not lower against the array's
 				// type does not fit there, and is an element in the last phase
-				if (!late.lowers(this, i, arguments.get(i), JavaTypes.substitute(formal, inference.solution(true)))) {
+				if (!late.lowers(this, i, arguments.get(i),
+						JavaTypes.substitute(formal, tried(candidate, site, inference, variables, expected, made)))) {
 					return null;
 				}
 			}
@@ -6437,6 +6480,38 @@ final class JavaLowering implements JavaEmitter.Context {
 			}
 		}
 		return inference;
+	}
+
+	/**
+	 * What a candidate's type parameters are, for an argument that waits tried against
+	 * its parameter: what the arguments said, and of a parameter they said nothing of,
+	 * what the type the call is wanted as says through the candidate's return type -- a
+	 * creation with {@code <>} given a comparator its type is wanted for
+	 * ({@code PriorityQueue
+	 *
+	<P>
+	 *  q = new PriorityQueue<>(Comparator.comparingInt(p -> ..))}).
+	 */
+	private Map<TypeParameter, JavaType> tried(Method candidate, @Nullable JavaType site, Inference inference,
+			List<TypeParameter> variables, @Nullable JavaType expected, @Nullable JavaType made) {
+		Map<TypeParameter, JavaType> known = inference.solution(true);
+		if (expected == null || expected.isPrimitive()) {
+			return known;
+		}
+		JavaType returned = made != null ? made : this.types.memberType(candidate.returnType, site, candidate.owner);
+		if (!JavaTypes.mentions(returned, inference.variables)) {
+			return known;
+		}
+		Inference wanted = this.types.new Inference(variables);
+		wanted.upperBound(returned, expected);
+		Map<TypeParameter, JavaType> said = wanted.solution(false);
+		Map<TypeParameter, JavaType> tried = new HashMap<>(known);
+		for (Map.Entry<TypeParameter, JavaType> entry : said.entrySet()) {
+			if (inference.isFree(entry.getKey())) {
+				tried.put(entry.getKey(), entry.getValue());
+			}
+		}
+		return tried;
 	}
 
 	/**
@@ -6723,7 +6798,7 @@ final class JavaLowering implements JavaEmitter.Context {
 			spread = phase == 2;
 			for (Method candidate : candidates) {
 				Inference inference = applicable(candidate, site, explicit, inferred, typed, arguments, phase > 0,
-						spread, candidates.size() > 1, lates);
+						spread, candidates.size() > 1, lates, expected, made);
 				if (inference != null) {
 					fitting.add(candidate);
 					inferences.put(candidate, inference);
@@ -8398,8 +8473,8 @@ final class JavaLowering implements JavaEmitter.Context {
 								prepend(lambdaFunction(made, RECEIVER), parameters.subList(1, parameters.size()))))));
 			}
 			for (Body body : bodies) {
-				arms.add(list(list(JavaNames.predicate(body.tested()), RECEIVER),
-						form(JavaNames.function(body.method()), parameters)));
+				arms.add(list(list(JavaNames.predicate(body.tested()), RECEIVER), bridged(method, body.method(),
+						parameters, form(JavaNames.function(body.method()), parameters))));
 			}
 			for (Map.Entry<JavaClass, Method> intrinsic : intrinsics.entrySet()) {
 				Method member = intrinsic.getValue();
@@ -8408,14 +8483,54 @@ final class JavaLowering implements JavaEmitter.Context {
 					arguments.add(new Typed(parameters.get(i + 1), member.parameters.get(i)));
 				}
 				arms.add(list(list(Objects.requireNonNull(JavaIntrinsics.predicate(intrinsic.getKey())), RECEIVER),
-						Objects.requireNonNull(member.emitter)
-							.emit(this, new Invocation(new Typed(RECEIVER, intrinsic.getKey().self()),
-									List.copyOf(arguments), false, 0))));
+						bridged(method, member, parameters,
+								Objects.requireNonNull(member.emitter)
+									.emit(this, new Invocation(new Typed(RECEIVER, intrinsic.getKey().self()),
+											List.copyOf(arguments), false, 0)))));
 			}
 			arms.add(list(T, runtimeCall("no-receiver", RECEIVER, string(method.signature()))));
 			this.dispatchers.put(name.name(), list(cl("defun"), name, list(parameters), list(arms)));
 		}
 		return name;
+	}
+
+	/**
+	 * The parameters a body takes narrower, erased, than the method a call names: what a
+	 * JDK's bridge method casts ({@code Integer.compareTo(Integer)} called as
+	 * {@code Comparable.compareTo(Object)}), by index -- of a class a value can be tested
+	 * for.
+	 */
+	private List<Integer> narrowed(Method called, Method body) {
+		List<Integer> narrowed = new ArrayList<>();
+		for (int i = 0; i < called.parameters.size(); i++) {
+			JavaType declared = this.types.erased(called.parameters.get(i));
+			JavaType taken = this.types.erased(body.parameters.get(i));
+			if (taken instanceof ClassType type && !taken.equals(this.objectType) && !isSubtype(declared, taken)
+					&& (!type.declaration().intrinsic || JavaIntrinsics.predicate(type.declaration()) != null)) {
+				narrowed.add(i);
+			}
+		}
+		return narrowed;
+	}
+
+	/**
+	 * A body's call in a dispatcher, behind the casts a bridge method makes: an argument
+	 * the body takes narrower is tested, the first parameter first, and one that is no
+	 * {@code null} and no instance of the body's parameter is the
+	 * {@code ClassCastException} a JDK's bridge throws.
+	 */
+	private LispVal bridged(Method called, Method body, List<LispVal> parameters, LispVal call) {
+		List<Integer> narrowed = narrowed(called, body);
+		LispVal guarded = call;
+		for (int at = narrowed.size() - 1; at >= 0; at--) {
+			int i = narrowed.get(at);
+			LispSymbol argument = (LispSymbol) parameters.get(i + 1);
+			JavaType taken = this.types.erased(body.parameters.get(i));
+			guarded = call("if",
+					call("or", call("null", argument), instanceTest(argument, this.objectType, taken, 0, "a cast")),
+					guarded, castRefused(argument, taken));
+		}
+		return guarded;
 	}
 
 	/**

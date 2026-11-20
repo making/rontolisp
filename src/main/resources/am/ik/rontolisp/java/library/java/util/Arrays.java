@@ -121,7 +121,7 @@ public final class Arrays {
 
     @SafeVarargs
     public static <T> List<T> asList(T... a) {
-        return new ArrayView<>(a);
+        return new ArrayList<>(a);
     }
 
     private static native void sortRange(int[] a, int from, int to);
@@ -1057,11 +1057,11 @@ public final class Arrays {
     }
 
     // The list Arrays.asList answers: the array itself, so of a fixed size.
-    static final class ArrayView<E> extends AbstractList<E> implements RandomAccess {
+    static final class ArrayList<E> extends AbstractList<E> implements RandomAccess {
 
         private final E[] held;
 
-        ArrayView(E[] held) {
+        ArrayList(E[] held) {
             if (held == null) {
                 throw new NullPointerException();
             }

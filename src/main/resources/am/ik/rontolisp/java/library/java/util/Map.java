@@ -66,12 +66,14 @@ public interface Map<K, V> {
     }
 
     default void forEach(BiConsumer<? super K, ? super V> action) {
+        Objects.requireNonNull(action);
         for (Map.Entry<K, V> entry : entrySet()) {
             action.accept(entry.getKey(), entry.getValue());
         }
     }
 
     default void replaceAll(BiFunction<? super K, ? super V, ? extends V> function) {
+        Objects.requireNonNull(function);
         for (Map.Entry<K, V> entry : entrySet()) {
             entry.setValue(function.apply(entry.getKey(), entry.getValue()));
         }

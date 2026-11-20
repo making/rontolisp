@@ -44,7 +44,7 @@ public final class Spliterators {
     public static <T> Spliterator<T> spliterator(Object[] array, int fromIndex, int toIndex,
             int additionalCharacteristics) {
         within(array.length, fromIndex, toIndex);
-        List<T> range = new ImmutableCollections.ListN<T>(array).subList(fromIndex, toIndex);
+        List<T> range = new ImmutableCollections.ListN<T>(array).range(fromIndex, toIndex);
         return Splits.counted(range, additionalCharacteristics | Spliterator.SIZED | Spliterator.SUBSIZED);
     }
 

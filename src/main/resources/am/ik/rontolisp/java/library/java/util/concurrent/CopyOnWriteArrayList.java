@@ -6,6 +6,7 @@ package java.util.concurrent;
 import java.util.AbstractList;
 import java.util.Arrays;
 import java.util.Collection;
+import java.util.Collections;
 import java.util.Comparator;
 import java.util.Iterator;
 import java.util.List;
@@ -236,6 +237,213 @@ public class CopyOnWriteArrayList<E> extends AbstractList<E> implements RandomAc
             throw new IndexOutOfBoundsException("Index: " + index);
         }
         return new Snapshot<>(held, index);
+    }
+
+    // The view reversed() answers: an index is the list's other end, handed to the list
+    // unchecked, and the list's own members do the rest, as a JDK's view of this list
+    // does (its words of an index out of range are the list's).
+    public List<E> reversed() {
+        return new Reversed<>(this);
+    }
+
+    private static final class Reversed<E> extends AbstractList<E> implements RandomAccess {
+
+        private final CopyOnWriteArrayList<E> base;
+
+        Reversed(CopyOnWriteArrayList<E> base) {
+            this.base = base;
+        }
+
+        public List<E> reversed() {
+            return base;
+        }
+
+        public int size() {
+            return base.size();
+        }
+
+        public boolean isEmpty() {
+            return base.isEmpty();
+        }
+
+        public boolean contains(Object o) {
+            return base.contains(o);
+        }
+
+        public boolean containsAll(Collection<?> c) {
+            return base.containsAll(c);
+        }
+
+        public E get(int index) {
+            return base.get(base.size() - 1 - index);
+        }
+
+        public E set(int index, E element) {
+            return base.set(base.size() - 1 - index, element);
+        }
+
+        public boolean add(E e) {
+            base.add(0, e);
+            return true;
+        }
+
+        public void add(int index, E element) {
+            base.add(base.size() - index, element);
+        }
+
+        public boolean addAll(Collection<? extends E> c) {
+            Object[] added = c.toArray();
+            for (Object e : added) {
+                base.add(0, (E) e);
+            }
+            return added.length > 0;
+        }
+
+        public boolean addAll(int index, Collection<? extends E> c) {
+            Object[] added = c.toArray();
+            int at = index;
+            for (Object e : added) {
+                base.add(base.size() - at, (E) e);
+                at++;
+            }
+            return added.length > 0;
+        }
+
+        public E remove(int index) {
+            return base.remove(base.size() - 1 - index);
+        }
+
+        public boolean remove(Object o) {
+            int index = base.lastIndexOf(o);
+            if (index < 0) {
+                return false;
+            }
+            base.remove(index);
+            return true;
+        }
+
+        public int indexOf(Object o) {
+            int index = base.lastIndexOf(o);
+            return index < 0 ? -1 : base.size() - 1 - index;
+        }
+
+        public int lastIndexOf(Object o) {
+            int index = base.indexOf(o);
+            return index < 0 ? -1 : base.size() - 1 - index;
+        }
+
+        public void addFirst(E e) {
+            base.addLast(e);
+        }
+
+        public void addLast(E e) {
+            base.addFirst(e);
+        }
+
+        public E getFirst() {
+            return base.getLast();
+        }
+
+        public E getLast() {
+            return base.getFirst();
+        }
+
+        public E removeFirst() {
+            return base.removeLast();
+        }
+
+        public E removeLast() {
+            return base.removeFirst();
+        }
+
+        public void clear() {
+            base.clear();
+        }
+
+        public boolean removeIf(Predicate<? super E> filter) {
+            return base.removeIf(filter);
+        }
+
+        public boolean removeAll(Collection<?> c) {
+            return base.removeAll(c);
+        }
+
+        public boolean retainAll(Collection<?> c) {
+            return base.retainAll(c);
+        }
+
+        public void replaceAll(UnaryOperator<E> operator) {
+            base.replaceAll(operator);
+        }
+
+        public void sort(Comparator<? super E> c) {
+            base.sort(Collections.reverseOrder(c));
+        }
+
+        public Iterator<E> iterator() {
+            return listIterator(0);
+        }
+
+        public ListIterator<E> listIterator(int index) {
+            int size = base.size();
+            if (index < 0 || index > size) {
+                throw new IndexOutOfBoundsException("Index: " + index + ", Size: " + size);
+            }
+            return new Backward<>(base, base.listIterator(size - index));
+        }
+
+        public Spliterator<E> spliterator() {
+            return Splits.of(this, Spliterator.ORDERED | Spliterator.SIZED | Spliterator.SUBSIZED);
+        }
+    }
+
+    // a snapshot of the list walked the other way, which changes nothing
+    private static final class Backward<E> implements ListIterator<E> {
+
+        private final CopyOnWriteArrayList<E> base;
+
+        private final ListIterator<E> each;
+
+        Backward(CopyOnWriteArrayList<E> base, ListIterator<E> each) {
+            this.base = base;
+            this.each = each;
+        }
+
+        public boolean hasNext() {
+            return each.hasPrevious();
+        }
+
+        public E next() {
+            return each.previous();
+        }
+
+        public boolean hasPrevious() {
+            return each.hasNext();
+        }
+
+        public E previous() {
+            return each.next();
+        }
+
+        public int nextIndex() {
+            return base.size() - each.nextIndex();
+        }
+
+        public int previousIndex() {
+            return base.size() - each.nextIndex() - 1;
+        }
+
+        public void remove() {
+            throw new UnsupportedOperationException();
+        }
+
+        public void set(E e) {
+            throw new UnsupportedOperationException();
+        }
+
+        public void add(E e) {
+            throw new UnsupportedOperationException();
+        }
     }
 
     private static final class Snapshot<E> implements ListIterator<E> {

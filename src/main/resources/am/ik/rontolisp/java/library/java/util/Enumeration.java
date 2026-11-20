@@ -8,4 +8,18 @@ public interface Enumeration<E> {
     boolean hasMoreElements();
 
     E nextElement();
+
+    // an iterator over what is left of this enumeration, which removes nothing
+    default Iterator<E> asIterator() {
+        Enumeration<E> self = this;
+        return new Iterator<E>() {
+            public boolean hasNext() {
+                return self.hasMoreElements();
+            }
+
+            public E next() {
+                return self.nextElement();
+            }
+        };
+    }
 }
