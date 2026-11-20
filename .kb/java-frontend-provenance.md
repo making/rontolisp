@@ -443,6 +443,27 @@ algorithm came from, and the answer goes in the file's header.
   refuses (and that `tailSet` of a range keeps only its other end), what a default view's
   ends cost the map. The answers are lines of `java-spec.yaml`, which the JDK leg asks
   again.
+- **Computed resource names, `Properties`, `ResourceBundle`, `ServiceLoader` (k58,
+  2026-11-20).** Written from the API documentation (`Properties.load`'s grammar and
+  `store`'s escapes and order of keys, `ResourceBundle.getBundle`'s lookup with its
+  candidate locales and fallback, the format of a services file, `ServiceLoader`'s
+  caches) and JDK 25's answers to probes (the programs of
+  `.todo/artefacts/k58-java-resources-a-computed-name-urls-bundles-and-services/`: 53 texts
+  through `load`, `store`'s comments and escapes, the order of each view of a table with
+  two levels of defaults, bundles under four default locales, a chain of a class and
+  files, the providers of a tree's and a library's services file through an iterator and a
+  stream). Nobody opened OpenJDK's source, and the shape is its own: what a program carries
+  is one text a lookup walks, a service's providers are outcomes the lowering decides. What
+  the documentation does not state was read off the answers: which structure each view
+  orders its keys by (the table a `ConcurrentHashMap`, the names and a listing a `HashMap`,
+  `propertyNames` a `Hashtable`, each filled from the deepest defaults; a bundle's keys a
+  `HashMap` of its `Properties` or of `contents.length`), where a provider fails in an
+  iterator and in a stream, the words of each refusal and of an inaccessible provider's
+  cause, and a `list` line's cut. A draft took a `Properties`' map as a `ConcurrentHashMap`
+  of eight from memory; it was replaced by the map the probes match (the default one, and
+  of the capacity given). The answers are lines of `java-spec.yaml`, which the JDK leg asks
+  again; the scan of the libraries' class files (`Scan.java`) reads third-party class files
+  as data and copies nothing.
 - **Unicode normalization (k29, 2026-11-19).** `eval/unicode-normalization.lisp` was
   written from Unicode Standard Annex #15 and the Unicode Standard's sections 3.11
   (decomposition, canonical ordering, canonical composition) and 3.12 (Hangul by

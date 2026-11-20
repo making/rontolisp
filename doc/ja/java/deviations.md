@@ -379,11 +379,20 @@ JDK のクラスのスーパークラスは、このサブセットでの宣言�
 `static synchronized` メソッドが保持するモニターであり、変数に入れたクラスオブジェクトの
 モニターとは別のものです。
 
-**リソースはコンパイル時に見つけます。** 名前は定数でなければならず、プログラムが読む内容は
-コンパイル時のファイルの内容です。ディレクトリはリソースではありません。ディレクトリに対する
-`getResourceAsStream` は `null` を返します（ランチャーはストリームを返します）。返すストリームは
-`ByteArrayInputStream` です。JDK のクラスは、JDK 自身のものも含めてリソースを見つけません。
-`getResource`、`getResources`、`ResourceBundle`、`ServiceLoader` は名前を示して拒否されます。
+**リソースはコンパイル時に見つけます。** プログラムが読む内容はコンパイル時のファイルの内容です。
+実行時に組み立てた名前は、ソースファイル（`.java`）、クラスファイル、名前がドットで始まる
+ファイルとディレクトリを見つけません（ランチャーは見つけます）。プレイグラウンドでは、一覧を
+取れないため、アップロードしたファイルも見つけません。ローダーが見つけうるファイルがプログラムに
+含められる量を超えるときは、コンパイル時に拒否します（[リソース](index.md#resources)）。
+ディレクトリはリソースではありません。ディレクトリに対する `getResourceAsStream` は `null` を
+返します（ランチャーはストリームを返します）。返すストリームは `ByteArrayInputStream` です。
+JDK のクラスは、JDK 自身のものも含めてリソースを見つけません。`getResource`、`getResources`、
+`ClassLoader.getParent` は名前を示して拒否されます。型がサービスを示さない `Class`（`Class<?>`
+など）を渡す `ServiceLoader.load` も名前を示して拒否されます。`ResourceBundle.getBundle` が定数の
+基底名で見つけるバンドルクラスは、自身の名前のファイルにあるクラスです。実行時に組み立てた
+基底名で見つけるのは、プログラムがほかの箇所で使っているクラスです。`ResourceBundle.Control`、
+`Properties.loadFromXML`、`storeToXML` は名前を示して拒否されます。`Properties.store` が書く
+日付の行は `java.util.Date` のテキストです（前述）。
 
 **ストリームは、結果を求めたスレッドで順に実行されます。** `parallel()` と
 `parallelStream()` は記録されるだけです（`isParallel()` は `true` を返します）。要素は

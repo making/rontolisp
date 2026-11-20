@@ -203,6 +203,33 @@ interface JavaEmitter {
 		 */
 		LispVal classLoader(Invocation call);
 
+		/**
+		 * The files a resource name computed where the program runs may find, as the
+		 * library reads them ({@link JavaResourceTable}): none in a program that computes
+		 * no name.
+		 */
+		LispVal resourceTable();
+
+		/**
+		 * What {@code ResourceBundle.getBundle} answers: the bundle the loader of the
+		 * class calling it finds, or the one given, among the files carried.
+		 */
+		LispVal bundle(Invocation call);
+
+		/**
+		 * What {@code ServiceLoader.load} or {@code loadInstalled} answers: a loader of
+		 * the providers the service's files name, found while the program is lowered.
+		 * @param kind 0 {@code load(Class)}, 1 {@code load(Class, ClassLoader)}, 2
+		 * {@code loadInstalled(Class)}
+		 */
+		LispVal services(Invocation call, int kind);
+
+		/**
+		 * The bundle {@code ResourceBundle.getBundle} makes of a class it finds by its
+		 * name, or {@code null}.
+		 */
+		LispVal classBundle(Invocation call);
+
 	}
 
 	LispVal emit(Context context, Invocation invocation);
