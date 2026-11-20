@@ -44,8 +44,11 @@ import org.jspecify.annotations.Nullable;
  * as {@code --java-source-dep} reads one: each compile, provided and system dependency's,
  * asked of the project's repositories, after {@link #javaSourcePath}'s entries. A
  * dependency that has none is a warning, and a class of it the program reaches is refused
- * by name, as the command line refuses it. Every parameter is a CLI flag under its
- * camel-cased name.
+ * by name, as the command line refuses it. The resources the program reads
+ * ({@code Main.class.getResourceAsStream("app.properties")}) are those of
+ * {@link #classesDirectory}, where the resources plugin has copied (and filtered) the
+ * project's resource directories, searched ahead of everything else on the source path --
+ * javac's class path order. Every parameter is a CLI flag under its camel-cased name.
  */
 @Mojo(name = "wasm", defaultPhase = LifecyclePhase.PACKAGE, threadSafe = true,
 		requiresDependencyResolution = ResolutionScope.COMPILE)
@@ -69,6 +72,16 @@ public class WasmMojo extends AbstractMojo {
 	/** The root of the source tree the program is read from. */
 	@Parameter(defaultValue = "${project.build.sourceDirectory}", required = true)
 	private @Nullable File sourceDirectory;
+
+	/**
+	 * The directory the project's resources are read from, the class path's first entry:
+	 * {@code target/classes}, where {@code process-resources} has copied them (filtering,
+	 * includes and excludes applied) beside the classes javac wrote. It is searched ahead
+	 * of {@link #javaSourcePath} and the dependencies, and left out when it does not
+	 * exist.
+	 */
+	@Parameter(defaultValue = "${project.build.outputDirectory}")
+	private @Nullable File classesDirectory;
 
 	/**
 	 * The output: {@code ${project.build.directory}/${project.build.finalName}.wasm} by
@@ -205,12 +218,16 @@ public class WasmMojo extends AbstractMojo {
 	}
 
 	/**
-	 * The program's source path: {@link #javaSourcePath}, then the sources jar of each
-	 * dependency javac compiles against, in the class path's order. Not a dependency's
-	 * test or optional ones, which Maven leaves out of that class path.
+	 * The program's source path, in the class path's order: {@link #classesDirectory}
+	 * (the project's resources), {@link #javaSourcePath}, then the sources jar of each
+	 * dependency javac compiles against. Not a dependency's test or optional ones, which
+	 * Maven leaves out of that class path.
 	 */
 	private List<Path> sourcePath() {
 		List<Path> roots = new ArrayList<>();
+		if (this.classesDirectory != null && this.classesDirectory.isDirectory()) {
+			roots.add(this.classesDirectory.toPath());
+		}
 		for (File entry : this.javaSourcePath) {
 			roots.add(entry.toPath());
 		}
