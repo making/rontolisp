@@ -5452,7 +5452,9 @@ lines); a `refused:` case is the scaffold with the case's statements, which the 
 `error` at that line and the front end at the same line with a message starting the same. In
 process, part of `./mvnw test`. The interpreter's `standalone:` leg has the 300 s a process of the
 other legs has (`CliStack.callWithin`): a program whose threads wait for ever fails its leg
-by name and the run goes on (until k14 it stopped the run: full run 19, 50 minutes).
+by name and the run goes on (until k14 it stopped the run: full run 19, 50 minutes). The leg
+ends the threads the program left, daemons, as the other legs' process end does
+([threads.md](threads.md), "A program's end ends its threads").
 **No thread case orders two threads by a sleep or a delay** (k14, 2026-11-19): what one
 thread prints before another does is held by a latch the other waits for, or by a wait for
 the state the line prints (`while (..) Thread.sleep(1)`); a sleep stays where it IS the

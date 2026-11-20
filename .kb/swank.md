@@ -251,7 +251,7 @@ from break."`, which goes on with the evaluation; the condition is not signalled
 request's `:abort` stays `"NIL"`. A wait the interrupt woke breaks the same way and waits
 on: `Connection.readString` (`:read-aborted` only when left), the level's own mailbox (a deeper
 level), `sleep` (`Environment.sleepMillis` asks `resumeAfterInterrupt`, then sleeps out its
-time). `offerDebugger` clears a pending interrupt, which the level answers. A thread with
+time), `mutex-acquire` (asks it, then waits on; with no debugger it waits as before). `offerDebugger` clears a pending interrupt, which the level answers. A thread with
 no debugger (nREPL, a program's own) stops as before.
 
 ## Compilation

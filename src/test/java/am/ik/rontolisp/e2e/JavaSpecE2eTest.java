@@ -614,6 +614,13 @@ class JavaSpecE2eTest {
 				catch (LispExitSignal exit) {
 					status[0] = exit.code();
 				}
+				finally {
+					// the other legs' process ends, and its threads with it: a daemon
+					// left spinning is gone when the leg returns
+					for (Thread left : evaluator.stopThreads()) {
+						left.join();
+					}
+				}
 				return true;
 			}, Duration.ofSeconds(PROCESS_SECONDS)))
 				.as("standalone case '%s' on INTERPRETER ended within %d s; it printed%n%s", s.name(), PROCESS_SECONDS,

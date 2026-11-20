@@ -340,6 +340,20 @@ public final class LispEvaluator {
 	/** The threads among {@link #interruptedThreads} to signal rather than stop. */
 	private final Set<Thread> signalledInterrupts = java.util.concurrent.ConcurrentHashMap.newKeySet();
 
+	/**
+	 * The threads the program started ({@code make-thread}, an async body) that have not
+	 * ended, under {@link #interruptedThreads}'s monitor: what the program's end stops
+	 * ({@link #stopThreads}).
+	 */
+	private final Set<Thread> programThreads = new HashSet<>();
+
+	/**
+	 * Whether the program has ended ({@link #stopThreads}), under
+	 * {@link #interruptedThreads}'s monitor: its threads stop as a process's end stops
+	 * them, and none starts.
+	 */
+	private volatile boolean programEnded;
+
 	/** The process status SIGINT ends a process with: 128 + its number. */
 	private static final int SIGINT_STATUS = 130;
 
@@ -4342,11 +4356,16 @@ public final class LispEvaluator {
 			}
 			String spawnerPackage = this.packageResolver.currentPackageName();
 			return AsyncRuntime.spawnThread(() -> {
-				for (int i = 0; i < bindingNames.size(); i++) {
-					this.dynamicBindings.push(bindingNames.get(i), bindingValues.get(i));
+				try {
+					for (int i = 0; i < bindingNames.size(); i++) {
+						this.dynamicBindings.push(bindingNames.get(i), bindingValues.get(i));
+					}
+					return withOwnPackage(spawnerPackage, () -> apply(fn, List.of(), this.globalEnv));
 				}
-				return withOwnPackage(spawnerPackage, () -> apply(fn, List.of(), this.globalEnv));
-			}, args.size() == 3 ? args.get(2) : LispNil.INSTANCE);
+				finally {
+					programThreadEnded();
+				}
+			}, args.size() == 3 ? args.get(2) : LispNil.INSTANCE, this::programThreadStarting);
 		}));
 		String joinThreadName = PackageRegistry.qualify(LispNames.RONTOLISP_PKG, LispNames.JOIN_THREAD);
 		this.globalEnv.defineFunction(joinThreadName, new LispFunction(joinThreadName, args -> {
@@ -8532,6 +8551,62 @@ public final class LispEvaluator {
 	}
 
 	/**
+	 * Ends the program's threads, as a process's end ends them: what a runner owning the
+	 * evaluator for one whole program calls where that program's process would end. Every
+	 * thread the program started ({@code make-thread}, an async body) and that is still
+	 * running stops at its next function call or loop step, running no cleanup, as a
+	 * {@code uiop:quit} stops the thread it is called on ({@link LispExitSignal}); a call
+	 * blocked in a sleep, a wait or a {@code mutex-acquire} wakes. No thread starts
+	 * afterwards. A REPL's buffer or
+	 * a session's input is no program's end: a thread it started outlives it.
+	 * @return the threads asked to stop, which a caller may join
+	 */
+	public List<Thread> stopThreads() {
+		synchronized (this.interruptedThreads) {
+			this.programEnded = true;
+			List<Thread> running = List.copyOf(this.programThreads);
+			for (Thread thread : running) {
+				interrupt(thread);
+			}
+			return running;
+		}
+	}
+
+	/** Whether a thread is one the program started and the program has ended. */
+	private boolean endedProgramThread(Thread thread) {
+		if (!this.programEnded) {
+			return false;
+		}
+		synchronized (this.interruptedThreads) {
+			return this.programThreads.contains(thread);
+		}
+	}
+
+	/** Records a thread the program starts, or refuses it once the program has ended. */
+	private void programThreadStarting(Thread thread) {
+		synchronized (this.interruptedThreads) {
+			if (this.programEnded) {
+				throw new LispEvalException("the program has ended: no thread starts");
+			}
+			this.programThreads.add(thread);
+		}
+	}
+
+	/**
+	 * Forgets the calling thread of the program as it ends, with an interrupt still
+	 * pending for it ({@link #stopThreads} asked it after its last step).
+	 */
+	private void programThreadEnded() {
+		Thread thread = Thread.currentThread();
+		synchronized (this.interruptedThreads) {
+			if (this.programThreads.remove(thread) && this.interruptedThreads.remove(thread)) {
+				this.pendingInterrupts.decrementAndGet();
+				this.signalledInterrupts.remove(thread);
+			}
+		}
+	}
+
+	/**
 	 * Asks the evaluation running on a thread to signal
 	 * {@code rontolisp:interactive-interrupt} at its next function call or loop step, as
 	 * SBCL signals SIGINT. Past a handler that declines, the process ends with SIGINT's
@@ -8662,6 +8737,11 @@ public final class LispEvaluator {
 			this.pendingInterrupts.decrementAndGet();
 			Thread.interrupted();
 		}
+		if (endedProgramThread(Thread.currentThread())) {
+			// the program's end: the thread ends where it stands, as a process's end
+			// ends it
+			throw new LispExitSignal(0);
+		}
 		if (this.signalledInterrupts.remove(Thread.currentThread())) {
 			eval(new LispCons(new LispSymbol(LispNames.SIGNAL), new LispCons(
 					new LispCons(new LispSymbol(LispNames.QUOTE),
@@ -8756,8 +8836,8 @@ public final class LispEvaluator {
 	 */
 	private boolean resumeAfterInterrupt() {
 		Thread thread = Thread.currentThread();
-		if (!this.interruptedThreads.contains(thread)
-				|| (!this.signalledInterrupts.contains(thread) && (!this.debugging || this.debuggers.get() == null))) {
+		if (!this.interruptedThreads.contains(thread) || (!this.signalledInterrupts.contains(thread)
+				&& (!this.debugging || this.debuggers.get() == null) && !endedProgramThread(thread))) {
 			return false;
 		}
 		stopIfInterrupted();
@@ -19847,9 +19927,12 @@ public final class LispEvaluator {
 				e.trace().crossedAsync(asyncFunction, future.future());
 				throw e;
 			}
+			finally {
+				programThreadEnded();
+			}
 			future.settleExtras(this.globalEnv.spill());
 			return primary;
-		});
+		}, this::programThreadStarting);
 	}
 
 	/**
