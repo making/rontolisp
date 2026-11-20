@@ -3989,7 +3989,6 @@ final class JavaLowering implements JavaEmitter.Context {
 						return arrayInitializer(creation.initializer(), type);
 					}
 					List<LispVal> lengths = new ArrayList<>();
-					JavaType leaf = type;
 					for (Expression written : creation.lengths()) {
 						Typed length = unbox(expression(written, null));
 						if (length.type() != Primitive.INT && !length.type().isBelowInt()) {
@@ -3997,25 +3996,8 @@ final class JavaLowering implements JavaEmitter.Context {
 									"incompatible types: " + length.type() + " cannot be converted to int");
 						}
 						lengths.add(length.form());
-						leaf = ((ArrayType) leaf).element();
 					}
-					if (lengths.size() > 1) {
-						// every level but the last holds arrays; the last, the leaf's
-						// default
-						return new Typed(runtimeCall("new-array", form(cl("list"), lengths), integer(arrayKind(leaf)),
-								defaultValue(leaf)), type);
-					}
-					// a negative length is the language's exception, which the run time
-					// makes; what it answers is an int's length, which tells the backends
-					// the array is of rank 1
-					LispVal length = lengths.get(0) instanceof LispInteger n && n.value() >= 0 ? lengths.get(0)
-							: list(cl("the"), list(cl("integer"), integer(0), integer(Integer.MAX_VALUE)),
-									runtimeCall("array-length", lengths.get(0)));
-					List<LispVal> made = new ArrayList<>(List.of(cl("make-array"), length));
-					made.addAll(elementType(type.element()));
-					made.add(new LispSymbol(":INITIAL-ELEMENT"));
-					made.add(type.element() == Primitive.BOOLEAN ? integer(0) : defaultValue(type.element()));
-					LispVal array = list(made);
+					LispVal array = newArray(type, lengths);
 					this.nonNull.add(array);
 					return new Typed(array, type);
 				}
@@ -4256,12 +4238,74 @@ final class JavaLowering implements JavaEmitter.Context {
 				|| isSubtype(b, a);
 	}
 
-	/** The leaf of {@code %java-new-array}: which element type it makes. */
-	private static int arrayKind(JavaType element) {
-		return element == Primitive.INT ? 1
-				: element == Primitive.DOUBLE ? 2
-						: element == Primitive.BYTE ? 3 : element == Primitive.SHORT || element == Primitive.CHAR ? 4
-								: element == Primitive.FLOAT ? 5 : element == Primitive.BOOLEAN ? 6 : 0;
+	/**
+	 * {@code new T[n]..}: a vector of each length the expression gives, every level but
+	 * the last holding the next level's. A negative length is the language's exception,
+	 * which the run time makes once every length is evaluated; what it answers is an
+	 * {@code int}'s length, which tells the backends each level is a vector of an integer
+	 * size.
+	 */
+	private LispVal newArray(ArrayType type, List<LispVal> lengths) {
+		LispVal range = sizeRange();
+		if (lengths.size() == 1) {
+			LispVal length = lengths.get(0) instanceof LispInteger n && n.value() >= 0 ? lengths.get(0)
+					: list(cl("the"), range, runtimeCall("array-length", lengths.get(0)));
+			return vector(type, length);
+		}
+		List<LispVal> evaluated = new ArrayList<>();
+		List<LispVal> checked = new ArrayList<>();
+		List<LispVal> sizes = new ArrayList<>();
+		List<LispVal> declared = new ArrayList<>(List.of(cl("type"), range));
+		for (LispVal length : lengths) {
+			if (length instanceof LispInteger n && n.value() >= 0) {
+				sizes.add(length);
+				continue;
+			}
+			LispSymbol given = temporary();
+			LispSymbol size = temporary();
+			evaluated.add(list(given, length));
+			checked.add(list(size, runtimeCall("array-length", given)));
+			sizes.add(size);
+			declared.add(size);
+		}
+		LispVal made = rows(type, sizes, 0);
+		if (checked.isEmpty()) {
+			return made;
+		}
+		return list(cl("let"), list(evaluated),
+				list(cl("let"), list(checked), list(cl("declare"), list(declared)), made));
+	}
+
+	/**
+	 * The level {@code level} of {@code new T[n]..}, of an array type, its sizes made.
+	 */
+	private LispVal rows(ArrayType type, List<LispVal> sizes, int level) {
+		LispVal size = sizes.get(level);
+		if (level == sizes.size() - 1) {
+			return vector(type, size);
+		}
+		LispSymbol rows = temporary();
+		LispSymbol index = temporary();
+		return list(cl("let"), list(list(rows, vector(type, size)), list(index, integer(0))),
+				list(cl("declare"), list(cl("type"), sizeRange(), index)),
+				list(cl("while"), call("<", index, size),
+						call("setf", call("aref", rows, index), rows((ArrayType) type.element(), sizes, level + 1)),
+						call("setq", index, call("+", index, integer(1)))),
+				rows);
+	}
+
+	/** The sizes an array has: an {@code int} that is not negative. */
+	private static LispVal sizeRange() {
+		return list(cl("integer"), integer(0), integer(Integer.MAX_VALUE));
+	}
+
+	/** A vector of an array type, {@code size} long, of its element type's default. */
+	private static LispVal vector(ArrayType type, LispVal size) {
+		List<LispVal> made = new ArrayList<>(List.of(cl("make-array"), size));
+		made.addAll(elementType(type.element()));
+		made.add(new LispSymbol(":INITIAL-ELEMENT"));
+		made.add(type.element() == Primitive.BOOLEAN ? integer(0) : defaultValue(type.element()));
+		return list(made);
 	}
 
 	private static List<LispVal> elementType(JavaType element) {

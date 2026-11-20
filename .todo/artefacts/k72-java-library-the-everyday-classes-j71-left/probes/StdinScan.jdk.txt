@@ -1,0 +1,12 @@
+n=5 sum=15 last=5
+rest of line [ tail of five]
+line [the whole line]
+word 2.5 true false true
+x null []
+[key 123 value] 13
+[] 0
+[  spaced  ] 10
+[café ü] 6
+[end] 3
+false null
+System.in closed: false false

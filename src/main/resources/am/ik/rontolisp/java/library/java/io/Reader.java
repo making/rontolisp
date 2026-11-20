@@ -3,10 +3,11 @@
 // (.kb/java-frontend-provenance.md). Lowered with every program that names it.
 package java.io;
 
+import java.nio.CharBuffer;
 import java.util.Objects;
 
 // A subclass gives read(char[], int, int) and close(); a char is a UTF-16 unit.
-public abstract class Reader implements Closeable {
+public abstract class Reader implements Readable, Closeable {
 
     protected Reader() {
     }
@@ -77,6 +78,19 @@ public abstract class Reader implements Closeable {
 
     public int read(char[] cbuf) throws IOException {
         return read(cbuf, 0, cbuf.length);
+    }
+
+    // as many characters as the target has room for, read into an array and put
+    public int read(CharBuffer target) throws IOException {
+        if (target.isReadOnly()) {
+            throw new java.nio.ReadOnlyBufferException();
+        }
+        char[] taken = new char[target.remaining()];
+        int n = read(taken, 0, taken.length);
+        if (n > 0) {
+            target.put(taken, 0, n);
+        }
+        return n;
     }
 
     public long skip(long n) throws IOException {

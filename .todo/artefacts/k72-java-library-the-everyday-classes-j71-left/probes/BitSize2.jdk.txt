@@ -1,0 +1,10 @@
+given, grown, cleared: 512 clone 0
+given 1000 empty: clone 1024
+given 1000, grown, cleared: 2048 clone 64
+valueOf cleared: 192 clone 64
+get: 128 clone 128
+clone of clone: 320 0
+sticky clone sticky: 128 128
+  128
+given, and: 128 clone 128
+xor of grown: 128 128

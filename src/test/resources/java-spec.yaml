@@ -21,6 +21,9 @@
 # that it refuses at the same line with a message starting the same.
 imports: |
   import java.io.*;
+  import java.nio.BufferOverflowException;
+  import java.nio.CharBuffer;
+  import java.nio.ReadOnlyBufferException;
   import java.nio.charset.Charset;
   import java.nio.charset.StandardCharsets;
   import java.nio.charset.UnsupportedCharsetException;
@@ -57,6 +60,7 @@ imports: |
   import java.util.ArrayDeque;
   import java.util.ArrayList;
   import java.util.Arrays;
+  import java.util.BitSet;
   import java.util.Collection;
   import java.util.Collections;
   import java.util.Comparator;
@@ -69,6 +73,7 @@ imports: |
   import java.util.HashMap;
   import java.util.HashSet;
   import java.util.Hashtable;
+  import java.util.InputMismatchException;
   import java.util.IntSummaryStatistics;
   import java.util.InvalidPropertiesFormatException;
   import java.util.Iterator;
@@ -94,6 +99,7 @@ imports: |
   import java.util.Queue;
   import java.util.Random;
   import java.util.RandomAccess;
+  import java.util.Scanner;
   import java.util.SequencedCollection;
   import java.util.SequencedMap;
   import java.util.SequencedSet;
@@ -103,6 +109,8 @@ imports: |
   import java.util.Spliterator;
   import java.util.Spliterators;
   import java.util.Stack;
+  import java.util.StringJoiner;
+  import java.util.StringTokenizer;
   import java.util.TreeMap;
   import java.util.TreeSet;
   import java.util.UUID;
@@ -1750,7 +1758,7 @@ cases:
               attempt("throw", () -> { RuntimeException e = null; throw e; });
               attempt("cast", () -> System.out.println((Integer) text));
               attempt("negative", () -> System.out.println(new int[args.length - 2].length));
-              attempt("negative rows", () -> System.out.println(new int[2][args.length - 3].length));
+              attempt("negative rows", () -> System.out.println(new int[2][args.length - 3][next() + 1].length));
               attempt("index", () -> (new int[2][2])[args.length][args.length + 2] = 1);
               attempt("charAt", () -> System.out.println("abc".charAt(args.length + 5)));
               attempt("charAt below", () -> System.out.println("abc".charAt(args.length - 1)));
@@ -1821,7 +1829,7 @@ cases:
       declared long element: java.lang.NullPointerException true
       declared long index: java.lang.ArrayIndexOutOfBoundsException: Index 5 out of bounds for length 2
       declared store: java.lang.NullPointerException true
-      indexes evaluated 2 22
+      indexes evaluated 3 22
       multi-catch NullPointerException
   # try-with-resources is the statement the language specifies: the resources closed in
   # reverse, a null one skipped, an exception of close suppressed by the body's, a
@@ -6118,6 +6126,9 @@ cases:
                   }
               }
               later();
+              joiners();
+              tokens();
+              bits();
               try {
                   properties();
               } catch (IOException ex) {
@@ -6128,6 +6139,109 @@ cases:
           // what Objects supplies, what Collections rotates, replaces and finds, an array filled
           // by a function and compared and hashed through its arrays, an entry of its own, a
           // comparator's later keys, the properties every target answers
+          static void joiners() {
+              StringJoiner csv = new StringJoiner(", ", "[", "]");
+              System.out.print(csv + " " + csv.length() + " ");
+              csv.setEmptyValue("none");
+              System.out.print(csv + " " + csv.length() + " ");
+              csv.add("a").add(null).add(new StringBuilder("sb")).add("");
+              StringJoiner other = new StringJoiner("-", "{", "}");
+              other.add("x").add("y");
+              csv.merge(other).merge(new StringJoiner("|"));
+              System.out.println(csv + " " + csv.length());
+              StringJoiner self = new StringJoiner("/");
+              self.add("p").add("q");
+              self.merge(self);
+              StringJoiner empty = new StringJoiner(",", "<", ">");
+              empty.add("");
+              System.out.println(self + " " + empty + " " + empty.length() + " " + String.join("+", List.of("j", "k")) + " " + Stream.of("m", "n").collect(Collectors.joining(";", "(", ")")));
+              for (int attempt = 0; attempt < 4; attempt++) {
+                  try {
+                      switch (attempt) {
+                          case 0 -> new StringJoiner(null, null, "]");
+                          case 1 -> new StringJoiner(",", "[", null);
+                          case 2 -> new StringJoiner(",").setEmptyValue(null);
+                          default -> new StringJoiner(",").merge(null);
+                      }
+                  } catch (NullPointerException ex) {
+                      System.out.print(ex.getMessage() + "; ");
+                  }
+              }
+              System.out.println();
+          }
+
+          static void tokens() {
+              StringTokenizer words = new StringTokenizer(" one two\tthree\nfour ");
+              StringBuilder seen = new StringBuilder().append(words.countTokens());
+              while (words.hasMoreTokens()) {
+                  seen.append(' ').append(words.nextToken());
+              }
+              StringTokenizer kept = new StringTokenizer("a=1;b=;=c", "=;", true);
+              seen.append(" |").append(kept.countTokens());
+              while (kept.hasMoreElements()) {
+                  seen.append(' ').append(kept.nextElement());
+              }
+              StringTokenizer changed = new StringTokenizer("k1,v1;k2,v2", ",");
+              seen.append(" | ").append(changed.nextToken()).append(' ').append(changed.nextToken(";")).append(' ').append(changed.countTokens()).append(' ').append(changed.nextToken());
+              System.out.println(seen + " " + Collections.list(new StringTokenizer("x y")));
+              StringTokenizer done = new StringTokenizer("only");
+              done.nextToken();
+              try {
+                  done.nextToken();
+              } catch (NoSuchElementException ex) {
+                  System.out.println("NoSuchElementException " + ex.getMessage() + " " + new StringTokenizer("", null).countTokens());
+              }
+          }
+
+          static void bits() {
+              BitSet a = new BitSet();
+              a.set(1);
+              a.set(3, 6);
+              a.set(64);
+              a.flip(0, 3);
+              a.clear(4);
+              BitSet b = BitSet.valueOf(new long[] {0b101010L, 1L << 63});
+              System.out.println(a + " " + a.cardinality() + " " + a.length() + " " + a.size() + " " + a.hashCode() + " " + b + " " + b.length() + " " + Arrays.toString(b.toByteArray()));
+              BitSet and = (BitSet) a.clone();
+              and.and(b);
+              BitSet or = (BitSet) a.clone();
+              or.or(b);
+              BitSet xor = (BitSet) a.clone();
+              xor.xor(b);
+              BitSet andNot = (BitSet) a.clone();
+              andNot.andNot(b);
+              System.out.println(and + " " + or + " " + xor + " " + andNot + " " + a.intersects(b) + " " + a.equals(a.clone()) + " " + a.get(2, 70) + " " + Arrays.toString(or.toLongArray()));
+              StringBuilder walk = new StringBuilder();
+              for (int i = a.nextSetBit(0); i >= 0; i = a.nextSetBit(i + 1)) {
+                  walk.append(i).append(' ');
+              }
+              walk.append('|');
+              for (int i = a.length(); (i = a.previousSetBit(i - 1)) >= 0;) {
+                  walk.append(' ').append(i);
+              }
+              System.out.println(walk + " " + a.nextClearBit(0) + " " + a.nextClearBit(64) + " " + a.previousClearBit(3) + " " + a.stream().sum() + " " + a.stream().boxed().collect(Collectors.toList()));
+              BitSet sized = new BitSet(100);
+              sized.set(99);
+              BitSet grown = new BitSet();
+              grown.set(200);
+              grown.clear(200);
+              System.out.println(sized.size() + " " + ((BitSet) sized.clone()).size() + " " + grown.size() + " " + ((BitSet) grown.clone()).size() + " " + grown.isEmpty() + " " + new BitSet().equals(grown));
+              for (int attempt = 0; attempt < 5; attempt++) {
+                  try {
+                      switch (attempt) {
+                          case 0 -> new BitSet(-1);
+                          case 1 -> a.set(-1);
+                          case 2 -> a.set(5, 3);
+                          case 3 -> a.nextSetBit(-2);
+                          default -> a.previousSetBit(-2);
+                      }
+                  } catch (NegativeArraySizeException | IndexOutOfBoundsException ex) {
+                      System.out.print(ex.getClass().getSimpleName() + " " + ex.getMessage() + "; ");
+                  }
+              }
+              System.out.println();
+          }
+
           static void later() {
               Runnable[] refused = {() -> Objects.requireNonNullElseGet(null, () -> null), () -> Objects.requireNonNullElseGet(null, null), () -> Objects.requireNonNull(null, () -> "the message"), () -> new AbstractMap.SimpleImmutableEntry<>("k", 1).setValue(2), () -> Map.entry("a", 1).setValue(2), () -> System.getProperty(""), () -> System.getProperty(null)};
               for (Runnable each : refused) {
@@ -6451,6 +6565,16 @@ cases:
       [1, 1, 2, 3, 3, 8, 7, 5, 6, 9] 1 1123356789 true [1, 1, 2, 5, 3, 8, 7, 9, 6] true [1, 1, 5, 3, 7, 9] [1, 2, 3, 6, 5, 4, 7, 8, 9] true6
       1 3 2 5 9 7x 8x 6 4x | [1, 3, 2, 5, 9, 6] hightop[Chore[name=mid, rank=5], Chore[name=low, rank=1]] [c, b, a]c true
       IllegalArgumentException, NullPointerException, NoSuchElementException, IllegalStateException, ConcurrentModificationException, ClassCastException, IllegalArgumentException, 
+      [] 2 none 4 [a, null, sb, , x-y] 20
+      p/q/p/q <> 2 j+k (m;n)
+      The prefix must not be null; The suffix must not be null; The empty value must not be null; null; 
+      4 one two three four |9 a = 1 ; b = ; = c | k1 ,v1 1 k2,v2 [x, y]
+      NoSuchElementException null 0
+      {0, 2, 3, 5, 64} 5 65 128 1277 {1, 3, 5, 127} 128 [42, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, -128]
+      {3, 5} {0, 1, 2, 3, 5, 64, 127} {0, 1, 2, 64, 127} {0, 2, 64} true true {0, 1, 3, 62} [47, -9223372036854775807]
+      0 2 3 5 64 | 64 5 3 2 0 1 65 1 74 [0, 2, 3, 5, 64]
+      128 128 256 0 true true
+      NegativeArraySizeException nbits < 0: -1; IndexOutOfBoundsException bitIndex < 0: -1; IndexOutOfBoundsException fromIndex: 5 > toIndex: 3; IndexOutOfBoundsException fromIndex < 0: -2; IndexOutOfBoundsException fromIndex < -1: -2; 
       a=b -> [a]=[b] | a = b  -> [a]=[b ] |   a:b -> [a]=[b] | a b c -> [a]=[b c] | a<9>b -> [a]=[b] | a<c>b -> [a]=[b]
       a= -> [a]=[] | a -> [a]=[] | =b -> []=[b] | :b -> []=[b] |   -> | a==b -> [a]=[=b]
       a=:b -> [a]=[:b] | a :=b -> [a]=[=b] | a  =  = b -> [a]=[= b] | a\ b=c -> [a b]=[c] | a\=b=c -> [a=b]=[c] | a\:b:c -> [a:b]=[c]
@@ -6482,6 +6606,181 @@ cases:
       -- listing properties -- / Aa=deep Aa / BB=def BB / x9=xv3 / d56=dv8 / d77=dv11 / d14=dv2 / d35=dv5 / k11=v11 / k10=v10 / d0=dv0 / k13=v13 / k12=v12 / long=0123456789012345678901234567890123456789 / k14=v14 / d7=dv1 / x12=xv4 / x15=xv5 / x18=xv6 / d63=dv9 / d21=dv3 / d42=dv6 / k0=v0 / k1=v1 / k2=v2 / d49=dv7 / k3=v3 / k4=v4 / k5=v5 / d28=dv4 / k6=v6 / k7=v7 / k8=v8 / k9=v9 / longer=0123456789012345678901234567890123456... / x21=xv7 / x0=xv0 / x3=xv1 / x24=xv8 / d70=dv10 / x6=xv2 / 404
       v3 dv1 xv2 null fallback null false 17 dv1 24 2 ClassCastException, ClassCastException, UnsupportedOperationException, NullPointerException, IllegalArgumentException, NullPointerException reader parameter is null, NullPointerException inStream parameter is null, 
       {a=1, b=2, c=3} true true 1 2 3 zz 3+5 [a, c] [one, 3+5] [one, 3+5] [a=one, c=3+5] true true
+  # A Scanner cuts its tokens where Character.isWhitespace is -- no pattern unless the
+  # program names one -- and reads a number by the grammar of its documentation: any
+  # decimal digit is a digit of every radix to the grammar, so a digit past the radix is
+  # the parse's refusal with the parse's words, where a token the grammar refuses has none;
+  # groups of three after a comma, a sign, a point and an exponent, a hexadecimal float,
+  # NaN and Infinity, the locale's infinity taken and then refused by the parse. A refused
+  # token stays where it was, past the delimiters. A hasNext of a kind keeps its number for
+  # the next of that kind until the position moves; every search sees around its region
+  # and takes no end of it for an end of the input. A Readable is read in pieces, the
+  # failure of one kept for ioException; what is asked of a closed scanner is refused.
+  - name: a-scanner-reads-tokens-numbers-and-lines-of-a-text
+    main: Scanning
+    source: |
+      class Scanning {
+                // a Readable handing its text in pieces of a few characters
+                static class Pieces implements Readable, Closeable {
+                    private final String text;
+                    private final int step;
+                    private int at;
+                    boolean closed;
+
+                    Pieces(String text, int step) {
+                        this.text = text;
+                        this.step = step;
+                    }
+
+                    public int read(CharBuffer cb) throws IOException {
+                        if (text.equals("broken") && at > 0) {
+                            throw new IOException("broken");
+                        }
+                        if (at >= text.length()) {
+                            return -1;
+                        }
+                        int n = Math.min(step, Math.min(cb.remaining(), text.length() - at));
+                        cb.put(text, at, at + n);
+                        at += n;
+                        return n;
+                    }
+
+                    public void close() {
+                        closed = true;
+                    }
+                }
+
+                static String shown(String s) {
+                    return s == null ? "null" : "<" + s.replace("\n", "\\n").replace("\r", "\\r").replace("\t", "\\t") + ">";
+                }
+
+                static String tokens(Scanner scanner) {
+                    StringBuilder all = new StringBuilder();
+                    while (scanner.hasNext()) {
+                        all.append(shown(scanner.next()));
+                    }
+                    return all.toString();
+                }
+
+                static String refused(Callable<Object> call) {
+                    try {
+                        Object value = call.call();
+                        return value instanceof String s ? shown(s) : String.valueOf(value);
+                    } catch (Exception ex) {
+                        return ex.getClass().getSimpleName() + (ex.getMessage() == null ? "" : " " + ex.getMessage());
+                    }
+                }
+
+                interface Callable<T> {
+                    T call() throws Exception;
+                }
+
+                public static void main(String[] args) {
+                    // the whitespace Character.isWhitespace says, the lines \r\n, \r, \n, U+0085, U+2028 and U+2029 end
+                    Scanner text = new Scanner("12 abc 3\n rest of line\nnext 4.5 TRUE 0x1.8p1 \u0663,\u0664\u0665\u0666\t-1,234\u2003end\u00a0x\u0085y\u2028z");
+                    System.out.println(text.nextInt() + " " + text.hasNextInt() + " " + text.next() + " " + text.nextInt() + " " + shown(text.nextLine()) + " " + shown(text.nextLine()) + " " + text.next() + " " + text.nextDouble() + " " + text.nextBoolean() + " " + text.nextDouble() + " " + text.nextInt() + " " + text.nextLong() + " " + text.next() + " " + shown(text.nextLine()) + " " + shown(text.nextLine()) + " " + text.hasNextLine());
+                    for (String[] pair : new String[][] {{"a,b,,c,", ","}, {",,a", ","}, {"a , b ,c", "\\s*,\\s*"}, {"abc", ""}, {"a1b22c", "\\d"}, {"a1b2", "(?=\\d)"}, {"x\r\ny\rz", "\\R"}}) {
+                        System.out.print(shown(pair[0]) + " " + tokens(new Scanner(pair[0]).useDelimiter(pair[1])) + " | ");
+                    }
+                    System.out.println();
+                    // the grammar of each kind: any decimal digit is a digit, a group of three after a comma, a sign, a point and an exponent
+                    for (String token : new String[] {"+0", "-12", "1,000", "10,00", "0,000", "2147483648", "ff", "1e3", ".5", "5.", "-.5e+2", "1,000.25", "NaN", "-Infinity", "\u221e", "0x1.8p1", "0x.8", "1.5f", "\uff11\uff12", "128", "9", "true"}) {
+                        StringBuilder line = new StringBuilder(shown(token));
+                        line.append(" int ").append(refused(() -> new Scanner(token).nextInt()));
+                        line.append(" int8 ").append(refused(() -> new Scanner(token).nextInt(8)));
+                        line.append(" int16 ").append(refused(() -> new Scanner(token).nextInt(16)));
+                        line.append(" long ").append(refused(() -> new Scanner(token).nextLong()));
+                        line.append(" byte ").append(refused(() -> new Scanner(token).nextByte()));
+                        line.append(" short ").append(refused(() -> new Scanner(token).nextShort()));
+                        line.append(" float ").append(refused(() -> new Scanner(token).nextFloat()));
+                        line.append(" double ").append(refused(() -> new Scanner(token).nextDouble()));
+                        line.append(" big ").append(refused(() -> new Scanner(token).nextBigInteger()));
+                        line.append(" decimal ").append(refused(() -> new Scanner(token).nextBigDecimal()));
+                        line.append(" boolean ").append(refused(() -> new Scanner(token).nextBoolean()));
+                        System.out.println(line);
+                    }
+                    // a refused token stays, past the delimiters; the end of the input
+                    Scanner rest = new Scanner("12 x\n  ");
+                    System.out.println(rest.nextInt() + " " + refused(() -> rest.nextInt()) + " " + shown(rest.nextLine()) + " " + refused(() -> rest.next()) + " " + refused(() -> rest.nextLine()) + " " + refused(() -> new Scanner("1").useRadix(37)));
+                    // finding, skipping, the horizon, and the match each operation leaves
+                    Scanner found = new Scanner("abc 123 def\nxyz 45 6");
+                    System.out.print(shown(found.findInLine("\\d+")) + " " + found.match().start() + " " + shown(found.next()) + " " + shown(found.findInLine("x")) + " " + shown(found.nextLine()) + " " + found.match().groupCount() + shown(found.match().group(1)));
+                    System.out.print(" " + shown(found.findWithinHorizon("4", 3)) + " " + shown(found.findWithinHorizon("4", 0)) + " " + shown(found.skip("5\\s+").next()) + " " + refused(() -> found.skip("x")) + " " + refused(() -> found.match()));
+                    System.out.println(" " + shown(new Scanner("one two").findWithinHorizon("\\w+", 2)) + " " + shown(new Scanner(" ab").findWithinHorizon("^ab", 0)) + " " + refused(() -> found.findWithinHorizon("a", -1)) + " " + new Scanner("x").findInLine("y") + new Scanner("x").findWithinHorizon("y", 0));
+                    Scanner matched = new Scanner("ab cd ef");
+                    System.out.println(matched.hasNext("a.") + " " + matched.match().group() + " " + matched.next(Pattern.compile("(a)(b)")) + " " + matched.match().group(2) + " " + matched.hasNext("x") + " " + refused(() -> matched.next("x")) + " " + matched.next());
+                    // what a hasNext of a kind keeps for its next, though the delimiter changed
+                    Scanner kept = new Scanner("5 x");
+                    kept.hasNextInt();
+                    kept.useDelimiter("x");
+                    Scanner dropped = new Scanner("5 x");
+                    dropped.hasNextInt();
+                    dropped.useDelimiter("x");
+                    dropped.findInLine("q");
+                    System.out.println(kept.nextInt() + " " + refused(() -> dropped.nextInt()) + " " + kept + " " + kept.delimiter() + " " + kept.locale() + " " + kept.radix());
+                    Scanner closed = new Scanner("a b");
+                    closed.close();
+                    System.out.println(refused(() -> closed.next()) + " " + refused(() -> closed.hasNextLine()) + " " + closed.delimiter() + " " + refused(() -> closed.tokens()));
+                    // the streams, over a scanner nothing else asks meanwhile
+                    Scanner streamed = new Scanner("x1 y22 z333");
+                    System.out.print(new Scanner("a b  c\nd").tokens().collect(Collectors.toList()) + " " + streamed.findAll("[a-z](\\d+)").map(m -> m.group(1) + "@" + m.start()).collect(Collectors.toList()) + " " + new Scanner("abc").findAll("").map(m -> m.start() + "-" + m.end()).collect(Collectors.toList()));
+                    Scanner busy = new Scanner("p q r");
+                    Iterator<String> walk = busy.tokens().iterator();
+                    walk.next();
+                    busy.next();
+                    System.out.println(" " + refused(() -> walk.next()));
+                    // over a Readable read in pieces, a stream of bytes in a charset, a source that fails
+                    Pieces pieces = new Pieces("3000 lines\r\nof text\rend\n\n", 3);
+                    Scanner readable = new Scanner(pieces);
+                    System.out.print(readable.nextInt() + " " + shown(readable.nextLine()) + " " + shown(readable.nextLine()) + " " + shown(readable.nextLine()) + " " + shown(readable.nextLine()) + " " + readable.hasNextLine());
+                    readable.close();
+                    Scanner bytes = new Scanner(new ByteArrayInputStream("caf\u00e9 1".getBytes(StandardCharsets.ISO_8859_1)), "ISO-8859-1");
+                    Pieces broken = new Pieces("broken", 4);
+                    Scanner failing = new Scanner(broken);
+                    System.out.println(" " + pieces.closed + " " + bytes.next() + bytes.nextInt() + " " + refused(() -> new Scanner(System.in, "no-such-charset")) + " " + failing.next() + " " + failing.hasNext() + " " + failing.ioException());
+                    // a CharBuffer, the buffer a Readable is handed
+                    CharBuffer buffer = CharBuffer.allocate(8);
+                    buffer.put('x').put("yz").append("12");
+                    buffer.flip();
+                    System.out.print(buffer + " " + buffer.position() + " " + buffer.limit() + " " + buffer.get() + buffer.get(3) + " " + buffer.subSequence(1, 3) + " " + buffer.length());
+                    buffer.compact();
+                    System.out.print(" " + buffer.position() + " " + buffer.limit() + " " + CharBuffer.wrap("abcxy").hashCode() + " " + CharBuffer.wrap("ab").compareTo(CharBuffer.wrap("ac")) + " " + CharBuffer.wrap(new char[] {'h', 'e', 'y'}, 1, 2).slice());
+                    System.out.println(" " + refused(() -> CharBuffer.allocate(1).put("ab")) + " " + refused(() -> CharBuffer.wrap("ro").put('x')) + " " + refused(() -> CharBuffer.allocate(4).position(5)) + " " + refused(() -> CharBuffer.allocate(4).get(new char[3], 2, 2)));
+                }
+      }
+    expected: |
+      12 false abc 3 <> < rest of line> next 4.5 true 3.0 3456 -1234 end xy <> <z> false
+      <a,b,,c,> <a><b><><c> | <,,a> <><a> | <a , b ,c> <a><b><c> | <abc> <a><b><c> | <a1b22c> <a><b><><c> | <a1b2> <a><1b><2> | <x\r\ny\rz> <x><y><z> | 
+      <+0> int 0 int8 0 int16 0 long 0 byte 0 short 0 float 0.0 double 0.0 big 0 decimal 0 boolean InputMismatchException
+      <-12> int -12 int8 -10 int16 -18 long -12 byte -12 short -12 float -12.0 double -12.0 big -12 decimal -12 boolean InputMismatchException
+      <1,000> int 1000 int8 512 int16 4096 long 1000 byte InputMismatchException Value out of range. Value:"1000" Radix:10 short 1000 float 1000.0 double 1000.0 big 1000 decimal 1000 boolean InputMismatchException
+      <10,00> int InputMismatchException int8 InputMismatchException int16 InputMismatchException long InputMismatchException byte InputMismatchException short InputMismatchException float InputMismatchException double InputMismatchException big InputMismatchException decimal InputMismatchException boolean InputMismatchException
+      <0,000> int InputMismatchException int8 InputMismatchException int16 InputMismatchException long InputMismatchException byte InputMismatchException short InputMismatchException float InputMismatchException double InputMismatchException big InputMismatchException decimal InputMismatchException boolean InputMismatchException
+      <2147483648> int InputMismatchException For input string: "2147483648" int8 InputMismatchException For input string: "2147483648" under radix 8 int16 InputMismatchException For input string: "2147483648" under radix 16 long 2147483648 byte InputMismatchException For input string: "2147483648" short InputMismatchException For input string: "2147483648" float 2.1474836E9 double 2.147483648E9 big 2147483648 decimal 2147483648 boolean InputMismatchException
+      <ff> int InputMismatchException int8 InputMismatchException int16 255 long InputMismatchException byte InputMismatchException short InputMismatchException float InputMismatchException double InputMismatchException big InputMismatchException decimal InputMismatchException boolean InputMismatchException
+      <1e3> int InputMismatchException int8 InputMismatchException int16 483 long InputMismatchException byte InputMismatchException short InputMismatchException float 1000.0 double 1000.0 big InputMismatchException decimal 1E+3 boolean InputMismatchException
+      <.5> int InputMismatchException int8 InputMismatchException int16 InputMismatchException long InputMismatchException byte InputMismatchException short InputMismatchException float 0.5 double 0.5 big InputMismatchException decimal 0.5 boolean InputMismatchException
+      <5.> int InputMismatchException int8 InputMismatchException int16 InputMismatchException long InputMismatchException byte InputMismatchException short InputMismatchException float 5.0 double 5.0 big InputMismatchException decimal 5 boolean InputMismatchException
+      <-.5e+2> int InputMismatchException int8 InputMismatchException int16 InputMismatchException long InputMismatchException byte InputMismatchException short InputMismatchException float -50.0 double -50.0 big InputMismatchException decimal -5E+1 boolean InputMismatchException
+      <1,000.25> int InputMismatchException int8 InputMismatchException int16 InputMismatchException long InputMismatchException byte InputMismatchException short InputMismatchException float 1000.25 double 1000.25 big InputMismatchException decimal 1000.25 boolean InputMismatchException
+      <NaN> int InputMismatchException int8 InputMismatchException int16 InputMismatchException long InputMismatchException byte InputMismatchException short InputMismatchException float NaN double NaN big InputMismatchException decimal InputMismatchException boolean InputMismatchException
+      <-Infinity> int InputMismatchException int8 InputMismatchException int16 InputMismatchException long InputMismatchException byte InputMismatchException short InputMismatchException float -Infinity double -Infinity big InputMismatchException decimal InputMismatchException boolean InputMismatchException
+      <∞> int InputMismatchException int8 InputMismatchException int16 InputMismatchException long InputMismatchException byte InputMismatchException short InputMismatchException float InputMismatchException For input string: "∞" double InputMismatchException For input string: "∞" big InputMismatchException decimal InputMismatchException boolean InputMismatchException
+      <0x1.8p1> int InputMismatchException int8 InputMismatchException int16 InputMismatchException long InputMismatchException byte InputMismatchException short InputMismatchException float 3.0 double 3.0 big InputMismatchException decimal InputMismatchException boolean InputMismatchException
+      <0x.8> int InputMismatchException int8 InputMismatchException int16 InputMismatchException long InputMismatchException byte InputMismatchException short InputMismatchException float InputMismatchException For input string: "0x.8" double InputMismatchException For input string: "0x.8" big InputMismatchException decimal InputMismatchException boolean InputMismatchException
+      <1.5f> int InputMismatchException int8 InputMismatchException int16 InputMismatchException long InputMismatchException byte InputMismatchException short InputMismatchException float InputMismatchException double InputMismatchException big InputMismatchException decimal InputMismatchException boolean InputMismatchException
+      <１２> int 12 int8 10 int16 18 long 12 byte 12 short 12 float 12.0 double 12.0 big 12 decimal 12 boolean InputMismatchException
+      <128> int 128 int8 InputMismatchException For input string: "128" under radix 8 int16 296 long 128 byte InputMismatchException Value out of range. Value:"128" Radix:10 short 128 float 128.0 double 128.0 big 128 decimal 128 boolean InputMismatchException
+      <9> int 9 int8 InputMismatchException For input string: "9" under radix 8 int16 9 long 9 byte 9 short 9 float 9.0 double 9.0 big 9 decimal 9 boolean InputMismatchException
+      <true> int InputMismatchException int8 InputMismatchException int16 InputMismatchException long InputMismatchException byte InputMismatchException short InputMismatchException float InputMismatchException double InputMismatchException big InputMismatchException decimal InputMismatchException boolean true
+      12 InputMismatchException <x> NoSuchElementException NoSuchElementException No line found IllegalArgumentException radix:37
+      <123> 4 <def> null <> 1<\n> null <4> <6> NoSuchElementException IllegalStateException No match result available <on> null IllegalArgumentException horizon < 0 nullnull
+      true ab ab b false InputMismatchException cd
+      5 InputMismatchException java.util.Scanner[delimiters=x][position=1][match valid=true][need input=false][source closed=false][skipped=false][group separator=\x{2c}][decimal separator=\x{2e}][positive prefix=][negative prefix=\Q-\E][positive suffix=][negative suffix=][NaN string=\QNaN\E][infinity string=\Q∞\E] x en_US 10
+      IllegalStateException Scanner closed IllegalStateException Scanner closed \p{javaWhitespace}+ IllegalStateException Scanner closed
+      [a, b, c, d] [1@0, 22@3, 333@7] [0-0, 1-1, 2-2, 3-3] ConcurrentModificationException
+      3000 < lines> <of text> <end> <> false true café1 IllegalArgumentException java.nio.charset.UnsupportedCharsetException: no-such-charset brok false java.io.IOException: broken
+      xyz12 0 5 x1 z1 4 4 8 144048386 -1 ey BufferOverflowException ReadOnlyBufferException IllegalArgumentException newPosition > limit: (5 > 4) IndexOutOfBoundsException Range [2, 2 + 2) out of bounds for length 3
   # A stream hands its elements on one at a time: each goes through every stage before
   # the next is taken, a stage that ends the stream takes no element more, a sort takes
   # all of them first. count() runs no stage where the source and the stages tell how
@@ -10507,7 +10806,7 @@ cases:
       class BoxMembers {
           public static void main(String[] args) {
               System.out.println(Integer.toBinaryString(10) + " " + Integer.toHexString(-1) + " " + Integer.toOctalString(8) + " " + Integer.toString(255, 16) + " " + Integer.toString(-255, 2) + " " + Integer.parseInt("ff", 16) + " " + Integer.parseInt("+12") + " " + Integer.valueOf("12") + " " + Long.parseLong("-9000000000") + " " + Long.toBinaryString(5L) + " " + Long.toHexString(-1L) + " " + Integer.bitCount(255) + " " + Long.bitCount(-1L) + " " + Integer.signum(-9) + " " + Integer.compare(1, 2) + " " + Integer.sum(1, 2) + Integer.max(1, 2) + Integer.min(1, 2) + " " + Long.MAX_VALUE + " " + Integer.MIN_VALUE);
-              System.out.println(Double.parseDouble("3.25e2") + " " + Double.parseDouble("0.1") + " " + Double.parseDouble(" -1.5 ") + " " + Double.parseDouble("1e-320") + " " + Double.parseDouble("1.7976931348623157e308") + " " + Double.parseDouble("123456789012345678901234567890") + " " + Double.valueOf("1.5") + " " + Double.MAX_VALUE + " " + Double.MIN_VALUE + " " + Double.POSITIVE_INFINITY + " " + Double.NEGATIVE_INFINITY + " " + Double.NaN + " " + Double.isNaN(0.0 / 0.0) + " " + Double.isInfinite(1 / 0.0) + " " + Double.isFinite(1.5) + " " + Double.compare(0.0, -0.0) + " " + Double.toString(1e21) + " " + Double.sum(1.5, 2) + " " + Double.max(-0.0, 0.0) + " " + Double.min(-0.0, 0.0));
+              System.out.println(Double.parseDouble("3.25e2") + " " + Double.parseDouble("0.1") + " " + Double.parseDouble(" -1.5 ") + " " + Double.parseDouble("1e-320") + " " + Double.parseDouble("1.7976931348623157e308") + " " + Double.parseDouble("123456789012345678901234567890") + " " + Double.valueOf("1.5") + " " + Double.MAX_VALUE + " " + Double.MIN_VALUE + " " + Double.POSITIVE_INFINITY + " " + Double.NEGATIVE_INFINITY + " " + Double.NaN + " " + Double.isNaN(0.0 / 0.0) + " " + Double.isInfinite(1 / 0.0) + " " + Double.isFinite(1.5) + " " + Double.compare(0.0, -0.0) + " " + Double.toString(1e21) + " " + Double.sum(1.5, 2) + " " + Double.max(-0.0, 0.0) + " " + Double.min(-0.0, 0.0) + " " + Double.parseDouble("0x1.8p1") + " " + Double.parseDouble("-0X.4P-2") + " " + Float.parseFloat("0x1.fffffep127f") + " " + Double.parseDouble("0x1p-1074d") + " " + Double.parseDouble("0".repeat(400) + "1") + " " + Float.parseFloat("0." + "0".repeat(450) + "1e450"));
               System.out.println(Double.doubleToLongBits(1.0) + " " + Double.doubleToLongBits(-0.0) + " " + Double.doubleToLongBits(5e-324) + " " + Double.doubleToLongBits(-2.5) + " " + Double.doubleToLongBits(1e308) + " " + Double.valueOf(2.5).hashCode() + " " + Double.hashCode(0.1) + " " + Double.valueOf(0.0).equals(-0.0) + " " + Double.valueOf(Double.NaN).equals(Double.NaN) + " " + new SourceListsPoint(1, "a").hashCode());
               System.out.println(Boolean.parseBoolean("TRUE") + " " + Boolean.parseBoolean("yes") + " " + Boolean.TRUE + " " + Boolean.valueOf("true").compareTo(false) + " " + Boolean.logicalXor(true, false) + " " + Boolean.toString(false) + " " + Character.isDigit('7') + " " + Character.isLetter('x') + " " + Character.isLetterOrDigit('_') + " " + Character.isWhitespace(' ') + " " + Character.isUpperCase('Q') + " " + Character.isLowerCase('Q') + " " + Character.toUpperCase('q') + Character.toLowerCase('Q') + " " + Character.getNumericValue('9') + " " + Character.digit('f', 16) + " " + (int) Character.forDigit(11, 16) + " " + Character.valueOf('x').compareTo('y') + " " + Character.toString('c') + " " + (int) Character.MAX_VALUE);
               Number n = 42;
@@ -10609,7 +10908,7 @@ cases:
       }
     expected: |
       1010 ffffffff 10 ff -11111111 255 12 12 -9000000000 101 ffffffffffffffff 8 64 -1 -1 321 9223372036854775807 -2147483648
-      325.0 0.1 -1.5 1.0E-320 1.7976931348623157E308 1.2345678901234568E29 1.5 1.7976931348623157E308 4.9E-324 Infinity -Infinity NaN true true true 1 1.0E21 3.5 0.0 -0.0
+      325.0 0.1 -1.5 1.0E-320 1.7976931348623157E308 1.2345678901234568E29 1.5 1.7976931348623157E308 4.9E-324 Infinity -Infinity NaN true true true 1 1.0E21 3.5 0.0 -0.0 3.0 -0.0625 3.4028235E38 4.9E-324 1.0 0.1
       4607182418800017408 -9223372036854775808 1 -4610560118520545280 9214871658872686752 1074003968 -1507852285 false true 128
       true false true 1 true false true true false true true false Qq 9 15 98 -1 c 65535
       42 2 7.0 42.0 2 true false true 5 7.0 7 7 -1
@@ -16910,6 +17209,57 @@ standalone:
       -1 -1
       at the end: null
       2 lines
+  # A Scanner over System.in reads what a program of a contest reads -- a count, the
+  # numbers, the rest of a line, words, a line ending in \r\n, the last line with no end --
+  # and closing it closes System.in, whose next read is refused, as a JDK's is.
+  - name: a-scanner-reads-the-standard-input
+    file: ScansInput.java
+    source: |
+      import java.util.*;
+
+      // A Scanner over System.in, as a program of a contest reads it; closing it closes System.in.
+      public class ScansInput {
+          public static void main(String[] args) {
+              Scanner in = new Scanner(System.in);
+              int n = in.nextInt();
+              long sum = 0;
+              int[] a = new int[n];
+              for (int i = 0; i < n; i++) {
+                  a[i] = in.nextInt();
+                  sum += a[i];
+              }
+              System.out.println("n=" + n + " sum=" + sum + " last=" + a[n - 1]);
+              System.out.println("rest of line [" + in.nextLine() + "]");
+              System.out.println("line [" + in.nextLine() + "]");
+              String word = in.next();
+              double d = in.nextDouble();
+              boolean b = in.nextBoolean();
+              System.out.println(word + " " + d + " " + b + " " + in.hasNextInt() + " " + in.hasNext());
+              System.out.println(in.next() + " " + in.findInLine("\\d+") + " [" + in.nextLine() + "]");
+              while (in.hasNextLine()) {
+                  String line = in.nextLine();
+                  System.out.println("[" + line + "] " + line.length());
+              }
+              System.out.println(in.hasNext() + " " + in.ioException());
+              in.close();
+              Scanner again = new Scanner(System.in);
+              System.out.println("System.in closed: " + again.hasNext() + " " + again.hasNextLine());
+          }
+      }
+    stdin: "5\n1 2 3\n4 5 tail of five\nthe whole line\n  word 2.5 TRUE  x\nkey 123 value\n\n  spaced  \ncaf\u00e9 \u00fc\r\nend"
+    stdout: |
+      n=5 sum=15 last=5
+      rest of line [ tail of five]
+      line [the whole line]
+      word 2.5 true false true
+      x null []
+      [key 123 value] 13
+      [] 0
+      [  spaced  ] 10
+      [café ü] 6
+      [end] 3
+      false null
+      System.in closed: false false
   # A library the program uses is read AS SOURCE from the program's source path -- here
   # a sources jar -- and lowered with it as far as the program reaches it, on every
   # backend. The library's own annotation type and its type annotations are dropped, an

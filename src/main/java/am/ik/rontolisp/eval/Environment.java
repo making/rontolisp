@@ -3166,8 +3166,24 @@ public final class Environment implements Scope {
 		String acquire = PackageRegistry.qualify(LispNames.RONTOLISP_PKG, LispNames.MUTEX_ACQUIRE);
 		env.defineFunction(acquire, new LispFunction(acquire, args -> {
 			requireArgCount(LispNames.MUTEX_ACQUIRE, args, 1);
-			requireMutex(LispNames.MUTEX_ACQUIRE, mutexes, args.get(0)).lock();
-			return args.get(0);
+			ReentrantLock lock = requireMutex(LispNames.MUTEX_ACQUIRE, mutexes, args.get(0));
+			while (true) {
+				try {
+					lock.lockInterruptibly();
+					return args.get(0);
+				}
+				catch (InterruptedException ex) {
+					// a wait an interrupt woke: the evaluator stops the thread here (the
+					// program's end) or its debugger went on, and the wait goes on;
+					// any other interrupt is taken at the next step, as before
+					BooleanSupplier resumed = env.globals.interruptResumed;
+					if (resumed == null || !resumed.getAsBoolean()) {
+						lock.lock();
+						Thread.currentThread().interrupt();
+						return args.get(0);
+					}
+				}
+			}
 		}));
 		String release = PackageRegistry.qualify(LispNames.RONTOLISP_PKG, LispNames.MUTEX_RELEASE);
 		env.defineFunction(release, new LispFunction(release, args -> {

@@ -2,6 +2,7 @@ package am.ik.rontolisp.eval;
 
 import java.util.concurrent.CompletableFuture;
 import java.util.concurrent.CountDownLatch;
+import java.util.function.Consumer;
 import java.util.function.Function;
 import java.util.function.Supplier;
 
@@ -42,18 +43,20 @@ final class AsyncRuntime {
 	 * @param body the body (the {@code %async-run} thunk applied by the evaluator),
 	 * handed the future it settles so it can record its extra values there
 	 * ({@link LispFuture#settleExtras}) before answering its primary value
+	 * @param starting told the body's thread before it starts, which it may refuse by
+	 * throwing
 	 * @return a future settling with the body's value, or exceptionally with what it
 	 * threw
 	 * @throws RuntimeException the control transfer that left the body before its first
 	 * suspension: that part of the body is a call, so the exit goes on from here. A
 	 * condition stays the future's, for the await to signal.
 	 */
-	static LispFuture run(Function<LispFuture, LispVal> body) {
+	static LispFuture run(Function<LispFuture, LispVal> body, Consumer<Thread> starting) {
 		CompletableFuture<LispVal> result = new CompletableFuture<>();
 		LispFuture future = LispFuture.of(result);
 		CountDownLatch handoff = new CountDownLatch(1);
 		RuntimeException[] exit = new RuntimeException[1];
-		Thread.ofVirtual().start(() -> {
+		Thread thread = Thread.ofVirtual().unstarted(() -> {
 			HANDOFF.set(handoff);
 			try {
 				LispVal value = body.apply(future);
@@ -73,6 +76,8 @@ final class AsyncRuntime {
 				handoff.countDown();
 			}
 		});
+		starting.accept(thread);
+		thread.start();
 		try {
 			handoff.await();
 		}
@@ -106,9 +111,10 @@ final class AsyncRuntime {
 	 * here, so a spawned body finds itself {@code eq} to what its spawner holds.
 	 * @param body the zero-argument thread function
 	 * @param name the thread's name ({@code nil} for none)
+	 * @param starting told the thread before it starts, which it may refuse by throwing
 	 * @return the thread handle carrying the thread and its result future
 	 */
-	static LispThread spawnThread(Supplier<LispVal> body, LispVal name) {
+	static LispThread spawnThread(Supplier<LispVal> body, LispVal name, Consumer<Thread> starting) {
 		CompletableFuture<LispVal> result = new CompletableFuture<>();
 		LispThread[] self = new LispThread[1];
 		Thread thread = Thread.ofVirtual().unstarted(() -> {
@@ -121,6 +127,7 @@ final class AsyncRuntime {
 			}
 		});
 		self[0] = new LispThread(thread, result, name);
+		starting.accept(thread);
 		thread.start();
 		return self[0];
 	}

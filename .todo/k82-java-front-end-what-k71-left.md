@@ -11,7 +11,7 @@ does it, the list of `Stream.toList()` and of a gatherer's window is one of `Lis
 that holds nulls, `Character.digit` and the parses are one rule on every backend, and
 `stripIndent`, `translateEscapes`, `toTitleCase` and the code points of a `CharSequence` are
 there. What follows is what j98, k03, k05, k12, k26, k47, k55, k60 and k71 left, most
-valuable first. The classes j71 left (`Scanner`, `StringJoiner`, files ..) are `.todo/k72`.
+valuable first. The classes j71 left are k72's and, past it, `.todo/k85` .. `k91`.
 
 **How a member's answer is learned**: a Java program printing a transcript, run under a
 JDK and under the four backends and compared -- a grid where the cases can be listed, a

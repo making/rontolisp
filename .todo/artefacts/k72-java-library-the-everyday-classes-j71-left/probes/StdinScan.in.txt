@@ -1,0 +1,10 @@
+5
+1 2 3
+4 5 tail of five
+the whole line
+  word 2.5 TRUE  x
+key 123 value
+
+  spaced  
+café ü
+end

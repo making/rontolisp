@@ -50,8 +50,8 @@ collectors and the inference they need, `Name.class::isInstance` / `::cast`: k12
 (2026-11-19); a library read as source from the program's source path and lowered as far
 as the program reaches it, annotation types and type annotations, an exact method
 reference in a call's applicability: k24 (2026-11-19); what comes after is `.todo/k15`,
-`k16`, `k17`, `k18`, `k19`, `k20`, `k21`, `k22`, `k72` and `k82` (what k00, k11, k06, k07,
-k08, k10, k12, k26, k47, k55, k60 and k71 left); YAVI compiled to wasm in both of its styles, the milestone k24 was
+`k16`, `k17`, `k18`, `k19`, `k20`, `k21`, `k22`, `k82` and `k85` .. `k91` (what k00, k11, k06, k07,
+k08, k10, k12, k26, k47, k55, k60, k71 and k72 left); YAVI compiled to wasm in both of its styles, the milestone k24 was
 asked for, and where its bytes go: k33 (2026-11-20; "YAVI compiled to wasm" below); the
 Maven plugin's `wasm` goal reading a project's
 dependencies from their sources jars, a session reading the source path: k32 (2026-11-20);
@@ -87,7 +87,9 @@ collections and their reversed views, with what their probes found in the collec
 beside them: k55 (2026-11-20; "The sequenced collections" below); the collections of no
 element, of one and of n copies of `Collections`, `singletonMap`, the refusals of
 `List.of`'s list, a bridge's cast and `PriorityQueue`: k60 (2026-11-20; "The collections of
-Collections, a bridge's cast and PriorityQueue" below).
+Collections, a bridge's cast and PriorityQueue" below); `StringJoiner`, `StringTokenizer`,
+`BitSet`, `Scanner`, `Readable` and `CharBuffer`, hexadecimal floats in a parse: k72
+(2026-11-21; "A joiner, a tokenizer, a bit set, a scanner and a char buffer" below).
 
 ## Where it sits
 
@@ -2213,6 +2215,138 @@ are `.todo/artefacts/k71-java-front-end-what-k60-left/`.
   `a-string-has-its-everyday-surface-and-two-constants-of-a-text-are-one` (the members);
   `JavaLoweringTest#theLoweringTable` (the zeros).
 
+## A joiner, a tokenizer, a bit set, a scanner and a char buffer (2026-11-21, k72)
+
+**Invariant: `StringJoiner`, `StringTokenizer`, `BitSet`, `Scanner`, `Readable`, `Buffer` and
+`CharBuffer` are Java source answering what a JDK 25 answers -- each refusal's words, `BitSet`'s
+`size()`, when a `Scanner` reads more of its input and what its text says -- and a `Scanner`
+whose program names no pattern holds no regular expression.** Written from the API
+documentation and JDK 25's answers to probes
+([java-frontend-provenance.md](java-frontend-provenance.md)); the probes are
+`.todo/artefacts/k72-java-library-the-everyday-classes-j71-left/probes/` (each run on the four
+backends by the `four.sh` above them, the JDK's lines in `*.jdk.txt`).
+
+- **`StringJoiner`**: the elements so far are one text without the prefix and suffix; `add`
+  takes `String.valueOf` of the element (a `CharSequence`'s `toString`, not its characters);
+  a merge appends the other's elements as one, read before anything is appended, so a joiner
+  merged with itself doubles. Read off the answers: the null refused first is the prefix's,
+  then the delimiter's, then the suffix's, each with its words (`Joiner.java`, `Joiner2.java`).
+- **`StringTokenizer`**: a position and the delimiters, the token found from the position
+  each time, so `hasMoreTokens` and `countTokens` move nothing; `nextToken(String)` changes the
+  set first and keeps it. Read off the answers: a null set is refused by `hasMoreTokens` and
+  `nextToken` at once, by `countTokens` only where it has a character to look at
+  (`Tokens.java`, 130 lines).
+- **`BitSet`**: words of 64 bits and the count of words in use; `hashCode` is the
+  specification's formula. What `size()` answers was read off the answers (`BitSize.java`,
+  `BitSize2.java`): a set of no size given holds one word, one of `n` bits `ceil(n / 64)`,
+  which a clone keeps until the set grows; growing takes twice the words or the words needed,
+  whichever is more; a clone of any other set, and a set of `valueOf`, holds the words in use;
+  `get(from, to)` is a set given `min(to, length()) - from` bits. `stream()` is
+  `IntFlow.over` with the cardinality as its count, so its spliterator is the subset's
+  (`ORDERED|SIZED|SUBSIZED`, no split; `deviations.md`); a JDK's reports `DISTINCT|SORTED` and
+  splits at the middle of the set bits' span (`BitSplit.java`, not followed). `clone()` is a
+  public member: the subset has no `Cloneable`.
+- **`Scanner`, its buffer**: the input read so far is a `String` and the position an index in
+  it; a `String` source is its whole text, a `Reader` is read in pieces of `max(1024, what is
+  held)` characters and what is behind the position dropped, a high surrogate a piece ends in
+  held for the next. A `Readable` that is no `Reader` is read through a `CharBuffer` of the
+  piece's size (`Scanner.Readables`), so a program reading a `String` or `System.in` holds no
+  `CharBuffer`. The positions `match()` and `toString()` give are in that string, a JDK's in
+  its own buffer (the same up to 1024 characters; `deviations.md`).
+- **`Scanner`, the delimiter is no pattern by default**: `Character.isWhitespace` is what
+  `\p{javaWhitespace}` means, so the default tokens are cut by code (the ASCII ones decided
+  inline) and `delimiter()` compiles the pattern only when asked. The members taking a
+  pattern's text (`hasNext`, `next`, `useDelimiter`, `findInLine`, `findWithinHorizon`,
+  `skip`, `findAll`) are `native`, lowered where they are called with the pattern compiled
+  there with the providers its text may need (`JavaIntrinsics.scanning`), as `Pattern.compile`
+  is; `findInLine(String)` and `findWithinHorizon(String, int)` may answer `null`
+  (`JavaIntrinsics.NULLABLE_NATIVES`, `JavaClasses.Library.answersNull`), which a
+  concatenation writes. Every search has transparent, non-anchoring bounds (`Scan8.java`).
+- **`Scanner`, when it reads more** (`ScanReads.java`: a `Readable` handing scripted pieces,
+  24 runs, and the `source closed` of `toString` in `Scan3.java`): a token's end is a
+  delimiter found unless the match `requireEnd`s, and none found reads until the end; the
+  delimiters before a token read more where their match hit the end, or nothing follows them;
+  a line reads more where no separator is in hand or a `\r` ends what is held; `skip` reads
+  more where its match hit the end and, failing, to the end of the input; `findWithinHorizon`
+  where a match hit the end or none was found while the horizon reaches past what is held;
+  `findInLine` to the separator or the end. The fast path reads where `\p{javaWhitespace}+`
+  would have.
+- **`Scanner`, a number**: the grammar of the class documentation written as code
+  (`numeral`, `integral`, `decimal`, `floating`), each kind's parse in its own members so that
+  a program holds the kinds it asks for alone. Read off the answers (`Scan1.java` .. `Scan9.java`,
+  `Scan7.java`'s 218 lines of radixes): any decimal digit (`Character.isDigit`) is a digit of
+  every radix, so a digit past the radix fails the parse, whose words the refusal has (`For
+  input string: "9" under radix 8`), where a token the grammar refuses is refused with none; a
+  grouped numeral starts with a decimal digit other than an ASCII `0` (a non-ASCII zero
+  passes), its other digits any of the radix; the locale's infinity `\u221e` is taken and the
+  parse refuses it with the token; a hexadecimal float has a point. A token's commas are
+  dropped and an integer's digits handed to the parse as they are (its refusal shows them); a
+  float's digits are made ASCII. A sign and at most 18 ASCII digits of radix 10 are read with
+  no grammar and no parse. A refused token stays, the position past the delimiters
+  (`Scan4.java`).
+- **`Scanner`, what a `hasNext` keeps** (`Scan5.java`, `Scan6.java`, 59 lines with the
+  delimiter changed between): a number for the next of its kind (its radix compared for the
+  integers), kept through `useDelimiter`, `useLocale`, `useRadix`, `hasNext()` and a `hasNext`
+  that fails, dropped by every `next`, `nextLine`, `hasNextLine`, `findInLine`,
+  `findWithinHorizon`, `skip` and `reset`; `hasNext(Pattern)` keeps the token for `next` of
+  that pattern -- by identity, or by text for the members taking a text; where a token ends is
+  one slot both share, as a JDK's.
+- **`Scanner`, the rest**: `match()` after a token is its span with no group, after a line the
+  line with its separator as group 1, after a search the pattern's match, a snapshot; a JDK's
+  after a number has the groups of its own pattern (35 for an `int`, 132 for a `double`:
+  `deviations.md`). `tokens()` and `findAll` are `ObjectFlow.over` an iterator refusing with
+  `ConcurrentModificationException` once the program asked the scanner anything else, their
+  `close` closes the scanner; `findAll` searches a character further after an empty match.
+  `toString()` is a JDK's text with the English separators. `close()` closes the source.
+- **`System.in` closed is at its end** (`StandardInput.close`): a `Scanner` made over it again
+  has no token, as under a JDK, whose read throws `IOException("Stream closed")`. Throwing it
+  was measured and not made: a program reading `System.in.read()` and throwing nothing else,
+  21,472 -> 53,180 B of wasm (the exception classes); at its end, 21,588.
+- **`Readable`, `Buffer`, `CharBuffer`**: `Reader` is a `Readable` (`read(CharBuffer)` through
+  an array). One class for every buffer: an array of UTF-16 units from an offset, writable or
+  read-only, or a text: a `String` wrapped as its units with no array to hand out
+  (`UnsupportedOperationException`), any other `CharSequence` read live through `charAt`. Read
+  off the answers (`Chars.java`, 59 lines): the words of each refusal (`capacity < 0: (-1 <
+  0)`, `newPosition > limit: (9 > 8)`, the range ones of `checkFromIndexSize`, none for the
+  others) and `hashCode`, 1 then 31 times the hash plus each element from the last back.
+  `order()` is refused by name: the platform's, and `ByteOrder` is not there.
+- **Hexadecimal floats in `Double.parseDouble` and `Float.parseFloat`** (`%java-read-number`
+  reads radix 16, its `p` exponent required): the `Scanner` hands its hexadecimal tokens to
+  them. The same change measures a number's size from its first digit that is not `0`: `0`
+  times 500 then `1` was `Infinity`, and so was `0.` with 450 zeros and `1e450`
+  (`DecGrid.java`, 8,000 seeded decimal texts, the old reader differing; `HexGrid.java`,
+  6,000 seeded hexadecimal texts and 33 at the formats' ends: a JDK's bits on the four
+  backends). Cost: a program parsing a double 75,259 -> 76,775 B of wasm; a first draft with a
+  function of its own for radix 16 was +5,169 B, one over `(expt base power)` +13,247 B
+  (the generic `expt` brings the complex numbers).
+- **Measured** (wasm bytes, the size programs of k12, k26, k47, k55, k62 and k71, `sz.sh` of
+  k71): unchanged but `SzDouble` above; readers of `System.in` `ReadBytes` 21,472 -> 21,588,
+  `ReadChars` 86,373 -> 86,568, `ReadLines` 103,510 -> 103,803 (the closed flag). The new
+  classes' programs (`bench/` of the artefacts): a sieve on a `BitSet` 99,516, a tokenizer
+  50,211, a scanner of lines over `System.in` 103,351, of a million ints 146,358 (265,496 when
+  one member parsed every kind: `java.math` came with it), splitting by `useDelimiter(",")`
+  311,455 (the engine; `Pattern.compile(",")` and a matcher alone 286,623). A million ints from
+  `System.in` (10 MB, one run each on the loaded box): a JDK 2.16 s, the JVM class 2.35 s,
+  wasm 7.84 s, of which reading the 10 MB through an `InputStreamReader` is 5.63 s
+  (`StandardInput` asks the host for a character at a time; `ReadChars.java`);
+  `BufferedReader` and `StringTokenizer` 0.95 / 2.81 / 13.62 s.
+- **Left**: a `Formatter` of its own `.todo/k85`; files, with `Scanner` of a `File` and a
+  `Path`, `.todo/k86`; `java.text` `.todo/k87`; the other buffers, `CharBuffer.order()` with
+  them, `.todo/k88`; reflection and weak references `.todo/k89`; `BigInteger`'s primes
+  `.todo/k90`; the standard input on wasm read a character a host call `.todo/k91`; the
+  concurrent queues on `PriorityQueue` `.todo/k21`.
+- Pins: java-spec `a-scanner-reads-tokens-numbers-and-lines-of-a-text` (tokens and lines over
+  each kind of whitespace and separator, seven delimiters, 22 tokens through every kind and
+  radix with the refusals' words, a refused token's position, finds and skips with their
+  matches and horizons, a search finding nothing concatenated, what `hasNext` keeps, a closed
+  scanner, the streams, a `Readable` in pieces, a charset, a failing source, a `CharBuffer`),
+  the `standalone:` case
+  `a-scanner-reads-the-standard-input` (a contest's input, the closed `System.in`),
+  `joiners`, `tokens` and `bits` in `a-deque-an-optional-the-utilities-and-the-older-classes`,
+  the hexadecimal and leading-zero parses of `the-boxes-parse-print-and-compare-and-math-is-strict`;
+  `JavaLoweringTest#aConstructTheSubsetDoesNotHaveIsRefusedByNameAtItsPosition` names
+  `java.util.Calendar` where it named `Scanner`.
+
 ## The sublist and the walks of a list (2026-11-20, k62)
 
 **Invariant: `AbstractList` keeps `protected int modCount`; `ArrayList`, `LinkedList` and
@@ -2372,7 +2506,7 @@ leaves open is a JDK 25's answers to a grid.
   the scientific forms 2.5 KB, `_dispatch_5` 0.5 KB.
   Found beside it: the zeros of a width were written ahead of a negative number's
   parenthesis (`%(010d` of -5 was `0000000(5)`), now inside it as a JDK writes them.
-- Not there (`.todo/k72`): the primes (`isProbablePrime`, `nextProbablePrime`,
+- Not there (`.todo/k90`): the primes (`isProbablePrime`, `nextProbablePrime`,
   `probablePrime`, the constructors of random bits), refused by name.
 - Pins: the `standalone:` case `big-integers-and-decimals-compute-round-and-print-exactly`
   (a file of its own: a class under `Number` changes how the corpus program lowers
@@ -4002,10 +4136,25 @@ class of a package of our own was needed (`deviations.md`, "The HTTP server").
   6,085 -> 5,939); `Zone` 155,833 -> 155,201; `Sieve` 19,699 -> 19,253; `SieveLoop` 16,797 ->
   16,402 and 8.9 -> 1.8 s (the JVM 2.9 s); `ZoneLoop` 104,378 -> 103,839, `LongSum` 17,358 ->
   17,237, both times unchanged; YAVI `Booking.java` 1,106,560 -> 1,098,196, `Member.java`
-  641,617 -> 637,212. No function of these grew. Left: `new T[n][m]` (`%java-new-array`'s
-  sizes prove nothing), and a `long[]` store, a general array's, still boxes its index
-  (10^8 stores 0.68 s against an `int[]`'s 0.48;
-  `.todo/artefacts/k76-java-wasm-what-is-left-of-an-arrays-making-and-store/`).
+  641,617 -> 637,212. No function of these grew.
+- **A `long[]` store, an array of references', takes a raw index too; `new T[n][m]` is
+  lowered at its site** (2026-11-21, k84). The first is the `GENERAL` arm of the pinned
+  store (`.kb/declarations-type-checks.md`, "Declaration-driven array emission"). The second
+  was `%java-new-array`: a list of the lengths, a call per row and a `make-array` of the
+  dims of any rank; now the lengths are evaluated, then checked into variables declared
+  `(integer 0 2147483647)`, and each level but the last is a `while` over a declared index
+  filling a vector (`JavaLowering.newArray`). Measured (base `46d8ae6c2`, wasm unless named,
+  CPU seconds best of three on a loaded 64-core box; the programs in
+  `.todo/artefacts/k84-java-wasm-a-general-arrays-store-and-new-of-several-sizes/`):
+  10^8 stores into a `long[1000]` 0.60 -> 0.45 s (an `int[]`'s 0.42 both), into a
+  `String[1000]` 0.58 -> 0.41; 10^6 `new int[4][4]` 0.59 -> 0.29 s (a loop the program
+  writes by hand 0.27), the module 27,611 -> 18,313 B (`%java-new-rows` was 1,605 B, the
+  site grew 1,280 -> 1,341), the JVM 10^7 of them 4.5-4.8 -> 4.0-4.7 s, the interpreter
+  10^5 3.4-4.0 -> 3.2 s. Sizes: the zone reader 10,289 -> 10,008, `Zone` 155,201 ->
+  154,862, `ZoneLoop` 103,839 -> 103,501, YAVI `Booking.java` 1,100,061 -> 1,098,914,
+  `Member.java` 638,954 -> 638,239 (one function of them grew a byte). `new T[n][m]` is
+  rare where measured: none in YAVI 0.18.0, one in the examples (`GlyphGen.java`), none in
+  the library's sources.
 - **`byte` and `short`** are integers an operator promotes to `int` and an assignment of a
   constant that fits, a cast or a compound assignment narrows (`JavaForms.signed`).
   **`float` is the double of its value** -- every binary32 is a binary64 -- and each operation's
@@ -4277,7 +4426,7 @@ virtual call can run --, classes used):
   array's length (`(or x (%java-npe))`; `this`, a literal, a `new`, a concatenation are not
   tested; a dispatcher's last arm answers null) -- measured free (a direct call per node of a
   list walked 10^8 times: JVM 0.47 -> 0.45 s, wasm 1.02 -> 1.03 s); a negative array length
-  (`%java-array-length`, every length of `%java-new-array` first); `charAt` (the host's
+  (`%java-array-length`, of `new T[n][m]..` once every length is evaluated); `charAt` (the host's
   `char` checks nothing compiled: the JVM gave a `type-error` of datum NIL, wasm a garbage
   code), one read answering -1 outside the string ("`charAt` is one read" below); a failed
   cast's message,
@@ -5484,7 +5633,7 @@ are not askable (`.todo/k18`).
 | `yield v` | the value in tail position of its arm, else `(return-from %yield v)` |
 | `o instanceof Circle c` | `(and (Circle? o) (progn (setq c o) t))`, `c` a `let` of the statement; `if (o instanceof Circle c) a` is `(if (Circle? o) (progn (setq c o) a))` |
 | `new Inner()`, a local class | `(Outer.Inner.new outer args.. captured..)` |
-| `new int[n][m]` | `(%java-new-array (list n m) kind default)` |
+| `new int[n][m]` | `(let ((a n) (b m)) (let ((n' (%java-array-length a)) ..) (declare (type (integer 0 2147483647) n' ..)) rows))`, each level but the last a `while` filling a vector of `nil` |
 | `f(1, 2)` to `f(int...)` | `(f (make-array 2 .. :initial-contents (list 1 2)))` |
 | `x -> e` | `(lambda (x) e)`; `(%make-Iface%lambda (lambda (x) e))` where the program can tell the interface |
 | `String::length`, `obj::m` | `(lambda (%t0) (length %t0))`; `(let ((%t1 obj)) (lambda (%t0) (m %t1 %t0)))` |
@@ -5586,7 +5735,9 @@ lines); a `refused:` case is the scaffold with the case's statements, which the 
 `error` at that line and the front end at the same line with a message starting the same. In
 process, part of `./mvnw test`. The interpreter's `standalone:` leg has the 300 s a process of the
 other legs has (`CliStack.callWithin`): a program whose threads wait for ever fails its leg
-by name and the run goes on (until k14 it stopped the run: full run 19, 50 minutes).
+by name and the run goes on (until k14 it stopped the run: full run 19, 50 minutes). The leg
+ends the threads the program left, daemons, as the other legs' process end does
+([threads.md](threads.md), "A program's end ends its threads").
 **No thread case orders two threads by a sleep or a delay** (k14, 2026-11-19): what one
 thread prints before another does is held by a latch the other waits for, or by a wait for
 the state the line prints (`while (..) Thread.sleep(1)`); a sleep stays where it IS the

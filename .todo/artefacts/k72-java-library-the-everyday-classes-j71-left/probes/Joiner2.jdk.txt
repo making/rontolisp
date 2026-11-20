@@ -1,0 +1,6 @@
+null [ null: java.lang.NullPointerException The delimiter must not be null
+null null ]: java.lang.NullPointerException The prefix must not be null
+, null null: java.lang.NullPointerException The prefix must not be null
+TS 2
+TSTSTSTSTS 10
+a,TS

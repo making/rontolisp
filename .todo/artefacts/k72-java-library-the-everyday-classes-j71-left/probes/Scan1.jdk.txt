@@ -1,0 +1,166 @@
+<> tokens  lines 
+< > tokens  lines < >
+<a> tokens <a> lines <a>
+< a > tokens <a> lines < a >
+<a b\tc\nd\re\ffgh i j> tokens <a><b><c><d><e><f><g><h i><j> lines <a b\tc><d><e\ffgh i j>
+<\n\n> tokens  lines <><>
+<x\n> tokens <x> lines <x>
+<x\r\ny> tokens <x><y> lines <x><y>
+<x\ry\rz> tokens <x><y><z> lines <x><y><z>
+<a\u2028b\u0085c > tokens <a><b\u0085c> lines <a><b><c>
+<one  two\n\nthree   \n> tokens <one><two><three> lines <one  two><><three   >
+<a,b,,c,> by <,> <a><b><><c>
+<,a> by <,> <a>
+<,,a> by <,> <><a>
+<a,,> by <,> <a><>
+<a , b ,c> by <\s*,\s*> <a><b><c>
+<abc> by <> <a><b><c>
+<a b> by <\s*> <a><b>
+<a1b22c> by <\d> <a><b><><c>
+<xaay> by <a*> <x><y>
+<1;2;3> by <;> <1><2><3>
+<;> by <;> 
+<a\nb\n\nc> by <\n> <a><b><><c>
+<a\r\nb> by <\R> <a><b>
+12 false abc 3<>< rest of line> next 4.5 true false false
+<0> int:0 int16:0 int36:0 long:0 byte:0 short:0 double:0.0 float:0.0 big:0 dec:0 bool:-
+<-0> int:0 int16:0 int36:0 long:0 byte:0 short:0 double:-0.0 float:-0.0 big:0 dec:0 bool:-
+<+0> int:0 int16:0 int36:0 long:0 byte:0 short:0 double:0.0 float:0.0 big:0 dec:0 bool:-
+<12> int:12 int16:18 int36:38 long:12 byte:12 short:12 double:12.0 float:12.0 big:12 dec:12 bool:-
+<+12> int:12 int16:18 int36:38 long:12 byte:12 short:12 double:12.0 float:12.0 big:12 dec:12 bool:-
+<-12> int:-12 int16:-18 int36:-38 long:-12 byte:-12 short:-12 double:-12.0 float:-12.0 big:-12 dec:-12 bool:-
+<1,000> int:1000 int16:4096 int36:46656 long:1000 byte:- short:1000 double:1000.0 float:1000.0 big:1000 dec:1000 bool:-
+<1,000,000> int:1000000 int16:16777216 int36:- long:1000000 byte:- short:- double:1000000.0 float:1000000.0 big:1000000 dec:1000000 bool:-
+<-1,000> int:-1000 int16:-4096 int36:-46656 long:-1000 byte:- short:-1000 double:-1000.0 float:-1000.0 big:-1000 dec:-1000 bool:-
+<+1,000> int:1000 int16:4096 int36:46656 long:1000 byte:- short:1000 double:1000.0 float:1000.0 big:1000 dec:1000 bool:-
+<10,00> int:- int16:- int36:- long:- byte:- short:- double:- float:- big:- dec:- bool:-
+<1,0000> int:- int16:- int36:- long:- byte:- short:- double:- float:- big:- dec:- bool:-
+<,100> int:- int16:- int36:- long:- byte:- short:- double:- float:- big:- dec:- bool:-
+<1,> int:- int16:- int36:- long:- byte:- short:- double:- float:- big:- dec:- bool:-
+<01,000> int:- int16:- int36:- long:- byte:- short:- double:- float:- big:- dec:- bool:-
+<0,000> int:- int16:- int36:- long:- byte:- short:- double:- float:- big:- dec:- bool:-
+<2147483647> int:2147483647 int16:- int36:- long:2147483647 byte:- short:- double:2.147483647E9 float:2.1474836E9 big:2147483647 dec:2147483647 bool:-
+<2147483648> int:- int16:- int36:- long:2147483648 byte:- short:- double:2.147483648E9 float:2.1474836E9 big:2147483648 dec:2147483648 bool:-
+<-2147483648> int:-2147483648 int16:- int36:- long:-2147483648 byte:- short:- double:-2.147483648E9 float:-2.1474836E9 big:-2147483648 dec:-2147483648 bool:-
+<-2147483649> int:- int16:- int36:- long:-2147483649 byte:- short:- double:-2.147483649E9 float:-2.1474836E9 big:-2147483649 dec:-2147483649 bool:-
+<9223372036854775807> int:- int16:- int36:- long:9223372036854775807 byte:- short:- double:9.223372036854776E18 float:9.223372E18 big:9223372036854775807 dec:9223372036854775807 bool:-
+<9223372036854775808> int:- int16:- int36:- long:- byte:- short:- double:9.223372036854776E18 float:9.223372E18 big:9223372036854775808 dec:9223372036854775808 bool:-
+<1.5> int:- int16:- int36:- long:- byte:- short:- double:1.5 float:1.5 big:- dec:1.5 bool:-
+<-1.5> int:- int16:- int36:- long:- byte:- short:- double:-1.5 float:-1.5 big:- dec:-1.5 bool:-
+<.5> int:- int16:- int36:- long:- byte:- short:- double:0.5 float:0.5 big:- dec:0.5 bool:-
+<5.> int:- int16:- int36:- long:- byte:- short:- double:5.0 float:5.0 big:- dec:5 bool:-
+<1e3> int:- int16:483 int36:1803 long:- byte:- short:- double:1000.0 float:1000.0 big:- dec:1E+3 bool:-
+<1E-3> int:- int16:- int36:- long:- byte:- short:- double:0.001 float:0.001 big:- dec:0.001 bool:-
+<1e> int:- int16:30 int36:50 long:- byte:- short:- double:- float:- big:- dec:- bool:-
+<-.5e+2> int:- int16:- int36:- long:- byte:- short:- double:-50.0 float:-50.0 big:- dec:-5E+1 bool:-
+<1,000.25> int:- int16:- int36:- long:- byte:- short:- double:1000.25 float:1000.25 big:- dec:1000.25 bool:-
+<1,000e2> int:- int16:- int36:- long:- byte:- short:- double:100000.0 float:100000.0 big:- dec:1.000E+5 bool:-
+<NaN> int:- int16:- int36:30191 long:- byte:- short:- double:NaN float:NaN big:- dec:- bool:-
+<-NaN> int:- int16:- int36:-30191 long:- byte:- short:- double:NaN float:NaN big:- dec:- bool:-
+<Infinity> int:- int16:- int36:- long:- byte:- short:- double:Infinity float:Infinity big:- dec:- bool:-
+<-Infinity> int:- int16:- int36:- long:- byte:- short:- double:-Infinity float:-Infinity big:- dec:- bool:-
+<+Infinity> int:- int16:- int36:- long:- byte:- short:- double:Infinity float:Infinity big:- dec:- bool:-
+<∞> int:- int16:- int36:- long:- byte:- short:- double:- float:- big:- dec:- bool:-
+<-∞> int:- int16:- int36:- long:- byte:- short:- double:- float:- big:- dec:- bool:-
+<nan> int:- int16:- int36:30191 long:- byte:- short:- double:- float:- big:- dec:- bool:-
+<infinity> int:- int16:- int36:- long:- byte:- short:- double:- float:- big:- dec:- bool:-
+<0x10> int:- int16:- int36:42804 long:- byte:- short:- double:- float:- big:- dec:- bool:-
+<0x1.8p1> int:- int16:- int36:- long:- byte:- short:- double:3.0 float:3.0 big:- dec:- bool:-
+<0x.8> int:- int16:- int36:- long:- byte:- short:- double:- float:- big:- dec:- bool:-
+<-0X1.0P-2> int:- int16:- int36:- long:- byte:- short:- double:-0.25 float:-0.25 big:- dec:- bool:-
+<0x1p3> int:- int16:- int36:1541847 long:- byte:- short:- double:- float:- big:- dec:- bool:-
+<1.5f> int:- int16:- int36:- long:- byte:- short:- double:- float:- big:- dec:- bool:-
+<1.5d> int:- int16:- int36:- long:- byte:- short:- double:- float:- big:- dec:- bool:-
+<1_000> int:- int16:- int36:- long:- byte:- short:- double:- float:- big:- dec:- bool:-
+<٣٤> int:34 int16:52 int36:112 long:34 byte:34 short:34 double:34.0 float:34.0 big:34 dec:34 bool:-
+<١,٢٣٤> int:1234 int16:4660 int36:49360 long:1234 byte:- short:1234 double:1234.0 float:1234.0 big:1234 dec:1234 bool:-
+<１２> int:12 int16:18 int36:38 long:12 byte:12 short:12 double:12.0 float:12.0 big:12 dec:12 bool:-
+<ff> int:- int16:255 int36:555 long:- byte:- short:- double:- float:- big:- dec:- bool:-
+<FF> int:- int16:255 int36:555 long:- byte:- short:- double:- float:- big:- dec:- bool:-
+<-ff> int:- int16:-255 int36:-555 long:- byte:- short:- double:- float:- big:- dec:- bool:-
+<7fffffff> int:- int16:2147483647 int36:- long:- byte:- short:- double:- float:- big:- dec:- bool:-
+<80000000> int:80000000 int16:- int36:- long:80000000 byte:- short:- double:8.0E7 float:8.0E7 big:80000000 dec:80000000 bool:-
+<z> int:- int16:- int36:35 long:- byte:- short:- double:- float:- big:- dec:- bool:-
+<Z> int:- int16:- int36:35 long:- byte:- short:- double:- float:- big:- dec:- bool:-
+<zz> int:- int16:- int36:1295 long:- byte:- short:- double:- float:- big:- dec:- bool:-
+<127> int:127 int16:295 int36:1375 long:127 byte:127 short:127 double:127.0 float:127.0 big:127 dec:127 bool:-
+<128> int:128 int16:296 int36:1376 long:128 byte:- short:128 double:128.0 float:128.0 big:128 dec:128 bool:-
+<-129> int:-129 int16:-297 int36:-1377 long:-129 byte:- short:-129 double:-129.0 float:-129.0 big:-129 dec:-129 bool:-
+<32767> int:32767 int16:206695 int36:5141455 long:32767 byte:- short:32767 double:32767.0 float:32767.0 big:32767 dec:32767 bool:-
+<32768> int:32768 int16:206696 int36:5141456 long:32768 byte:- short:- double:32768.0 float:32768.0 big:32768 dec:32768 bool:-
+<true> int:- int16:- int36:1389110 long:- byte:- short:- double:- float:- big:- dec:- bool:true
+<TRUE> int:- int16:- int36:1389110 long:- byte:- short:- double:- float:- big:- dec:- bool:true
+<False> int:- int16:- int36:25689038 long:- byte:- short:- double:- float:- big:- dec:- bool:false
+<yes> int:- int16:- int36:44596 long:- byte:- short:- double:- float:- big:- dec:- bool:-
+<1.7976931348623157E308> int:- int16:- int36:- long:- byte:- short:- double:1.7976931348623157E308 float:Infinity big:- dec:1.7976931348623157E+308 bool:-
+<1e400> int:- int16:123904 int36:2337984 long:- byte:- short:- double:Infinity float:Infinity big:- dec:1E+400 bool:-
+<4.9e-324> int:- int16:- int36:- long:- byte:- short:- double:4.9E-324 float:0.0 big:- dec:4.9E-324 bool:-
+<1e-400> int:- int16:- int36:- long:- byte:- short:- double:0.0 float:0.0 big:- dec:1E-400 bool:-
+<123456789012345678901234567890> int:- int16:- int36:- long:- byte:- short:- double:1.2345678901234568E29 float:1.2345679E29 big:123456789012345678901234567890 dec:123456789012345678901234567890 bool:-
+<0.1> int:- int16:- int36:- long:- byte:- short:- double:0.1 float:0.1 big:- dec:0.1 bool:-
+<00012> int:12 int16:18 int36:38 long:12 byte:12 short:12 double:12.0 float:12.0 big:12 dec:12 bool:-
+<0012.50> int:- int16:- int36:- long:- byte:- short:- double:12.5 float:12.5 big:- dec:12.50 bool:-
+nextInt <abc>: java.util.InputMismatchException null
+nextByte <abc>: java.util.InputMismatchException null
+nextDouble <abc>: java.util.InputMismatchException null
+nextBoolean <abc>: java.util.InputMismatchException null
+nextBigInteger <abc>: java.util.InputMismatchException null
+nextInt <2147483648>: java.util.InputMismatchException <For input string: "2147483648">
+nextByte <2147483648>: java.util.InputMismatchException <For input string: "2147483648">
+nextDouble <2147483648>: 2.147483648E9
+nextBoolean <2147483648>: java.util.InputMismatchException null
+nextBigInteger <2147483648>: 2147483648
+nextInt <128>: 128
+nextByte <128>: java.util.InputMismatchException <Value out of range. Value:"128" Radix:10>
+nextDouble <128>: 128.0
+nextBoolean <128>: java.util.InputMismatchException null
+nextBigInteger <128>: 128
+nextInt <1e400>: java.util.InputMismatchException null
+nextByte <1e400>: java.util.InputMismatchException null
+nextDouble <1e400>: Infinity
+nextBoolean <1e400>: java.util.InputMismatchException null
+nextBigInteger <1e400>: java.util.InputMismatchException null
+nextInt <>: java.util.NoSuchElementException null
+nextByte <>: java.util.NoSuchElementException null
+nextDouble <>: java.util.NoSuchElementException null
+nextBoolean <>: java.util.NoSuchElementException null
+nextBigInteger <>: java.util.NoSuchElementException null
+nextInt <ff>: java.util.InputMismatchException null
+nextByte <ff>: java.util.InputMismatchException null
+nextDouble <ff>: java.util.InputMismatchException null
+nextBoolean <ff>: java.util.InputMismatchException null
+nextBigInteger <ff>: java.util.InputMismatchException null
+nextInt <1.5>: java.util.InputMismatchException null
+nextByte <1.5>: java.util.InputMismatchException null
+nextDouble <1.5>: 1.5
+nextBoolean <1.5>: java.util.InputMismatchException null
+nextBigInteger <1.5>: java.util.InputMismatchException null
+keep nextInt: java.util.InputMismatchException null
+keep next: <abc>
+keep nextInt again: 5
+next at end: java.util.NoSuchElementException null
+next at end ws: java.util.NoSuchElementException null
+nextLine at end: java.util.NoSuchElementException <No line found>
+nextInt at end: java.util.NoSuchElementException null
+radix 1: java.lang.IllegalArgumentException <radix:1>
+radix 37: java.lang.IllegalArgumentException <radix:37>
+nextInt radix 37: java.lang.IllegalArgumentException <radix:37>
+hasNextInt radix 1: java.lang.IllegalArgumentException <radix:1>
+closed next: java.lang.IllegalStateException <Scanner closed>
+closed hasNext: java.lang.IllegalStateException <Scanner closed>
+closed nextLine: java.lang.IllegalStateException <Scanner closed>
+closed delimiter: \p{javaWhitespace}+
+closed radix: 10
+closed match: java.lang.IllegalStateException <No match result available>
+closed close: <again>
+closed findInLine: java.lang.IllegalStateException <Scanner closed>
+closed toString: true
+remove: java.lang.UnsupportedOperationException null
+no match: java.lang.IllegalStateException <No match result available>
+useDelimiter null: java.lang.NullPointerException 
+hasNext null: java.lang.NullPointerException 
+new null: java.lang.NullPointerException 
+16 255 16 false true 35
+\p{javaWhitespace}+ en_US 10 null
+,  8
+\p{javaWhitespace}+ en_US 10 a

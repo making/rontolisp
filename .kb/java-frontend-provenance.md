@@ -509,6 +509,23 @@ algorithm came from, and the answer goes in the file's header.
   not `Object`), when javac warns of a raw argument and in which order, the words of
   `translateEscapes`' refusal. The zeros of the decimal digits are Unicode's as a running JDK
   answers them, under the Unicode entry of `THIRD-PARTY-NOTICES.txt`.
+- **`StringJoiner`, `StringTokenizer`, `BitSet`, `Scanner`, `Readable`, `Buffer`,
+  `CharBuffer` and the hexadecimal floats of a parse (k72, 2026-11-21).** Written from the API
+  documentation (the classes' members; `BitSet.hashCode`'s formula; the grammar of a
+  `Scanner`'s numbers, its delimiters, lines, horizons and matches; the relations of a
+  buffer's four numbers; the syntax of a hexadecimal float in `Double.valueOf`) and JDK 25's
+  answers to probes (`.todo/artefacts/k72-java-library-the-everyday-classes-j71-left/probes/`:
+  some 1,300 lines over the seven classes, a `Readable` handing scripted pieces to learn when a
+  scanner reads, 6,000 hexadecimal and 8,000 decimal texts seeded). Nobody opened OpenJDK's
+  source, and the shape is its own: a scanner's input is one string and a position, its default
+  tokens cut by code where a JDK runs a pattern, each kind of number read in its own members;
+  one class for every char buffer. What the documentation does not state was read off the
+  answers: the words of every refusal and which null a constructor refuses first, `BitSet`'s
+  `size()` and what a clone keeps of it, which characters a scanner's number takes beyond the
+  grammar and that the locale's infinity is taken and then refused, when a scanner reads more,
+  where a refused token leaves it, what a `hasNext` keeps and what drops it, the match each
+  operation leaves, a scanner's text, `CharBuffer.hashCode`. The answers are lines of
+  `java-spec.yaml`, which the JDK leg asks again.
 - **Computed resource names, `Properties`, `ResourceBundle`, `ServiceLoader` (k58,
   2026-11-20).** Written from the API documentation (`Properties.load`'s grammar and
   `store`'s escapes and order of keys, `ResourceBundle.getBundle`'s lookup with its

@@ -1141,6 +1141,7 @@ public final class RontoLispCli {
 		if (loadedFile != null) {
 			evaluator.pushLoadContext(loadedFile, evaluator.sourceLoader().canonicalPath(loadedFile));
 		}
+		boolean ranOff = false;
 		try {
 			if (language == SourceLanguage.COMMON_LISP) {
 				evaluator.evalSource(source, entryFile);
@@ -1148,6 +1149,7 @@ public final class RontoLispCli {
 			for (LispVal expr : exprs) {
 				evaluator.eval(markers ? evaluator.resolveReadTimeEvalInCode(expr) : expr);
 			}
+			ranOff = true;
 		}
 		finally {
 			if (entryContext) {
@@ -1157,6 +1159,13 @@ public final class RontoLispCli {
 			// by an uncaught condition -- so an output file it never closed gets what it
 			// still buffers, as it does on the other three backends.
 			evaluator.flushOpenStreams();
+			// Its process ends here, and the threads it started with it, unless it ran
+			// off its end: then a thread that is no daemon (a server's) may hold the
+			// process, except for a Java program, whose end has waited for those. In
+			// process nothing else would end them.
+			if (!ranOff || language == SourceLanguage.JAVA) {
+				evaluator.stopThreads();
+			}
 		}
 		// A program whose last write is a raw octet (write-byte to standard output) has
 		// nothing left to flush it: an auto-flushing PrintStream only drains on a

@@ -1,0 +1,100 @@
+ScanReads.java:30: warning: [unchecked] Possible heap pollution from parameterized vararg type Function<Scanner,Object>
+    static void run(String what, String[] pieces, Function<Scanner, Object>... ops) {
+                           ^
+ScanReads.java:45: warning: [unchecked] unchecked generic array creation for varargs parameter of type Function<Scanner,Object>[]
+        run("next", new String[] {"ab", "  ", "cd", " e"}, s -> s.next(), s -> s.next(), s -> s.next(), s -> s.hasNext());
+           ^
+ScanReads.java:46: warning: [unchecked] unchecked generic array creation for varargs parameter of type Function<Scanner,Object>[]
+        run("next nl", new String[] {"ab\n", "cd\n"}, s -> s.next(), s -> s.next(), s -> s.hasNext());
+           ^
+ScanReads.java:47: warning: [unchecked] unchecked generic array creation for varargs parameter of type Function<Scanner,Object>[]
+        run("hasNext", new String[] {"ab", " ", " cd"}, s -> s.hasNext(), s -> s.next(), s -> s.hasNext(), s -> s.next());
+           ^
+ScanReads.java:48: warning: [unchecked] unchecked generic array creation for varargs parameter of type Function<Scanner,Object>[]
+        run("nextInt nextLine", new String[] {"5\n", "x y\n"}, s -> s.nextInt(), s -> s.nextLine(), s -> s.nextLine(), s -> s.hasNextLine());
+           ^
+ScanReads.java:49: warning: [unchecked] unchecked generic array creation for varargs parameter of type Function<Scanner,Object>[]
+        run("line cr", new String[] {"x\r", "\ny\r", "z"}, s -> s.nextLine(), s -> s.nextLine(), s -> s.nextLine(), s -> s.hasNextLine());
+           ^
+ScanReads.java:50: warning: [unchecked] unchecked generic array creation for varargs parameter of type Function<Scanner,Object>[]
+        run("line cr end", new String[] {"x\r"}, s -> s.nextLine(), s -> s.hasNextLine());
+           ^
+ScanReads.java:51: warning: [unchecked] unchecked generic array creation for varargs parameter of type Function<Scanner,Object>[]
+        run("delim s+", new String[] {"ab  ", "  cd"}, s -> s.useDelimiter("\\s+").next(), s -> s.next());
+           ^
+ScanReads.java:52: warning: [unchecked] unchecked generic array creation for varargs parameter of type Function<Scanner,Object>[]
+        run("delim s+ nl", new String[] {"ab\n", "cd\n"}, s -> s.useDelimiter("\\s+").next(), s -> s.next(), s -> s.hasNext());
+           ^
+ScanReads.java:53: warning: [unchecked] unchecked generic array creation for varargs parameter of type Function<Scanner,Object>[]
+        run("delim comma", new String[] {"a,", ",b"}, s -> s.useDelimiter(",").next(), s -> s.next(), s -> s.next(), s -> s.hasNext());
+           ^
+ScanReads.java:54: warning: [unchecked] unchecked generic array creation for varargs parameter of type Function<Scanner,Object>[]
+        run("delim ab", new String[] {"xa", "by"}, s -> s.useDelimiter("ab").next(), s -> s.next());
+           ^
+ScanReads.java:55: warning: [unchecked] unchecked generic array creation for varargs parameter of type Function<Scanner,Object>[]
+        run("delim alt", new String[] {"xa..b", "..z"}, s -> s.useDelimiter("a.*z|b").next(), s -> s.next());
+           ^
+ScanReads.java:56: warning: [unchecked] unchecked generic array creation for varargs parameter of type Function<Scanner,Object>[]
+        run("delim lit end", new String[] {"x,", "y"}, s -> s.useDelimiter(",").next(), s -> s.next());
+           ^
+ScanReads.java:57: warning: [unchecked] unchecked generic array creation for varargs parameter of type Function<Scanner,Object>[]
+        run("skip a+", new String[] {"aa", "ab"}, s -> s.skip("a+").next());
+           ^
+ScanReads.java:58: warning: [unchecked] unchecked generic array creation for varargs parameter of type Function<Scanner,Object>[]
+        run("skip lit", new String[] {"ab", "cd"}, s -> s.skip("ab").next());
+           ^
+ScanReads.java:59: warning: [unchecked] unchecked generic array creation for varargs parameter of type Function<Scanner,Object>[]
+        run("skip fail", new String[] {"ab", "cd"}, s -> s.skip("x"), s -> s.next());
+           ^
+ScanReads.java:60: warning: [unchecked] unchecked generic array creation for varargs parameter of type Function<Scanner,Object>[]
+        run("horizon a+", new String[] {"xaa", "ab"}, s -> s.findWithinHorizon("a+", 0), s -> s.next());
+           ^
+ScanReads.java:61: warning: [unchecked] unchecked generic array creation for varargs parameter of type Function<Scanner,Object>[]
+        run("horizon lit", new String[] {"xab", "cd"}, s -> s.findWithinHorizon("ab", 0), s -> s.next());
+           ^
+ScanReads.java:62: warning: [unchecked] unchecked generic array creation for varargs parameter of type Function<Scanner,Object>[]
+        run("horizon fail", new String[] {"xab", "cd"}, s -> s.findWithinHorizon("q", 0), s -> s.next());
+           ^
+ScanReads.java:63: warning: [unchecked] unchecked generic array creation for varargs parameter of type Function<Scanner,Object>[]
+        run("horizon 2", new String[] {"x", "ab", "cd"}, s -> s.findWithinHorizon("a", 2), s -> s.next());
+           ^
+ScanReads.java:64: warning: [unchecked] unchecked generic array creation for varargs parameter of type Function<Scanner,Object>[]
+        run("findInLine", new String[] {"ab", "c\nd"}, s -> s.findInLine("b"), s -> s.next());
+           ^
+ScanReads.java:65: warning: [unchecked] unchecked generic array creation for varargs parameter of type Function<Scanner,Object>[]
+        run("findInLine 2", new String[] {"ab\n", "cd"}, s -> s.findInLine("b"), s -> s.next());
+           ^
+ScanReads.java:66: warning: [unchecked] unchecked generic array creation for varargs parameter of type Function<Scanner,Object>[]
+        run("hasNextInt", new String[] {"12", "3 4"}, s -> s.hasNextInt(), s -> s.nextInt(), s -> s.nextInt());
+           ^
+ScanReads.java:67: warning: [unchecked] unchecked generic array creation for varargs parameter of type Function<Scanner,Object>[]
+        run("nextLine long", new String[] {"abc", "def", "\n"}, s -> s.nextLine());
+           ^
+ScanReads.java:68: warning: [unchecked] unchecked generic array creation for varargs parameter of type Function<Scanner,Object>[]
+        run("tokens", new String[] {"a b", " c"}, s -> s.tokens().count());
+           ^
+25 warnings
+next:{read ab}{read   } =ab{read cd}{read  e} =cd{eof} =e =false
+next nl:{read ab\n} =ab{read cd\n} =cd{eof} =false
+hasNext:{read ab} =true{read  } =ab{read  cd} =true{eof} =cd
+nextInt nextLine:{read 5\n} =5 ={read x y\n} =x y{eof} =false
+line cr:{read x\r}{read \ny\r} =x{read z} =y{eof} =z =false
+line cr end:{read x\r}{eof} =x =false
+delim s+:{read ab  } =ab{read   cd}{eof} =cd
+delim s+ nl:{read ab\n} =ab{read cd\n} =cd{eof} =false
+delim comma:{read a,} =a{read ,b} ={eof} =b =false
+delim ab:{read xa}{read by} =x{eof} =y
+delim alt:{read xa..b} =xa..{read ..z}{eof} =..z
+delim lit end:{read x,} =x{read y}{eof} =y
+skip a+:{read aa}{read ab}{eof} =b
+skip lit:{read ab}{read cd}{eof} =cd
+skip fail:{read ab}{read cd}{eof} !NoSuchElementException =abcd
+horizon a+:{read xaa}{read ab} =aaa{eof} =b
+horizon lit:{read xab} =ab{read cd}{eof} =cd
+horizon fail:{read xab}{read cd}{eof} =null =xabcd
+horizon 2:{read x}{read ab} =a{read cd}{eof} =bcd
+findInLine:{read ab}{read c\nd} =b =c
+findInLine 2:{read ab\n} =b{read cd}{eof} =cd
+hasNextInt:{read 12}{read 3 4} =true =123{eof} =4
+nextLine long:{read abc}{read def}{read \n} =abcdef
+tokens:{read a b}{read  c}{eof} =3

@@ -1,0 +1,78 @@
+parseInt arabic: 34
+parseInt fullwidth: -12
+parseInt arabic 16: 3
+parseInt overflow: java.lang.NumberFormatException For input string: "2147483648"
+parseInt overflow 16: java.lang.NumberFormatException For input string: "80000000" under radix 16
+parseInt arabic overflow: java.lang.NumberFormatException For input string: "٣٣٣٣٣٣٣٣٣٣"
+parseInt 9 radix 8: java.lang.NumberFormatException For input string: "9" under radix 8
+parseInt +12: 12
+parseLong overflow: java.lang.NumberFormatException For input string: "9223372036854775808"
+parseLong arabic: 12
+parseShort: java.lang.NumberFormatException Value out of range. Value:"32768" Radix:10
+parseShort 16: java.lang.NumberFormatException Value out of range. Value:"8000" Radix:16
+parseShort arabic: 12
+parseByte: java.lang.NumberFormatException Value out of range. Value:"-129" Radix:10
+parseByte 2: java.lang.NumberFormatException Value out of range. Value:"10000000" Radix:2
+parseByte overflow int: java.lang.NumberFormatException For input string: "2147483648"
+BigInteger 9 r3: java.lang.NumberFormatException For input string: "9" under radix 3
+BigInteger 13 r3: java.lang.NumberFormatException For input string: "13" under radix 3
+BigInteger 3000 r3: java.lang.NumberFormatException For input string: "3000" under radix 3
+BigInteger arabic: 12
+BigInteger arabic r3: java.lang.NumberFormatException For input string: "٩" under radix 3
+BigInteger +5: 5
+BigInteger long r3: java.lang.NumberFormatException For input string: "123999999" under radix 3
+BigInteger -FFFF r16: -1208925819614629174706175
+double 0x1.8p1: 3.0
+float 0x1.8p1: 3.0
+double -0X1.0P-2: -0.25
+float -0X1.0P-2: -0.25
+double 0x1.0p-1074: 4.9E-324
+float 0x1.0p-1074: 0.0
+double 0X1.FFFFFFFFFFFFFP1023: 1.7976931348623157E308
+float 0X1.FFFFFFFFFFFFFP1023: Infinity
+double 0x.8: java.lang.NumberFormatException For input string: "0x.8"
+float 0x.8: java.lang.NumberFormatException For input string: "0x.8"
+double 0x1.8: java.lang.NumberFormatException For input string: "0x1.8"
+float 0x1.8: java.lang.NumberFormatException For input string: "0x1.8"
+double -NaN: NaN
+float -NaN: NaN
+double +NaN: NaN
+float +NaN: NaN
+double +Infinity: Infinity
+float +Infinity: Infinity
+double -Infinity: -Infinity
+float -Infinity: -Infinity
+double ∞: java.lang.NumberFormatException For input string: "∞"
+float ∞: java.lang.NumberFormatException For input string: "∞"
+double -∞: java.lang.NumberFormatException For input string: "-∞"
+float -∞: java.lang.NumberFormatException For input string: "-∞"
+double 1e400: Infinity
+float 1e400: Infinity
+double 4.9e-324: 4.9E-324
+float 4.9e-324: 0.0
+double -.5e+2: -50.0
+float -.5e+2: -50.0
+double 5.: 5.0
+float 5.: 5.0
+double .5: 0.5
+float .5: 0.5
+double 1E-3: 0.001
+float 1E-3: 0.001
+double 0012.50: 12.5
+float 0012.50: 12.5
+double 1000.0005: 1000.0005
+float 1000.0005: 1000.0005
+BigDecimal 5.: 5
+BigDecimal -.5e+2: -5E+1
+BigDecimal 1000e2: 1.000E+5
+BigDecimal 1e+5: 1E+5
+BigDecimal 1E-0: 1
+BigDecimal -00.0: 0.0
+BigDecimal 1e2147483648: 1E+2147483648
+BigDecimal 1e99999999999: java.lang.NumberFormatException Too many nonzero exponent digits.
+BigDecimal 1.5e3: 1.5E+3
+BigDecimal 0012.50: 12.50
+BigDecimal 1e400: 1E+400
+whitespace 9 a b c d 1c 1d 1e 1f 20 1680 2000 2001 2002 2003 2004 2005 2006 2008 2009 200a 2028 2029 205f 3000 
+non-ascii digits 750 39890925
+java.nio.charset.UnsupportedCharsetException: no-such

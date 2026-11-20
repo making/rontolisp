@@ -598,39 +598,6 @@
 
 ;; --- arrays, switch -----------------------------------------------------------------
 
-;; new T[n][m]..: every level but the last holds arrays. KIND is the leaf's element
-;; type (JavaLowering.arrayKind): 1 an int, 2 a double, 3 a byte, 4 a short or a char,
-;; 5 a float, 6 a boolean; 0 any other, which starts as INITIAL.
-(defun rontolisp::%java-new-array (lengths kind initial)
-  (let ((rest lengths))
-    (while rest
-      (rontolisp::%java-array-length (car rest))
-      (setq rest (cdr rest))))
-  (rontolisp::%java-new-rows lengths kind initial))
-
-(defun rontolisp::%java-new-rows (lengths kind initial)
-  (let ((n (car lengths)))
-    (if (null (cdr lengths))
-        (cond
-         ((eql kind 1)
-          (make-array n :element-type '(unsigned-byte 32) :initial-element 0))
-         ((eql kind 2)
-          (make-array n :element-type 'double-float :initial-element 0d0))
-         ((eql kind 3)
-          (make-array n :element-type '(unsigned-byte 8) :initial-element 0))
-         ((eql kind 4)
-          (make-array n :element-type '(unsigned-byte 16) :initial-element 0))
-         ((eql kind 5)
-          (make-array n :element-type 'single-float :initial-element 0d0))
-         ((eql kind 6) (make-array n :element-type 'bit :initial-element 0))
-         (t (make-array n :initial-element initial)))
-        (let ((rows (make-array n :initial-element nil)) (i 0))
-          (while (< i n)
-            (setf (aref rows i)
-                  (rontolisp::%java-new-rows (cdr lengths) kind initial))
-            (setq i (+ i 1)))
-          rows))))
-
 (defun rontolisp::%java-null-switch () (rontolisp::%java-npe))
 
 ;; A switch that covers its selector's type by its cases reaches this only when the
@@ -1028,9 +995,12 @@
 (defun rontolisp::%java-parse-boolean (s)
   (if (and s (string-equal s "true")) t nil))
 
-;; The value a text is as a double, or nil when it is none: an optional sign, digits
-;; with at most one point, an optional exponent; or Infinity or NaN. Exact arithmetic
-;; over the digits, then the nearest double.
+;; The value a text is as a double, or nil when it is none: an optional sign, then digits
+;; with at most one point and an optional exponent e or E of ten, or 0x or 0X, hexadecimal
+;; digits with at most one point and an exponent p or P of two, which it must have; an
+;; optional d, D, f or F; or Infinity or NaN. Exact arithmetic over the digits, then the
+;; nearest double; a value past either end of the format by far is infinite or zero
+;; without it, measured from the first digit that is not 0.
 (defun rontolisp::%java-read-double (text)
   (rontolisp::%java-read-number text 53 -1074 1024))
 
@@ -1043,9 +1013,11 @@
     (let ((n (length s))
           (i 0)
           (negative nil)
+          (radix 10)
           (mantissa 0)
           (scale 0)
           (digits 0)
+          (seen nil)
           (seen-point nil)
           (exponent 0)
           (bad nil))
@@ -1057,21 +1029,31 @@
              (rontolisp::%java-infinity negative))
             ((equal (%substring s i n) "NaN") (rontolisp::%java-nan))
             (t
-             (while (and (< i n)
-                         (or (rontolisp::%java-ascii-digit (char s i))
-                             (and (char= (char s i) #\.) (null seen-point))))
-               (if (char= (char s i) #\.)
-                   (setq seen-point t)
-                   (progn
-                     (setq mantissa
-                           (+ (* mantissa 10)
-                              (rontolisp::%java-ascii-digit (char s i))))
-                     (setq digits (+ digits 1))
-                     (if seen-point (setq scale (+ scale 1)))))
-               (setq i (+ i 1)))
-             (if (= digits 0) (setq bad t))
+             (if (and (< (+ i 1) n) (char= (char s i) #\0)
+                      (or (char= (char s (+ i 1)) #\x)
+                          (char= (char s (+ i 1)) #\X)))
+                 (progn
+                   (setq radix 16)
+                   (setq i (+ i 2))))
+             (let ((going t))
+               (while (and going (< i n))
+                 (let ((d (rontolisp::%java-radix-digit (char s i) radix)))
+                   (cond (d
+                          (setq mantissa (+ (* mantissa radix) d))
+                          (setq seen t)
+                          ;; the digits that tell the size, from the first that is not 0
+                          (if (> mantissa 0) (setq digits (+ digits 1)))
+                          (if seen-point (setq scale (+ scale 1)))
+                          (setq i (+ i 1)))
+                         ((and (char= (char s i) #\.) (null seen-point))
+                          (setq seen-point t)
+                          (setq i (+ i 1)))
+                         (t (setq going nil))))))
+             (if (null seen) (setq bad t))
              (if (and (< i n)
-                      (or (char= (char s i) #\e) (char= (char s i) #\E)))
+                      (if (= radix 10)
+                          (or (char= (char s i) #\e) (char= (char s i) #\E))
+                          (or (char= (char s i) #\p) (char= (char s i) #\P))))
                  (let ((minus nil) (count 0))
                    (setq i (+ i 1))
                    (if (and (< i n)
@@ -1088,27 +1070,43 @@
                      (setq count (+ count 1))
                      (setq i (+ i 1)))
                    (if (= count 0) (setq bad t))
-                   (if minus (setq exponent (- exponent)))))
+                   (if minus (setq exponent (- exponent))))
+                 (if (= radix 16) (setq bad t)))
              (if (and (< i n)
                       (or (char= (char s i) #\d) (char= (char s i) #\D)
                           (char= (char s i) #\f) (char= (char s i) #\F)))
                  (setq i (+ i 1)))
              (if (or bad (< i n))
                  nil
-                 (let ((power (- exponent scale)))
-                   (let ((value
-                          (cond ((= mantissa 0) 0d0)
-                                ((> (+ power digits) 400)
-                                 (rontolisp::%java-infinity nil))
-                                ((< (+ power digits) -400) 0d0)
-                                ((>= power 0)
-                                 (rontolisp::%java-nearest-binary
-                                  (* mantissa (expt 10 power)) 1 precision least
-                                  most))
-                                (t
-                                 (rontolisp::%java-nearest-binary mantissa
-                                  (expt 10 (- power)) precision least most)))))
-                     (if negative (- value) value)))))))))
+                 ;; a hexadecimal digit after the point is four bits; the size is in
+                 ;; digits of ten, or in bits
+                 (let ((power (- exponent (if (= radix 10) scale (* 4 scale))))
+                       (limit (if (= radix 10) 400 1200)))
+                   (let ((size (+ power (if (= radix 10) digits (* 4 digits)))))
+                     (let ((value
+                            (cond ((= mantissa 0) 0d0)
+                             ((> size limit) (rontolisp::%java-infinity nil))
+                             ((< size (- limit)) 0d0)
+                             (t (let ((scaled
+                                       (if (= radix 10)
+                                           (expt 10 (abs power))
+                                           (ash 1 (abs power)))))
+                                  (if (>= power 0)
+                                      (rontolisp::%java-nearest-binary
+                                       (* mantissa scaled) 1 precision least
+                                       most)
+                                      (rontolisp::%java-nearest-binary mantissa
+                                       scaled precision least most)))))))
+                       (if negative (- value) value))))))))))
+
+;; A digit of radix 10 or 16 written in ASCII, as its value, or nil.
+(defun rontolisp::%java-radix-digit (c radix)
+  (let ((code (char-code c)))
+    (cond ((and (>= code 48) (<= code 57)) (- code 48))
+          ((< radix 16) nil)
+          ((and (>= code 97) (<= code 102)) (- code 87))
+          ((and (>= code 65) (<= code 70)) (- code 55))
+          (t nil))))
 
 ;; The double nearest to a positive ratio of two integers, a tie to the even one.
 (defun rontolisp::%java-nearest-double (numerator denominator)

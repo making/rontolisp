@@ -1,0 +1,28 @@
+1,abc r16: 6844
+1,0a0 r16: 4256
+f,fff r16: InputMismatchException null
+12,ABC r16: 76476
+1a,bcd r16: 109517
+1a2,bcd r16: 1715149
+9,999,abc r16: 161061564
+1,a,bcd r16: InputMismatchException null
+1,ab r16: InputMismatchException null
+1,abcd r16: InputMismatchException null
+<a,b>
+<a><b,c>
+<ab>< ><cd>< ><ef>
+<a><1b><2>
+<a><b><><c>
+<a><b><c>
+<1><ab>
+lookbehind token: true
+^ token: false
+\b token: true
+$ token: false
+^ first: true
+findInLine ^: null
+skip ^: ab
+skip ^ after: NoSuchElementException null
+skip lookbehind: ab
+findInLine ^ after line: null
+findInLine (?m)^: ab

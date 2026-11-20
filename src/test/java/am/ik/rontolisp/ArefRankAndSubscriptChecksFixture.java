@@ -202,6 +202,15 @@ public final class ArefRankAndSubscriptChecksFixture {
 			(ao-check (ao-d8put (make-array 3 :element-type '(unsigned-byte 8)) 2 7))
 			(ao-check (ao-d8put (make-array 3 :element-type '(unsigned-byte 8)) -2 7))
 			(ao-check (ao-d8put nil (ao-note 13) (ao-note 14)))
+			(defun ao-dtput (v i x)
+			  (declare (type (or null (vector t)) v) (type (signed-byte 32) i))
+			  (setf (aref v (+ i 1)) x)
+			  v)
+			(ao-check (list (ao-dtput (vector 1 2 3) 1 7) (ao-dtput (make-array 3 :fill-pointer 2 :initial-element 0) 0 7)))
+			(ao-check (ao-dtput (vector 1 2 3) 2 7))
+			(ao-check (ao-dtput (vector 1 2 3) -2 7))
+			(ao-check (ao-dtput (vector 1 2 3) 2147483647 7))
+			(ao-check (ao-dtput nil (ao-note 15) (ao-note 16)))
 			(ao-check (reverse *ao-log*))""";
 
 	/** What every backend prints for {@link #ORDER_SOURCE}. */
@@ -275,6 +284,11 @@ public final class ArefRankAndSubscriptChecksFixture {
 			(SETF AREF): The value 3 is not of type (INTEGER 0 (3)) | (INTEGER 0 (3))
 			(SETF AREF): The value -1 is not of type (INTEGER 0 (3)) | (INTEGER 0 (3))
 			(SETF AREF): The value NIL is not of type ARRAY | ARRAY
-			(7 8 9 10 11 12 13 14)""";
+			(#(1 2 7) #(0 7))
+			(SETF AREF): The value 3 is not of type (INTEGER 0 (3)) | (INTEGER 0 (3))
+			(SETF AREF): The value -1 is not of type (INTEGER 0 (3)) | (INTEGER 0 (3))
+			(SETF AREF): The value 2147483648 is not of type (INTEGER 0 (3)) | (INTEGER 0 (3))
+			(SETF AREF): The value NIL is not of type ARRAY | ARRAY
+			(7 8 9 10 11 12 13 14 15 16)""";
 
 }

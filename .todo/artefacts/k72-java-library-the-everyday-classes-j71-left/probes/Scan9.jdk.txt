@@ -1,0 +1,53 @@
+double ∞: java.util.InputMismatchException For input string: "∞"
+float ∞: java.util.InputMismatchException For input string: "∞"
+dec ∞: java.util.InputMismatchException null
+double -∞: java.util.InputMismatchException For input string: "-∞"
+float -∞: java.util.InputMismatchException For input string: "-∞"
+dec -∞: java.util.InputMismatchException null
+double 0x.8: java.util.InputMismatchException For input string: "0x.8"
+float 0x.8: java.util.InputMismatchException For input string: "0x.8"
+dec 0x.8: java.util.InputMismatchException null
+double 0x1.8: java.util.InputMismatchException For input string: "0x1.8"
+float 0x1.8: java.util.InputMismatchException For input string: "0x1.8"
+dec 0x1.8: java.util.InputMismatchException null
+double 0x1p3: java.util.InputMismatchException null
+float 0x1p3: java.util.InputMismatchException null
+dec 0x1p3: java.util.InputMismatchException null
+double NaN: NaN
+float NaN: NaN
+dec NaN: java.util.InputMismatchException null
+double 1e: java.util.InputMismatchException null
+float 1e: java.util.InputMismatchException null
+dec 1e: java.util.InputMismatchException null
+double 1e400: Infinity
+float 1e400: Infinity
+dec 1e400: 1E+400
+double 1.5f: java.util.InputMismatchException null
+float 1.5f: java.util.InputMismatchException null
+dec 1.5f: java.util.InputMismatchException null
+double nan: java.util.InputMismatchException null
+float nan: java.util.InputMismatchException null
+dec nan: java.util.InputMismatchException null
+double Infinityx: java.util.InputMismatchException null
+float Infinityx: java.util.InputMismatchException null
+dec Infinityx: java.util.InputMismatchException null
+next during: java.util.ConcurrentModificationException null
+after stream close: java.lang.IllegalStateException Scanner closed
+tokens of closed: java.lang.IllegalStateException Scanner closed
+findAll of closed: java.lang.IllegalStateException Scanner closed
+stream of closed: java.lang.IllegalStateException Scanner closed
+findAll then next: java.util.ConcurrentModificationException null
+findAll empty matches: [0-3, 3-3]
+findAll empty pattern: [0-0, 1-1, 2-2, 3-3]
+tokens rest: [two] false
+tokens characteristics: 1296
+findAll characteristics: 1296
+tokens count: 3
+findAll null: java.lang.NullPointerException null
+findAll match is snapshot: p1p2
+match is snapshot: p1 0
+read 1: position 0 limit 1024 capacity 1024 remaining 1024
+read 2: position 6 limit 1024 capacity 1024 remaining 1018
+read 3: position 12 limit 1024 capacity 1024 remaining 1012
+read 4: position 18 limit 1024 capacity 1024 remaining 1006
+word1 word2 word3 false

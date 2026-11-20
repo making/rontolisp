@@ -1,0 +1,22 @@
+refused
+[x]
+false [ x]
+none
+false true
+refused d
+[x]
+héllo wörld 42 [] [zwei] false
+café 1
+naïve
+java.lang.IllegalArgumentException java.nio.charset.UnsupportedCharsetException: no-such-charset
+java.lang.NullPointerException
+3000 4498500 false closed false reads>0 true
+after close true
+[line one][line two][line three][][last]
+[a][b][][c]
+123 def
+zz false
+12 true ab false java.io.IOException: broken after 2 2
+pqfalse
+reader closed: Stream closed
+closed stream scanner true

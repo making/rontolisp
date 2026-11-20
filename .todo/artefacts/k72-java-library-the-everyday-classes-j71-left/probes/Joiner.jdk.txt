@@ -1,0 +1,37 @@
+empty: [] 0 0
+one: [x] 1 1
+three: [x, y, z] 7 7
+null added: [x, y, z, null] 13 13
+empty added: [x, y, z, null, ] 15 15
+b empty: [{}] 2 2
+b empty value: [EMPTY] 5 5
+b one empty: [{}] 2 2
+b two: [{-q}] 4 4
+c: [none] 4 4
+c merged empty d: [none] 4 4
+c merged d: [<1+2>] 5 5
+c merged d again: [<1+2|1+2>] 9 9
+c added: [<1+2|1+2|3>] 11 11
+d: [(1+2)] 5 5
+e merged itself: [[a,b,a,b]] 9 9
+f merged itself empty: [[]] 2 2
+g: [^m/mn$] 6 6
+h: [ev] 2 2
+setEmptyValue returns this: true
+add returns this: true
+merge returns this: true
+new null: java.lang.NullPointerException The delimiter must not be null
+new null prefix: java.lang.NullPointerException The prefix must not be null
+new null suffix: java.lang.NullPointerException The suffix must not be null
+new null delimiter 3: java.lang.NullPointerException The delimiter must not be null
+new all null: java.lang.NullPointerException The prefix must not be null
+setEmptyValue null: java.lang.NullPointerException The empty value must not be null
+merge null: java.lang.NullPointerException null
+add null: ok
+k merged: [[p;q]] 5 5
+k then added: [[p;q,r]] 7 7
+equals true false
+l: [abc] 3 3
+m: [] 0 0
+m one: [only] 4 4
+n merged one empty: [[]] 2 2

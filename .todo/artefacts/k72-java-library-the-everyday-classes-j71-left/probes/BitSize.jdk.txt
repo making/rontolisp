@@ -1,0 +1,31 @@
+grow: 0=64 63=64 64=128 127=128 128=256 200=256 255=256 256=512 300=512 600=1024 1000=1024 5000=5056 70=5056 9000=10112 20000=20224
+new(0) 0 set(500) 512 5056 clone 5056
+new(1) 64 set(501) 512 5056 clone 5056
+new(63) 64 set(563) 576 5120 clone 5120
+new(64) 64 set(564) 576 5120 clone 5120
+new(65) 128 set(565) 576 5120 clone 5120
+new(128) 128 set(628) 640 5184 clone 5184
+new(129) 192 set(629) 640 5184 clone 5184
+new(1000) 1024 set(1500) 2048 6016 clone 6016
+cleared 1024 clone 0 0
+clone 704 704
+clone after clear 704 64
+sticky clone 2048
+valueOf 64 192 0 64 0 128
+valueOf grown 128
+get range 64 256 64 0 0
+or 512
+xor 512
+and 64
+andNot 64
+set range 704
+flip range 704
+flip 704
+clear range 64
+set false 64
+set empty range 64
+zero then set 64
+sticky or 512 clone 512
+and empty 192 0 clone 0
+clear all 192 clone 0
+or grows 5056
