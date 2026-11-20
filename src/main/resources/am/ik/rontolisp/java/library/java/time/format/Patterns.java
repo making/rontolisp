@@ -4,10 +4,11 @@
 //
 // A pattern's letters made the parts of a formatter, as the API documentation's table of
 // letters and counts gives them. The refusals and their order (a count is refused before
-// a letter the subset lacks) are a JDK 25's answers. The letters of weeks, quarters and
-// the modified Julian day make their parts only in a program whose patterns can name
-// them: the compiler notes the letters of each pattern it sees, all of them for one
-// computed where the program runs (weeks(), quarters(), julian()).
+// a letter the subset lacks) are a JDK 25's answers. The letters of weeks, quarters, the
+// modified Julian day, a zone's name in words and a day's period make their parts only in
+// a program whose patterns can name them: the compiler notes the letters of each pattern
+// it sees, all of them for one computed where the program runs, and z for a localized
+// form whose time can be full or long (weeks(), quarters(), julian(), zones(), periods()).
 package java.time.format;
 
 import java.time.LocalDate;
@@ -33,6 +34,12 @@ final class Patterns {
 
     /** Whether one can name the modified Julian day: g. */
     static native boolean julian();
+
+    /** Whether one can name a zone in words: z, v. */
+    static native boolean zones();
+
+    /** Whether one can name a period of the day: B. */
+    static native boolean periods();
 
     static void read(DateTimeFormatterBuilder builder, String pattern) {
         for (int at = 0; at < pattern.length(); at++) {
@@ -326,10 +333,32 @@ final class Patterns {
                 }
                 throw unsupported(c);
             case 'B':
+                if (count != 1 && count != 4 && count != 5) {
+                    throw new IllegalArgumentException("Wrong number of pattern letters: " + c);
+                }
+                if (periods()) {
+                    builder.appendDayPeriodText(text(count, false));
+                    return;
+                }
+                throw unsupported(c);
             case 'z':
+                if (count > 4) {
+                    throw tooMany(c);
+                }
+                if (zones()) {
+                    builder.appendZoneText(count == 4 ? TextStyle.FULL : TextStyle.SHORT);
+                    return;
+                }
+                throw unsupported(c);
             case 'v':
-                refused(c, count);
-                return;
+                if (count != 1 && count != 4) {
+                    throw new IllegalArgumentException("Wrong number of pattern letters: " + c);
+                }
+                if (zones()) {
+                    builder.appendGenericZoneText(count == 4 ? TextStyle.FULL : TextStyle.SHORT);
+                    return;
+                }
+                throw unsupported(c);
             default:
                 throw new IllegalArgumentException("Unknown pattern letter: " + c);
         }
@@ -352,21 +381,5 @@ final class Patterns {
                     false, false);
         }
         builder.appendLocalized(step);
-    }
-
-    /**
-     * A letter the subset lacks: the counts a JDK refuses are refused as it refuses them,
-     * any other by name.
-     */
-    private static void refused(char c, int count) {
-        if (c == 'B' || c == 'v') {
-            if (c == 'B' ? count != 1 && count != 4 && count != 5 : count != 1 && count != 4) {
-                throw new IllegalArgumentException("Wrong number of pattern letters: " + c);
-            }
-        }
-        else if (count > 4) {
-            throw tooMany(c);
-        }
-        throw unsupported(c);
     }
 }

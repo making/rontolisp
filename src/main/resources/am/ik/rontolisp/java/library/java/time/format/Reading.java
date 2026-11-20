@@ -33,6 +33,12 @@ final class Reading {
 
     ZoneId zone;
 
+    /** The time a zone's name in words was of: 0 standard, 1 daylight, 2 generic; -1 none. */
+    int zoneTime = -1;
+
+    /** A period of the day read: its first minute and the one after its last; or null. */
+    int[] period;
+
     boolean leapSecond;
 
     Reading(CharSequence text, int texts) {
@@ -50,6 +56,8 @@ final class Reading {
         copy.values = values.clone();
         copy.count = count;
         copy.zone = zone;
+        copy.zoneTime = zoneTime;
+        copy.period = period;
         copy.leapSecond = leapSecond;
         return copy;
     }
@@ -60,6 +68,8 @@ final class Reading {
         values = saved.values;
         count = saved.count;
         zone = saved.zone;
+        zoneTime = saved.zoneTime;
+        period = saved.period;
         leapSecond = saved.leapSecond;
     }
 

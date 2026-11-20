@@ -481,6 +481,19 @@ final class JavaLowering implements JavaEmitter.Context {
 	/** The local and anonymous classes lowered already in this pass. */
 	private final Set<JavaClass> loweredLocals = new LinkedHashSet<>();
 
+	/**
+	 * The anonymous classes made with {@code <>} in this pass, and what lowering each
+	 * made: the class may be lowered again against another supertype.
+	 */
+	private final Map<JavaClass, Lowering> inferredLowerings = new HashMap<>();
+
+	/**
+	 * What lowering an anonymous class made: its functions and the classes lowered with
+	 * it, itself first.
+	 */
+	private record Lowering(List<LispVal> forms, List<JavaClass> classes) {
+	}
+
 	/** The bindings of the patterns of the statement being lowered. */
 	private List<Local> patternVariables = new ArrayList<>();
 
@@ -1550,7 +1563,11 @@ final class JavaLowering implements JavaEmitter.Context {
 
 	private void method(Method method) {
 		JavaSyntax.Method written = Objects.requireNonNull(method.declaration);
-		if (written.modifiers().contains("@Override") && !isPartial(method.owner) && !overrides(method)) {
+		// with <>, every method an anonymous class declares that is not private
+		// overrides one
+		if ((written.modifiers().contains("@Override")
+				|| (!method.isPrivate && this.inferredLowerings.containsKey(method.owner))) && !isPartial(method.owner)
+				&& !overrides(method)) {
 			throw error(written.pos(), "method does not override or implement a method from a supertype");
 		}
 		this.staticContext = method.isStatic;
@@ -3652,6 +3669,13 @@ final class JavaLowering implements JavaEmitter.Context {
 	@Override
 	public LispVal regions() {
 		return JavaForms.string(JavaZones.shipped().table(this.classes.everyRegion ? null : this.classes.regions));
+	}
+
+	@Override
+	public LispVal zoneNames(boolean read) {
+		JavaZoneNames names = JavaZoneNames.shipped();
+		java.util.Collection<String> held = this.classes.everyRegion ? null : this.classes.regions;
+		return JavaForms.string(read ? names.read(held) : names.written(held));
 	}
 
 	/**
@@ -5950,6 +5974,18 @@ final class JavaLowering implements JavaEmitter.Context {
 	 */
 	private ClassType anonymousType(ClassType type, New creation, @Nullable JavaType expected, int pos) {
 		JavaClass made = type.declaration();
+		boolean conforms = switch (expected) {
+			case null -> true;
+			case ClassType named ->
+				named.declaration().name.equals("java.lang.Object") || made.isSubclassOf(named.declaration());
+			case Primitive primitive -> primitive == Primitive.VOID;
+			case ArrayType array -> false;
+			default -> true;
+		};
+		if (!conforms) {
+			// no type arguments make the class one: said before its body is lowered
+			throw error(pos, "incompatible types: cannot infer type arguments for " + made.simpleName() + "<>");
+		}
 		JavaType found;
 		if (made.isInterface) {
 			Inference inference = this.types.new Inference(diamondParameters(type));
@@ -6150,15 +6186,32 @@ final class JavaLowering implements JavaEmitter.Context {
 	/**
 	 * Whether an argument is a call whose own arguments may need the type it is wanted
 	 * as: a lambda or a method reference among them takes the types of its parameters
-	 * from what the call infers, which can come from that type alone.
+	 * from what the call infers, which can come from that type alone; or an anonymous
+	 * class made with {@code <>}, whose supertype can come from that type alone.
 	 */
 	private static boolean mayNeedTarget(Expression argument) {
+		if (argument instanceof New creation && creation.type().diamond() && creation.body() != null) {
+			return true;
+		}
 		List<Expression> arguments = switch (argument) {
 			case Call call -> call.arguments();
 			case New creation when creation.type().diamond() && creation.body() == null -> creation.arguments();
 			default -> List.of();
 		};
 		return arguments.stream().anyMatch(each -> needsTarget(each) || mayNeedTarget(each));
+	}
+
+	/**
+	 * Whether an argument is an anonymous class made with {@code <>}, or a call or a
+	 * creation with {@code <>} holding one among its arguments.
+	 */
+	private static boolean anonymousDiamond(Expression argument) {
+		return switch (argument) {
+			case New creation when creation.type().diamond() ->
+				creation.body() != null || creation.arguments().stream().anyMatch(JavaLowering::anonymousDiamond);
+			case Call call -> call.arguments().stream().anyMatch(JavaLowering::anonymousDiamond);
+			default -> false;
+		};
 	}
 
 	/**
@@ -6602,6 +6655,7 @@ final class JavaLowering implements JavaEmitter.Context {
 		int count = arguments.size();
 		Set<Integer> late = new HashSet<>();
 		LispReadException lateError = null;
+		boolean typedAsGiven = candidates.stream().anyMatch(candidate -> candidate.raw);
 		for (Expression argument : arguments) {
 			if (needsTarget(argument)) {
 				typed.add(null);
@@ -6611,7 +6665,9 @@ final class JavaLowering implements JavaEmitter.Context {
 			this.flexible = argument instanceof Call || (argument instanceof New creation && creation.type().diamond());
 			Typed lowered;
 			if (mayNeedTarget(argument)) {
-				if (eager == null) {
+				if (eager == null || (anonymousDiamond(argument) && !typedAsGiven)) {
+					// an anonymous class made with <> is lowered once, against the type
+					// its parameter gives it -- unless a member takes it as it is typed
 					late.add(typed.size());
 					typed.add(null);
 					continue;
@@ -7182,17 +7238,244 @@ final class JavaLowering implements JavaEmitter.Context {
 
 	private static final String RESOURCES = "rontolisp.internal.Resources";
 
+	private static final String RESOURCE_TABLE = "rontolisp.internal.ResourceTable";
+
 	private static final String CLASS_LOADER = "java.lang.ClassLoader";
 
 	/**
-	 * The name a resource is asked for by: a constant, since the resource is found while
-	 * the program is lowered and its octets travel with the program.
+	 * Notes a resource looked up by a name computed where the program runs: the files its
+	 * loader may find are carried ({@link JavaClasses#carry}), and too many are refused
+	 * at the lookup.
+	 * @param tree whether the lookup searches the program's source tree
 	 */
-	private String resourceName(Typed name, int pos) {
-		if (!(name.constant() instanceof String text)) {
-			throw unsupported(pos, "getResourceAsStream of a resource named by no constant");
+	private void carries(boolean tree, int pos) {
+		try {
+			this.classes.carry(tree);
 		}
-		return text;
+		catch (JavaResourceTable.Bounded ex) {
+			throw unsupported(pos, "a resource named where the program runs while " + ex.getMessage());
+		}
+	}
+
+	/**
+	 * What a class's {@code getResourceAsStream} of a name computed where the program
+	 * runs answers: the lookup of the files carried, beside the class; {@code null} for a
+	 * class whose loader finds none.
+	 * @param name the name, which is not {@code null}
+	 */
+	private @Nullable Answer computedBeside(@Nullable JavaClass declaration, LispVal name, int pos) {
+		Boolean program = loader(declaration);
+		if (program == null) {
+			return null;
+		}
+		carries(program, pos);
+		String packageName = this.classes.packageOf(Objects.requireNonNull(declaration));
+		String directory = packageName == null || packageName.isEmpty() ? "" : packageName.replace('.', '/') + "/";
+		return new Answer((program ? "program " : "system ") + directory,
+				library(RESOURCE_TABLE, "beside", List.of(program ? T : NIL, string(directory), name)));
+	}
+
+	@Override
+	public LispVal resourceTable() {
+		return string(this.classes.carriedTable());
+	}
+
+	private static final String SERVICE_LOADER = "java.util.ServiceLoader";
+
+	/** What {@code ServiceLoader} is told of a provider: its constants of these names. */
+	private static final int PROVIDER_FOUND = 0;
+
+	private static final int PROVIDER_NOT_FOUND = 1;
+
+	private static final int PROVIDER_NOT_SUBTYPE = 2;
+
+	private static final int PROVIDER_NO_CONSTRUCTOR = 3;
+
+	private static final int PROVIDER_ABSTRACT = 4;
+
+	private static final int PROVIDER_INACCESSIBLE = 5;
+
+	/**
+	 * {@code ServiceLoader.load} of a class literal ({@code Class<S>} of an exact
+	 * {@code S}): the providers the service's files name are found while the program is
+	 * lowered, for the program's loader ({@code load(S.class)}: the thread's context
+	 * loader) or, for a loader given, for the program's and the system's, chosen where
+	 * the program runs. {@code loadInstalled} finds none: the platform's loader has no
+	 * class of the program's world.
+	 * @param kind 0 {@code load(Class)}, 1 {@code load(Class, ClassLoader)}, 2
+	 * {@code loadInstalled(Class)}
+	 */
+	@Override
+	public LispVal services(Invocation call, int kind) {
+		Typed service = call.arguments().get(0);
+		JavaType argument = service.type() instanceof ClassType type && type.arguments().size() == 1
+				? type.arguments().get(0) : null;
+		JavaClass named = argument == null || argument instanceof Wildcard || argument instanceof Variable ? null
+				: locatedClass(argument);
+		if (named == null) {
+			throw unsupported(call.pos(), "ServiceLoader." + (kind == 2 ? "loadInstalled" : "load")
+					+ " of a service named by no class literal");
+		}
+		LispSymbol held = temporary();
+		LispVal made = library(SERVICE_LOADER, "made", List.of(held));
+		if (kind == 2) {
+			return JavaForms.let(held, service.form(), List.of(made));
+		}
+		LispVal program = providers(made, named, true, call.pos());
+		if (kind == 0) {
+			return JavaForms.let(held, service.form(), List.of(program));
+		}
+		LispSymbol loader = temporary();
+		LispVal system = providers(made, named, false, call.pos());
+		return list(cl("let*"), list(list(held, service.form()), list(loader, call.argument(1))),
+				program.equals(system) ? program : call("if",
+						call("and", loader, library(CLASS_LOADER, "searchesTree", List.of(loader))), program, system));
+	}
+
+	/** A loader made with each provider the service's files name for a loader. */
+	private LispVal providers(LispVal made, JavaClass service, boolean tree, int pos) {
+		LispVal chain = made;
+		for (String name : this.classes.serviceProviders(service.binaryName, tree)) {
+			JavaClass found = this.classes.binaryNamed(name);
+			chain = library(SERVICE_LOADER, "with",
+					found == null || (!tree && Boolean.TRUE.equals(loader(found)))
+							? List.of(chain, string(name), integer(PROVIDER_NOT_FOUND), NIL, NIL)
+							: provider(chain, name, found, service, pos));
+		}
+		return chain;
+	}
+
+	/**
+	 * What {@code ServiceLoader} is told of a provider whose class there is: whether it
+	 * is of the service's type, has a public constructor of no parameters and can be
+	 * made, the function making one and the one answering its class object.
+	 */
+	private List<LispVal> provider(LispVal chain, String name, JavaClass found, JavaClass service, int pos) {
+		if (!found.isSubclassOf(service)) {
+			return List.of(chain, string(name), integer(PROVIDER_NOT_SUBTYPE), NIL, NIL);
+		}
+		Method constructor = publicConstructor(found);
+		if (constructor == null) {
+			return List.of(chain, string(name), integer(PROVIDER_NO_CONSTRUCTOR), NIL, NIL);
+		}
+		LispVal type = list(cl("lambda"), NIL, classValue(raw(found)));
+		if (found.isAbstract || !isPublic(found)) {
+			return List.of(chain, string(name), integer(found.isAbstract ? PROVIDER_ABSTRACT : PROVIDER_INACCESSIBLE),
+					NIL, type);
+		}
+		return List.of(chain, string(name), integer(PROVIDER_FOUND),
+				list(cl("lambda"), NIL, made(found, constructor, pos)), type);
+	}
+
+	private static boolean isPublic(JavaClass declaration) {
+		return declaration.declaration != null && declaration.declaration.modifiers().contains("public");
+	}
+
+	/**
+	 * A class's public constructor of no parameters, which a class found by its name is
+	 * made with, or {@code null}: an interface and an inner class have none.
+	 */
+	private @Nullable Method publicConstructor(JavaClass declaration) {
+		if (declaration.isInterface || declaration.hasOuterInstance()) {
+			return null;
+		}
+		for (Method candidate : constructors(declaration)) {
+			JavaSyntax.Method written = candidate.declaration;
+			if (candidate.parameters.size() == candidate.hidden
+					&& (written == null ? isPublic(declaration) : written.modifiers().contains("public"))) {
+				return candidate;
+			}
+		}
+		return null;
+	}
+
+	/** An instance of a class found by its name, made with its constructor. */
+	private LispVal made(JavaClass declaration, Method constructor, int pos) {
+		called(constructor);
+		uses(declaration);
+		makes(declaration);
+		return located(form(JavaNames.creator(constructor), instanceArguments(declaration, null, List.of(), pos)), pos);
+	}
+
+	/**
+	 * Whether {@code ResourceBundle.getBundle} makes a class its bundle: a public class
+	 * under {@code ResourceBundle} that can be made, with a public constructor of no
+	 * parameters.
+	 */
+	private boolean isBundleClass(@Nullable JavaClass declaration) {
+		return declaration != null && !declaration.isAbstract && isPublic(declaration)
+				&& declaration.isSubclassOf(this.classes.library(RESOURCE_BUNDLE)) && loader(declaration) != null
+				&& publicConstructor(declaration) != null;
+	}
+
+	/**
+	 * The classes {@code ResourceBundle.getBundle} makes by their names: those of the
+	 * constant base names some pass met, or, where a base name is computed where the
+	 * program runs, every bundle class of the program and its libraries. A class of the
+	 * program's source tree is found by the program's loader alone.
+	 */
+	@Override
+	public LispVal classBundle(Invocation call) {
+		Map<String, JavaClass> bundles = new LinkedHashMap<>(this.classes.classBundles);
+		if (this.classes.everyClassBundle) {
+			for (JavaClass declaration : List.copyOf(this.classes.all())) {
+				if (isBundleClass(declaration)) {
+					bundles.putIfAbsent(declaration.binaryName, declaration);
+				}
+			}
+		}
+		LispSymbol name = temporary();
+		LispSymbol tree = temporary();
+		List<LispVal> arms = new ArrayList<>();
+		arms.add(cl("cond"));
+		bundles.forEach((binaryName, declaration) -> {
+			LispVal named = call("equal", name, string(binaryName));
+			arms.add(list(Boolean.TRUE.equals(loader(declaration)) ? call("and", tree, named) : named,
+					made(declaration, Objects.requireNonNull(publicConstructor(declaration)), call.pos())));
+		});
+		arms.add(list(T, NIL));
+		return list(cl("let*"), list(list(name, call.argument(0)), list(tree, call.argument(1))), list(arms));
+	}
+
+	private static final String RESOURCE_BUNDLE = "java.util.ResourceBundle";
+
+	/**
+	 * {@code getBundle(base)} and {@code getBundle(base, locale)} ask the loader of the
+	 * class calling them, {@code getBundle(base, locale, loader)} the one given, which
+	 * may be the program's. A constant base name carries the {@code .properties} files of
+	 * its bundles, one computed where the program runs every file, as a session's call
+	 * does: a later buffer may name any bundle of the table its first lookup read.
+	 */
+	@Override
+	public LispVal bundle(Invocation call) {
+		Typed base = call.arguments().get(0);
+		int given = call.arguments().size();
+		boolean tree = given == 3 || Boolean.TRUE.equals(loader(this.currentClass));
+		if (base.constant() instanceof String name && !this.classes.session) {
+			try {
+				this.classes.carryBundle(tree, name.replace('.', '/'));
+			}
+			catch (JavaResourceTable.Bounded ex) {
+				throw unsupported(call.pos(), "a resource bundle while " + ex.getMessage());
+			}
+			for (String binaryName : this.classes.bundleClassNames(name, tree)) {
+				JavaClass found = this.classes.binaryNamed(binaryName);
+				if (isBundleClass(found)
+						&& this.classes.classBundles.putIfAbsent(binaryName, Objects.requireNonNull(found)) == null) {
+					this.classes.changed();
+				}
+			}
+		}
+		else {
+			carries(tree, call.pos());
+			if (!this.classes.everyClassBundle) {
+				this.classes.everyClassBundle = true;
+				this.classes.changed();
+			}
+		}
+		LispVal locale = given == 1 ? library("java.util.Locale", "getDefault", List.of()) : call.argument(1);
+		return given == 3 ? library(RESOURCE_BUNDLE, "given", List.of(base.form(), locale, call.argument(2)))
+				: library(RESOURCE_BUNDLE, "called", List.of(base.form(), locale, tree ? T : NIL));
 	}
 
 	/**
@@ -7332,8 +7615,18 @@ final class JavaLowering implements JavaEmitter.Context {
 
 	@Override
 	public LispVal classResource(Invocation call) {
-		String name = resourceName(call.arguments().get(0), call.pos());
-		return byClass(Objects.requireNonNull(call.receiver()), declaration -> resourceBeside(declaration, name));
+		Typed receiver = Objects.requireNonNull(call.receiver());
+		Typed argument = call.arguments().get(0);
+		if (argument.constant() instanceof String name) {
+			return byClass(receiver, declaration -> resourceBeside(declaration, name));
+		}
+		// the class object, then the name, each read once
+		LispSymbol held = temporary();
+		LispSymbol name = temporary();
+		this.nonNull.add(held);
+		LispVal chosen = byClass(new Typed(held, receiver.type()),
+				declaration -> computedBeside(declaration, name, call.pos()));
+		return list(cl("let*"), list(list(held, receiver.form()), list(name, dereferenced(argument.form()))), chosen);
 	}
 
 	@Override
@@ -7348,7 +7641,14 @@ final class JavaLowering implements JavaEmitter.Context {
 	 */
 	@Override
 	public LispVal loaderResource(Invocation call) {
-		String name = resourceName(call.arguments().get(0), call.pos());
+		Typed argument = call.arguments().get(0);
+		if (!(argument.constant() instanceof String name)) {
+			LispVal named = dereferenced(argument.form());
+			carries(call.receiver() != null, call.pos());
+			return library(RESOURCE_TABLE, "find",
+					List.of(call.receiver() == null ? NIL : library(CLASS_LOADER, "searchesTree", List.of(call.self())),
+							named));
+		}
 		LispVal system = resourceStream(name, false);
 		if (call.receiver() == null) {
 			return system;
@@ -7370,9 +7670,15 @@ final class JavaLowering implements JavaEmitter.Context {
 				throw error(call.arguments().get(0).pos(),
 						"incompatible types: " + argument.type() + " cannot be converted to String");
 			}
-			Answer found = resourceBeside(locatedClass(literalType(literal)), resourceName(argument, call.pos()));
-			return new Typed(found == null ? NIL : found.form(),
-					new ClassType(this.classes.library("java.io.InputStream"), List.of()));
+			JavaClass located = locatedClass(literalType(literal));
+			ClassType stream = new ClassType(this.classes.library("java.io.InputStream"), List.of());
+			if (!(argument.constant() instanceof String name)) {
+				LispVal named = dereferenced(argument.form());
+				Answer found = computedBeside(located, named, call.pos());
+				return new Typed(found == null ? call("progn", named, NIL) : found.form(), stream);
+			}
+			Answer found = resourceBeside(located, name);
+			return new Typed(found == null ? NIL : found.form(), stream);
 		}
 		if (call.name().equals("getClassLoader") && call.arguments().isEmpty()) {
 			Answer found = loaderOf(locatedClass(literalType(literal)));
@@ -8348,6 +8654,20 @@ final class JavaLowering implements JavaEmitter.Context {
 		}
 		JavaClass made = this.classes.local(Objects.requireNonNull(creation.body()), this.currentClass,
 				this.staticContext || this.early, extendedType);
+		if (creation.type().diamond() && !extendedType.equals(made.supertype(extended))) {
+			// made with <> against another type (a candidate tried, a call lowered once
+			// more, an earlier pass): what lowering it made in this pass is dropped, the
+			// body lowered again
+			Lowering earlier = this.inferredLowerings.remove(made);
+			if (earlier != null) {
+				Set<LispVal> dropped = Collections.newSetFromMap(new IdentityHashMap<>());
+				dropped.addAll(earlier.forms());
+				this.functions.removeIf(dropped::contains);
+				earlier.classes().forEach(this.loweredLocals::remove);
+			}
+			// what the passes repeat for is not this: a pass tries the same types
+			made.parameterized.put(extended, extendedType);
+		}
 		// outer.new Inner() { .. }: the instance around its superclass is the one given
 		made.superOuterGiven = creation.outer() != null;
 		if (!made.superOuterGiven && givesSuperOuter(made)) {
@@ -8389,7 +8709,22 @@ final class JavaLowering implements JavaEmitter.Context {
 			made.methods.add(constructor);
 			this.classes.changed();
 		}
-		lowerLocal(made);
+		if (creation.type().diamond() && !this.loweredLocals.contains(made)) {
+			int forms = this.functions.size();
+			int classes = this.loweredLocals.size();
+			this.inferredLowerings.put(made, new Lowering(List.of(), List.of()));
+			try {
+				lowerLocal(made);
+			}
+			finally {
+				this.inferredLowerings.put(made,
+						new Lowering(List.copyOf(this.functions.subList(forms, this.functions.size())),
+								this.loweredLocals.stream().skip(classes).toList()));
+			}
+		}
+		else {
+			lowerLocal(made);
+		}
 		called(constructor);
 		uses(made);
 		makes(made);

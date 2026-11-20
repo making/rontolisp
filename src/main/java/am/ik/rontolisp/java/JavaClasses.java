@@ -1786,6 +1786,170 @@ final class JavaClasses {
 	private final Map<String, Optional<byte[]>> libraryResources = new HashMap<>();
 
 	/**
+	 * The files a resource name computed where the program runs may find, which the
+	 * program carries ({@link JavaResourceTable}): what lookups some pass made select.
+	 */
+	private final JavaResourceTable carried = new JavaResourceTable();
+
+	/** The selections made of {@link #carried}, each once. */
+	private final Set<String> selections = new java.util.HashSet<>();
+
+	/**
+	 * Notes a lookup of a resource by a name computed where the program runs: every file
+	 * its loader may find is carried, and a pass made before is made again.
+	 * @param tree whether the lookup searches the program's source tree
+	 * @throws JavaResourceTable.Bounded where the files are too many to carry
+	 */
+	void carry(boolean tree) throws JavaResourceTable.Bounded {
+		select(tree, "", true, JavaResourceTable::anyFile, "*");
+	}
+
+	/**
+	 * Notes {@code ResourceBundle.getBundle} of a constant base name: the
+	 * {@code .properties} files of its bundles its loader may find are carried.
+	 * @param tree whether the loader searches the program's source tree
+	 * @param path the base name's path, its {@code .} made {@code /}
+	 * @throws JavaResourceTable.Bounded where the files are too many to carry
+	 */
+	void carryBundle(boolean tree, String path) throws JavaResourceTable.Bounded {
+		int slash = path.lastIndexOf('/');
+		String base = path.substring(slash + 1);
+		select(tree, path.substring(0, slash + 1), false, name -> name.endsWith(".properties")
+				&& (name.equals(base + ".properties") || name.startsWith(base + "_")), "bundle " + path);
+	}
+
+	private void select(boolean tree, String directory, boolean deep, java.util.function.Predicate<String> wanted,
+			String selection) throws JavaResourceTable.Bounded {
+		if (!this.selections.contains("R " + selection)) {
+			for (int i = 0; i < this.files.libraryRoots(); i++) {
+				int root = i;
+				this.carried.select(root, this.files.libraryArchive(root) ? 'J' : 'D',
+						path -> this.files.libraryListing(root, path), path -> this.files.libraryResource(root, path),
+						directory, deep, wanted, "the source path");
+			}
+			this.selections.add("R " + selection);
+			changed();
+		}
+		if (tree && !this.selections.contains("T " + selection)) {
+			String entry = this.entry;
+			this.carried.select(-1, 'T',
+					path -> entry == null ? this.files.treeListing(path)
+							: this.files.findListing(entry, this.root + path),
+					this::treeResource, directory, deep, wanted, "the source tree");
+			this.selections.add("T " + selection);
+			changed();
+		}
+	}
+
+	/** The table of what is carried, as the library reads it: empty when nothing is. */
+	String carriedTable() {
+		return this.carried.text();
+	}
+
+	/**
+	 * The providers of a service the files {@code META-INF/services/<service>} of a
+	 * loader's resources name, as {@code ServiceLoader} reads them: the source tree's
+	 * first where the loader searches it, then each root's in order; a name once. A
+	 * line's text from its first {@code #} on is a comment, and the spaces and tabs
+	 * around a name are dropped.
+	 * @param service the service's binary name
+	 * @param tree whether the loader searches the program's source tree
+	 * @return the binary names, in order
+	 */
+	List<String> serviceProviders(String service, boolean tree) {
+		String path = "META-INF/services/" + service;
+		List<byte[]> read = new ArrayList<>();
+		byte[] own = tree ? treeResource(path) : null;
+		if (own != null) {
+			read.add(own);
+		}
+		for (int root = 0; root < this.files.libraryRoots(); root++) {
+			byte[] found = this.files.libraryResource(root, path);
+			if (found != null) {
+				read.add(found);
+			}
+		}
+		Set<String> names = new java.util.LinkedHashSet<>();
+		for (byte[] file : read) {
+			for (String line : new String(file, StandardCharsets.UTF_8).split("\r\n|\r|\n")) {
+				int comment = line.indexOf('#');
+				String name = comment < 0 ? line : line.substring(0, comment);
+				int start = 0;
+				int end = name.length();
+				while (start < end && (name.charAt(start) == ' ' || name.charAt(start) == '\t')) {
+					start++;
+				}
+				while (end > start && (name.charAt(end - 1) == ' ' || name.charAt(end - 1) == '\t')) {
+					end--;
+				}
+				if (start < end) {
+					names.add(name.substring(start, end));
+				}
+			}
+		}
+		return List.copyOf(names);
+	}
+
+	/**
+	 * The classes {@code ResourceBundle.getBundle} of the constant base names some pass
+	 * met may make by their names, by binary name.
+	 */
+	final Map<String, JavaClass> classBundles = new LinkedHashMap<>();
+
+	/**
+	 * Whether a base name is computed where the program runs: every bundle class of the
+	 * program and its libraries may then be made by its name.
+	 */
+	boolean everyClassBundle;
+
+	/**
+	 * The names of the classes that may be bundles of a base name: the top-level classes
+	 * whose files, in the base name's package under the source tree (where the loader
+	 * searches it) and every root, are named as the base name or as it and a {@code _}.
+	 * @param base the base name, a class's qualified name
+	 * @param tree whether the loader searches the program's source tree
+	 * @return the binary names, the tree's first
+	 */
+	List<String> bundleClassNames(String base, boolean tree) {
+		int dot = base.lastIndexOf('.');
+		String packageName = base.substring(0, dot + 1);
+		String directory = packageName.replace('.', '/');
+		String simple = base.substring(dot + 1);
+		List<List<String>> listings = new ArrayList<>();
+		String entry = this.entry;
+		if (tree) {
+			listings.add(entry == null ? this.files.treeListing(directory)
+					: this.files.findListing(entry, this.root + directory));
+		}
+		for (int root = 0; root < this.files.libraryRoots(); root++) {
+			listings.add(this.files.libraryListing(root, directory));
+		}
+		Set<String> names = new java.util.LinkedHashSet<>();
+		for (List<String> listing : listings) {
+			for (String file : listing == null ? List.<String>of() : listing) {
+				if (file.endsWith(".java") && (file.equals(simple + ".java") || file.startsWith(simple + "_"))
+						&& !simple.isEmpty()) {
+					names.add(packageName + file.substring(0, file.length() - ".java".length()));
+				}
+			}
+		}
+		return List.copyOf(names);
+	}
+
+	/**
+	 * The class of a binary name ({@code app.Main$Mine}), or {@code null}: a qualified
+	 * name, then the member classes the names after each {@code $} spell.
+	 */
+	@Nullable JavaClass binaryNamed(String name) {
+		String[] parts = name.split("\\$", -1);
+		JavaClass found = parts[0].isEmpty() || parts[0].endsWith(".") ? null : qualified(parts[0]);
+		for (int i = 1; found != null && i < parts.length; i++) {
+			found = member(found, parts[i], new HashSet<>());
+		}
+		return found;
+	}
+
+	/**
 	 * The file of a library that declares a class not named after it, or {@code null}. A
 	 * library was compiled whole, so its classes reach such a class wherever it is
 	 * declared, and its binary jar holds the class file a program is compiled against;

@@ -552,11 +552,14 @@ class JavaLoweringTest {
 					&& form.contains("TemporalQueries.localDate()"));
 		assertThat(lower(formatted.formatted(""), "L14.java"))
 			.noneMatch(form -> form.contains("TemporalQueries") || form.contains("java.time.format."));
-		// The letters of weeks, quarters and the modified Julian day make their parts
-		// only in a program whose patterns can name them -- a constant pattern names the
-		// letters outside its quotes, a computed one all of them --; a field that is no
-		// ChronoField is resolved only in a program that makes one, and a value is asked
-		// its calendar only in a program that reaches the question.
+		// The letters of weeks, quarters, the modified Julian day, a zone's name in words
+		// and a day's period make their parts only in a program whose patterns can name
+		// them -- a constant pattern names the letters outside its quotes, a computed one
+		// all of them, a localized form the zone's name where its time can be full or
+		// long
+		// --; a field that is no ChronoField is resolved only in a program that makes
+		// one,
+		// and a value is asked its calendar only in a program that reaches the question.
 		String patterned = """
 				import java.time.format.DateTimeFormatter;
 				import java.time.temporal.TemporalQueries;
@@ -566,14 +569,32 @@ class JavaLoweringTest {
 				    }
 				}
 				""";
-		assertThat(lower(patterned.formatted("\"uuuu'Y'\"", ""), "L15.java")).noneMatch(
-				form -> form.contains("WeekFields") || form.contains("IsoFields") || form.contains("JulianFields")
-						|| form.contains("Parsed.resolveOthers") || form.contains("IsoChronology"));
+		assertThat(lower(patterned.formatted("\"uuuu'Y'\"", ""), "L15.java"))
+			.noneMatch(form -> form.contains("WeekFields") || form.contains("IsoFields")
+					|| form.contains("JulianFields") || form.contains("Parsed.resolveOthers")
+					|| form.contains("IsoChronology") || form.contains("ZoneNames") || form.contains("Step.DayPeriod")
+					|| form.contains("OfPeriod()|"));
 		assertThat(lower(patterned.formatted("args[0]", ".query(TemporalQueries.chronology())"), "L15.java"))
 			.anyMatch(form -> form.startsWith("(DEFUN |java.time.temporal.WeekFields.of(java.time.DayOfWeek,int)| "))
 			.anyMatch(form -> form.startsWith("(DEFUN |java.time.format.Parsed.resolveOthers()| "))
 			.anyMatch(form -> form.startsWith("(DEFUN |java.time.format.Parsed.query(")
-					&& form.contains("java.time.chrono.IsoChronology.INSTANCE"));
+					&& form.contains("java.time.chrono.IsoChronology.INSTANCE"))
+			.anyMatch(form -> form.startsWith("(DEFUN |java.time.format.ZoneNames.read(java.time.format.Reading,"))
+			.anyMatch(form -> form.startsWith("(DEFUN |java.time.format.Parsed.middleOfPeriod()| "));
+		String localized = """
+				import java.time.LocalTime;
+				import java.time.format.*;
+				class L16 {
+				    public static void main(String[] args) {
+				        System.out.println(DateTimeFormatter.ofLocalizedTime(FormatStyle.%s).format(LocalTime.NOON));
+				    }
+				}
+				""";
+		assertThat(lower(localized.formatted("MEDIUM"), "L16.java"))
+			.anyMatch(form -> form.startsWith("(DEFUN |java.time.format.Step.Styled.parts(int)| "))
+			.noneMatch(form -> form.contains("ZoneNames"));
+		assertThat(lower(localized.formatted("LONG"), "L16.java"))
+			.anyMatch(form -> form.startsWith("(DEFUN |java.time.format.ZoneNames.name("));
 		assertThat(lower(pool.formatted("{ protected void afterExecute(Runnable r, Throwable t) { } }"), "L7.java"))
 			.anyMatch(form -> form.contains("(DEFUN |java.util.concurrent.ThreadPoolExecutor.hooked()| NIL "
 					+ "(|java.util.concurrent.ThreadPoolExecutor.Hooked.new()|))"));
@@ -1281,11 +1302,11 @@ class JavaLoweringTest {
 				{ "interface I { default void m() { } } class A implements I { Runnable r = I.super::m; } void main() { }",
 						"1:81: a method reference through a qualified super" },
 				{ "import java.util.Scanner; void main() { Scanner s = null; }", "1:41: the class java.util.Scanner" },
-				{ "void main() { Object b = java.util.ResourceBundle.getBundle(\"m\"); }",
-						"1:36: the class java.util.ResourceBundle" },
+				{ "void main() { Object b = java.util.prefs.Preferences.userRoot(); }",
+						"1:42: the class java.util.prefs.Preferences" },
 				{ "void main() { Object o = java.util.Currency.CANADA; }", "1:36: the class java.util.Currency" },
-				{ "void main() { String n = \"x\"; Object o = ClassLoader.getSystemResourceAsStream(n); }",
-						"1:54: getResourceAsStream of a resource named by no constant" },
+				{ "void main() { Class<? extends Runnable> c = null; java.util.ServiceLoader.load(c); }",
+						"1:75: ServiceLoader.load of a service named by no class literal" },
 				{ "void main() { var r = new java.util.Random(1); r.nextExponential(); }",
 						"1:50: Random.nextExponential()" },
 				{ "void main() { IO.println(\"a\".stripIndent()); }", "1:30: String.stripIndent()" },
@@ -1584,10 +1605,26 @@ class JavaLoweringTest {
 				"package c; public class Holder implements Chrono<Impl> { }", "c/Impl.java",
 				"package c; public class Impl implements Base { public Holder held() { return null; } }", "c/Bad.java",
 				"package c; public class Bad implements Chrono<String> { }");
-		JavaFiles files = (from, path) -> {
-			String resolved = Path.of(from).resolveSibling(path).normalize().toString();
-			String text = tree.get(resolved);
-			return text == null ? null : new JavaFiles.Source(resolved, text);
+		JavaFiles files = new JavaFiles() {
+			@Override
+			public JavaFiles.@Nullable Source find(String from, String path) {
+				String resolved = Path.of(from).resolveSibling(path).normalize().toString();
+				String text = tree.get(resolved);
+				return text == null ? null : new JavaFiles.Source(resolved, text);
+			}
+
+			// beside the classes, a directory of more files than a program carries
+			@Override
+			public @Nullable List<String> findListing(String from, String path) {
+				String resolved = Path.of(from).resolveSibling(path).normalize().toString();
+				return resolved.isEmpty() ? List.of("big/") : resolved.equals("big")
+						? java.util.stream.IntStream.rangeClosed(0, 10_000).mapToObj(i -> "f" + i).toList() : null;
+			}
+
+			@Override
+			public byte @Nullable [] findResource(String from, String path) {
+				return Path.of(from).resolveSibling(path).normalize().startsWith("big") ? new byte[] { 1 } : null;
+			}
 		};
 		// A class beside the file, a class of another package and a static import are
 		// lowered with it, each from its own file.
@@ -1624,7 +1661,14 @@ class JavaLoweringTest {
 				// are read: Impl's, here, are being read when Holder is
 				{ "app/Main.java", "package app; class Main { void main() { new c.Impl(); } }", null },
 				{ "app/Main.java", "package app; class Main { void main() { new c.Bad(); } }",
-						"c/Bad.java:1:47: type argument String is not within bounds of type-variable D" } };
+						"c/Bad.java:1:47: type argument String is not within bounds of type-variable D" },
+				// a name computed where the program runs carries the files of the tree,
+				// as
+				// many as there may be
+				{ "app/Main.java",
+						"package app; class Main { void main(String[] a) { Main.class.getResourceAsStream(a[0]); } }",
+						"app/Main.java:1:62: a resource named where the program runs while the source tree holds more"
+								+ " than 10000 files to carry is not supported by the experimental Java subset yet" } };
 		List<@Nullable String> reported = new java.util.ArrayList<>();
 		for (String[] error : errors) {
 			try {

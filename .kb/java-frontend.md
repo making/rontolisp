@@ -57,7 +57,9 @@ Maven plugin's `wasm` goal reading a project's
 dependencies from their sources jars, a session reading the source path: k32 (2026-11-20);
 a library's class in the file of another, the playground's uploads as a program's source
 tree, a sources jar's resources measured: k44 (2026-11-20); the resources a program and its
-libraries read: k53 (2026-11-20; "Resources" below); `LinkedHashMap`, `LinkedHashSet`, `LinkedList`: k27 (2026-11-19);
+libraries read: k53 (2026-11-20; "Resources" below); a resource name computed where the program runs,
+`Properties`, `ResourceBundle` and `ServiceLoader`: k58 (2026-11-20; "Resources" below;
+`.todo/k69` is what it left); `LinkedHashMap`, `LinkedHashSet`, `LinkedList`: k27 (2026-11-19);
 `java.text.MessageFormat`: k28 (2026-11-19); `java.text.Normalizer` over the normalization
 forms the front ends share: k29 (2026-11-19); a `Class` as a value, a type variable in
 scope kept apart from the one a call finds, `Name.this` as the instance of `Name`
@@ -441,11 +443,12 @@ is refused by name where it is reached, never where a class is read.** Asked for
   `library:` is zipped to a sources jar for the four legs and compiled by javac for the
   JDK leg, `provided:` is what javac alone reads).
 
-## Resources (2026-11-20, k53)
+## Resources (2026-11-20, k53; a computed name, bundles, services: k58)
 
 **Invariant: a resource is found while the program is lowered, by the loader a source
-launcher would give the class, and its octets travel in the output; its name is a
-constant, and a computed one is refused by name.** Measured against JDK 25.0.5's
+launcher would give the class, and its octets travel in the output: a constant name's one
+file where the call is, and for a name computed where the program runs every file its
+loader may find, in one table the program carries (`JavaResourceTable`).** Measured against JDK 25.0.5's
 `java -cp libcls app/Main.java` (the class path holding the library's classes and
 resources, NOT the tree: with no `-cp` the default `.` is often the tree's top, and its
 directory rule then answers for the launcher -- `../top.txt` found -- which misled the
@@ -480,7 +483,10 @@ first measurement).
   `Class.located` (the binary name at run time), anything else `nil` -- so a library's
   `getClass().getResourceAsStream("note.txt")` reads the SUBCLASS's package, as a JDK
   does. A loader's `getResourceAsStream` is `(if (ClassLoader.searchesTree l) tree
-  roots)` where the tree has another answer, `getSystemResourceAsStream` the roots'.
+  roots)` where the tree has another answer, `getSystemResourceAsStream` the roots'. A
+  computed name (k58) takes the same roads with `ResourceTable.beside(tree, directory,
+  name)` / `find(tree, name)` as the answer, the receiver then the name read once
+  (`classResource`'s `let*`), a `null` name the NPE every class gives.
 - **The octets** travel as a text of one character an octet (`Resources.stream`, a new
   `ByteArrayInputStream` every read). Not their UTF-8 text: one road for every file,
   binary or not. Measured (wasm): a program printing 5 octets 41,606 B (its
@@ -499,16 +505,115 @@ first measurement).
   does not exist (`mvn rontolisp:wasm` before `compile`). Staleness (`WasmProgram`) covers
   every file of the tree and of a directory root, not only `.java` (a changed resource
   rebuilds); pinned in `MavenBuildE2eTest` (a filtered `app.properties`, changed, rebuilt).
-- **Left** (`.todo/k58`): a name computed at run time, `getResource` (no `java.net.URL`),
-  `getResources`, `ResourceBundle`, `ServiceLoader`.
+- **A computed name (k58): carried, not read where the program runs.** Measured first:
+  every call naming a resource in the class files of the 753 libraries of the local
+  repository (the k58 artefacts' `Scan.java`, the class-file API following each argument
+  back to what pushed it; 198 of them call one): of 278 `Class.getResource*` calls, 129
+  name a constant, 69 a concatenation, 55 a parameter, 16 a call's result, 9 a field; of
+  396 loader lookups 86 a constant and 147 a parameter; `ResourceBundle.getBundle` 61 of
+  114, `ServiceLoader.load` 68 of 110 (31 a parameter). A name a library computes mostly comes from elsewhere (a parameter, a
+  field: YAVI's `ResourceBundleMessageFormatter` keeps its base name in a field and asks
+  the thread's loader), so no shape of the call bounds what it finds. Two answers were
+  open: the roots read where the program runs (the Clojure front end's: a jar reader in
+  `clojure.lisp`, a `--dir` preopen on wasm) or the files carried. Taken: carried, as k53
+  carries a constant's -- a `.wasm` with no file system, a component a host serves, a
+  `.class` moved off the machine that compiled it all find them, which reading the
+  compile machine's `~/.m2` and tree at run time would not. The Clojure front end keeps
+  its reader (a Ring `:root` serves any request path).
+  - **What is carried** (`JavaClasses.carry` / `carryBundle`, `JavaResourceTable`):
+    selections, each made once and noted with `changed()`, so a pass lowered before the
+    first lookup is lowered again: a computed name selects every file of every root, and
+    of the tree where the program's loader may be asked (a program class, any loader
+    receiver, `getBundle` with a loader); `getBundle` of a constant base name its
+    `.properties` files in one directory. Left out: `.java` and `.class` (a source jar's
+    sources, the classes of `target/classes`, which k59 makes the first root; a constant
+    still finds a `.java` file, k53), names starting with a dot (a repository's `.git`),
+    directories. A directory's entries in name order, so the table does not depend on the
+    host. Bounds: 10,000 files, 16 MiB, 100,000 entries looked at, refused at the lookup
+    (`unsupported`: `a resource named where the program runs while the source tree holds
+    more than 10000 files to carry`) -- a tree whose top is a home directory. The
+    playground's uploads list as no directory (its `SourceLoader` has no
+    `listDirectory`), so a computed name finds none of them (`.todo/k69`).
+  - **The table** (`ResourceTable.table0()`, a native answered by
+    `JavaClasses.carriedTable()`): one text, the tree first then the roots in order, each
+    place a letter (`T`, `D`, `J`), its count and `;`, each file its name's length, `;`,
+    the name, its octets' count, `;`, the octets one character each. `ResourceTable.find`
+    walks the text where it is asked, the tree by the name as written, a `D` root by the
+    name `below` resolves, a `J` root by the name as it is. First drafted as maps parsed
+    in a static initializer: a program computing one name was 194,314 B of wasm against
+    43,195 B for the same read by a constant (`HashMap`, `ArrayList`,
+    `Integer.parseInt`); walking the text it is 50,285 B. A program computing no name has
+    no `ResourceTable`: `examples/java/shop` (328,166 B) and a constant read (43,195 B) are
+    byte-identical before and after.
+- **`ResourceBundle` (k58)**: `getBundle(base)` and `getBundle(base, locale)` are natives
+  (`JavaLowering.bundle`) naming the loader of the class calling them (a library's: the
+  system's, which misses the tree: probed), `getBundle(base, locale, loader)` the one
+  given. The documented lookup: candidate locales `lang_COUNTRY`, `lang`, root (the
+  locales `Locale` has); at each a public class of the bundle's name under
+  `ResourceBundle` (`classBundle`, a native answered with a `cond` over the classes
+  `bundleClassNames` lists beside a constant base name -- `Texts.java`, `Texts_*.java` in
+  its package's directory -- and, once a base name is computed, every bundle class in the
+  table), else `<name>.properties` read as UTF-8 or, where it is not well formed, ISO
+  8859-1; the first found the result, the next its parent. A base bundle alone, or none,
+  sends a locale other than the default to the default locale's candidates (probed under
+  four `-Duser.language/-Duser.country`: the root asked finds the base and stops, a
+  locale finding only the base takes the default's). One bundle per loader, name and
+  locale (`MADE`): `getBundle(US)` and `getBundle(CANADA)` answer one object. A
+  session's `getBundle` carries every file, a constant base name too: `ResourceTable`'s
+  text is read once, and a later buffer may name any bundle. Orders read
+  off the answers: a `PropertyResourceBundle`'s own keys are a `HashMap` copied from the
+  `Properties` it read, a `ListResourceBundle`'s a `HashMap` of `contents.length` (3 keys
+  in 4 buckets, probed against 16), `getKeys` its own then its parents' it lacks,
+  `keySet` a `HashSet`; `getObject` asks the parent's `getObject`, so a missing key is
+  refused with the LAST class's name. The words: `Can't find bundle for base name B,
+  locale L` (class name `B_L`, key `""`), `Can't find resource for bundle C, key K`.
+- **`Properties` (k58)**: a `Hashtable` whose mappings are a `ConcurrentHashMap` (of the
+  capacity given): a JDK's orders its keys as that map does (probed: 40 keys under six
+  capacities, 300 under none). `propertyNames()` is a
+  `Hashtable` and `stringPropertyNames()` / `list` a `HashMap`, each filled from the
+  deepest defaults up (probed by simulating each candidate over 40 keys); a key or value
+  that is no `String` is a `ClassCastException` in `propertyNames`, `list` and `store`.
+  `load` is the documented grammar (natural and logical lines, `\uxxxx`, a continuation's
+  leading blanks; 53 lines probed, the corpus's); `store` writes the comments (a line end
+  then `#` unless `#` or `!` follows, a character above `0xff` as `\uXXXX`), the date
+  line (`java.util.Date`'s text here), the own entries by sorted key (JDK 18 on), a key's
+  spaces and a value's leading ones escaped, and in the `OutputStream` form every
+  character outside `0x20`..`0x7e` as `\uXXXX` of its UTF-16 units (a string's element
+  here is a code point: `load` joins an escaped pair back into one).
+- **`ServiceLoader` (k58)**: `load` of a `Class<S>` of an exact `S` is a native
+  (`JavaLowering.services`) that reads `META-INF/services/<binary name>` of the tree
+  (the program's loader) and the roots in order, a name once, `#` to the line's end a
+  comment, and resolves each provider (`JavaClasses.binaryNamed`, `$` for a member
+  class) to an outcome: not found (or a tree class for the system loader), not a
+  subtype, no public constructor of no parameters (an inner class, an interface), not
+  instantiable, not public, made. The loader is built by `ServiceLoader.with` calls, a
+  maker `(lambda () (|C.new()|))` and the class object's for `Provider.type`. Read off
+  the answers: an iterator fails in `next` for every outcome (its `hasNext` answers
+  true); a stream fails at its advance for the first three and in `get` for the rest; a
+  `get` makes a new instance each time; the iterator's instances and the stream's
+  providers are cached apart, each going on from where its lookup stopped;
+  `load(S.class, null)` is the system's, `loadInstalled` finds none. Any other `Class`
+  is refused by name (`ServiceLoader.load of a service named by no class literal`).
+- **The JDK leg's default locale is `en_US`** (k58): `JavaSpecE2eTest.runOnJdk` passes
+  `-Duser.language=en -Duser.country=US`, the subset's `Locale.getDefault()`, so a line
+  that reaches the default locale (a bundle's fallback) is not the host's.
+- **Left** (`.todo/k69`): `getResource` / `getResources` (no `java.net.URL`),
+  `ClassLoader.getParent`, `ServiceLoader` of a computed class, a member class as a
+  bundle, the playground's uploads for a computed name, `ResourceBundle.Control`,
+  `Properties`' XML.
 - **Beside it** (k53): a qualified name of a JDK package naming no class the subset has,
   read as a value (`java.util.ResourceBundle.getBundle("m")`), is `the class
   java.util.ResourceBundle` and no longer `cannot find symbol: variable java`
   (`JavaClasses.namesPlatformClass`: a JDK package's name no prefix of which is a class).
 - Pinned by java-spec `a-program-uses-a-library-read-as-source-from-its-source-path`
   (`resources()`: the JDK leg's library classes carry the `library:` entries that are no
-  `.java` beside them), `JavaLoweringTest#aConstructTheSubsetDoesNotHaveIsRefusedByNameAtItsPosition`
-  (a computed name, the qualified JDK classes),
+  `.java` beside them; k58's `computed()`, `bundles()` and `services()` with the tree's and
+  the library's `.properties`, bundle classes and services files),
+  `a-deque-an-optional-the-utilities-and-the-older-classes` (`properties()`),
+  `JavaLoweringTest#aConstructTheSubsetDoesNotHaveIsRefusedByNameAtItsPosition`
+  (a service named by no class literal, the qualified JDK classes),
+  `JavaLoweringTest#aProgramOfSeveralFilesIsReadFromItsSourceTree` (a tree of more files
+  than a program carries),
   `PlaygroundReplTest#theJavaPickKeepsItsDeclarationsAcrossBuffersAndRunsAProgram` (an
   upload read as a resource).
 
@@ -1085,6 +1190,27 @@ lub of the lowers, else an upper, else OPEN.
   with `<>` finds -- from the target for an interface, from the constructor's arguments
   (lowered a second time with the class's constructor) for a class --, refused as javac
   refuses when an argument found is a capture (`cannot infer type arguments for G<>`).
+- **As an argument it waits for its parameter's type** (k61, 2026-11-20; `mayNeedTarget`,
+  `anonymousDiamond`): such an argument, or a call or a `<>` creation holding one, is never
+  lowered with no target first (the `eager` try), but after the call's inference, as a
+  call holding a lambda is; with several candidates, against each one's parameter. It was
+  lowered with no target, extended `ArrayList<Object>` and was refused (`cannot be applied
+  to given types; .. found: String,`, the anonymous class's name being empty). A member
+  taking its argument as typed (`raw`, `println`) still takes it lowered with no target,
+  as javac's `Object` would. A class the expected type cannot be an instance of by its
+  class is refused before the body is lowered, with javac's line (`incompatible types:
+  cannot infer type arguments for HashMap<>`), so that a candidate whose parameter it
+  cannot be (`order(Runnable)` beside `order(Comparator<String>)`) is not taken.
+  - **Lowered again against another supertype** (`inferredLowerings`): an anonymous class
+    is one `JavaClass` per declaration (`JavaClasses.local`) lowered once a pass
+    (`loweredLocals`), so a candidate tried first (`total(Object)` beside
+    `total(List<Integer>)`) fixed its supertype, and a lowering that threw marked it
+    lowered with no functions. Now its supertype is set anew when a creation finds
+    another, and the functions and the classes its earlier lowering in the pass made are
+    dropped and lowered again. Not a `classes.changed()`: every pass tries the types in
+    the same order, so the passes never settled.
+  - **With `<>`, every method it declares that is not private overrides one** (JLS
+    15.9.5; javac's `method does not override or implement a method from a supertype`).
 - **Measured: `functionp` first is kept.** 20,000,000 calls of a lambda and 20,000,000 of a
   class through one interface, the lambda a function / a structure holding it: JVM 0.76 /
   1.57 s, wasm 1.35 / 1.41 s (2026-11-17, the `bench.sh` method, best of three).
@@ -2323,13 +2449,110 @@ the sizes: `.todo/artefacts/k52-java-time-what-the-formatter-left/`.
 - **The grid** (`Grid.java`, 4,561 lines): the interpreter (26 s), the JVM (2.6 s), wasm
   (0.9 s, 1,172,798 B) and the component (1.2 s) print a JDK's lines (the JDK 2.4 s);
   the k35 and k43 grids print theirs as before.
-- Not there: `.todo/k57` (CLDR's `B`, `z`, `v` and localized forms, `DecimalStyle`,
-  `toFormat`, `ParsePosition`, `withResolverFields`, the deviations, the cost of a
-  computed pattern).
+- Not there: CLDR's `B`, `z`, `v` and localized forms came with k57 ("java.time: the names
+  in words, the localized forms and a day's periods"); the rest is `.todo/k70`.
 - Pins: java-spec `weeks-quarters-a-month-day-an-offset-time-and-the-iso-calendar`
   (standalone, 94 lines); `JavaLoweringTest#theLibraryIsJavaSourceLoweredAsFarAsTheProgramReaches`
   (the letters, the resolving and the calendar where a program names them);
   `JavaLoweringTest#aProgramOfSeveralFilesIsReadFromItsSourceTree` (the type argument).
+
+## java.time: the names in words, the localized forms and a day's periods (2026-11-20, k57)
+
+**Invariant: a formatter writes and reads a zone's name in words, a localized form and a
+period of the day as a JDK 25 does in the five locales `Locale` has, among the zones the
+program has; a program pays for the names of the regions it holds, and for each of the
+three only where it can make the part that writes it.** Provenance:
+[java-frontend-provenance.md](java-frontend-provenance.md). The grid and the sizes:
+`.todo/artefacts/k57-java-time-what-k52-left/`.
+
+- **The localized forms** (`ofLocalizedDate`, `ofLocalizedTime`, `ofLocalizedDateTime` of
+  one style or two, `appendLocalized`, `getLocalizedDateTimePattern`): the patterns of the
+  four kinds of locale (`Texts.kind`: the root, English, British, Canadian; `ENGLISH` and
+  `US` alike) as a JDK answers `getLocalizedDateTimePattern`, a date and a time joined by a
+  space in the root's and by `, ` in English, U+202F before `a`. `Step.Styled` makes a
+  kind's parts from its pattern the first time it writes or reads (`Localized(MEDIUM,)` in
+  the text). A formatter's calendar shows in the refusal of a value with no date
+  (`Unable to extract ZoneId from temporal 12:00 with chronology ISO`: `Writing.shown`).
+- **A zone's names** (`zone-names.txt`, generated by `JavaZoneRulesTest` from a running
+  JDK's public `TimeZone`, `ZoneId.getDisplayName`, `DateFormatSymbols.getZoneStrings` and
+  `DateTimeFormatter`; `JavaZoneNames` makes a program's two tables, `ZoneNames` of the
+  library reads them): for each region of the tz database the names of standard time,
+  daylight time and the zone as a whole, short and in full, in the four kinds; UTC's, GMT's
+  and the fixed zones' are rules of `ZoneNames.fixed` the generator asserts; an offset, a
+  prefixed offset (`UTC+09:00`) and `UT` are written as their ids, and so is `NARROW`. A
+  name a JDK writes as `GMT-05:00` is the zone's offset now, not at the instant written
+  (`GMT` for Abidjan in 1900), so it is a string of the table.
+- **Which time's name is written** (a JDK's answers): of a value with an instant, its
+  rules' `isDaylightSavings` but in 9 zones' spans, where a JDK writes the other name
+  (Inuvik's summers of 1972 to 1978, and Edmonton, Vancouver, Winnipeg and their kin from
+  their change of 2026-11-01 on): the generator asks the JDK at each change of the zone
+  and halfway to the next, and the table holds the spans; of a local date-time, the zone as
+  a whole in a gap or an overlap and else `isDaylightSavings` at its one offset, with no
+  span; of a value with no date-time, the zone as a whole.
+- **A JDK's names change with what it wrote before**: once it has written a zone's names
+  for `ENGLISH`, it writes some of that zone's names for `UK` and `CANADA` as `ENGLISH` has
+  them (148 zones, measured: `Abidjan Daylight Time` for `Abidjan Daylight Saving Time` in
+  `CANADA`); the generator asks `ENGLISH` last and the grid writes it last (user docs).
+- **Reading a name**: an offset, a prefix with or without one, then the longest of the
+  names a JDK reads in the kind and the style (short for `z` and `v`, full for `zzzz` and
+  `vvvv`) and of the ids the program has, a name beating an id as long; the ids are looked
+  through once per reading (`ZoneName.longestId`, in either case where the reading ignores
+  case), where asking `ZoneId.region` for each length read the program's table at every
+  name it lacks (850 µs on wasm with 40 regions; the grid's names 18 s -> 1.75 s). A name
+  is read as the zone a JDK reads it as, with the time it is a name of -- 0, 1 or 2,
+  -1 for an id, shown in `Parsed`'s text --, which places an overlap's local date-time at
+  the later offset for 0 and 2 and the earlier for 1. A JDK reads many names as another
+  zone than the one writing them (`Accra Time` as Abidjan, `EET` in the root as the id
+  `EET`, `British Summer Time` as Abidjan, and in British English `Accra Time` as London);
+  a program carries the names a JDK reads as a region it holds and, where a JDK reads one
+  of its regions' names as a region it does not hold, reads it as the first of its own that
+  writes it (`JavaZoneNames.read`); a name a JDK reads as none is not read. Preferred zones
+  take a name one of them writes. In the program's table a name read alike in several kinds
+  is one entry, and a root city with its `(+0)` and `(+1)` one entry.
+- **Found in `VV` on the way** (k43 did not follow a JDK): an offset past 18 hours after
+  `UTC`, `GMT` or `UT` refuses the zone at its start, where the prefix alone was read;
+  `z` is `Z` and an id is read in either case where the reading ignores case.
+- **A day's period** (`B`, `appendDayPeriodText`; `Texts.periods`, `Texts.periodWords`):
+  the root's `AM` and `PM`; English's midnight and noon (a minute each, written before the
+  span they lie in), the morning, afternoon, evening and night, Canadian narrow words of its
+  own. Read: the longest of the style's words and its halves of a day (`AM`), leniently of
+  every style's. Resolved (a JDK's answers): with the hour of a half of the day and no half,
+  the half in which the hour (mod 12) and its minute lie in the period, the first where in
+  neither; alone (no field of a time) its middle, strictly nothing; with an hour of the day,
+  that hour and minute checked against the period before the hour is (`Conflict found:
+  Resolved time 24:00 conflicts with DayPeriod(12:00-24:00)`; midnight holds 24:00),
+  leniently not; the last period read wins; a half read with it is checked against the
+  middle.
+- **`localizedBy`**: the locale and ISO's calendar (the same formatter where both are its
+  own); no locale `Locale` has names a calendar, a zone or digits. Its null refusal is a
+  JDK's helpful message.
+- **Who pays.** The pattern letters `z`, `v` (`Patterns.zones()`) and `B`
+  (`Patterns.periods()`) make their parts only where a pattern can name them; a localized
+  form's time notes `z` unless its style is short, medium or null (`JavaIntrinsics`
+  natives of `ofLocalizedTime`, `ofLocalizedDateTime`, `appendLocalized`). `Parsed.periods()`
+  and `Parsed.zoneTexts()` / `Step.zoneTexts()` (whether the program makes `Step.DayPeriod`
+  or `Step.ZoneText`) keep resolving a period and reading names out of every other
+  program; `Step.regional()` keeps the ids of the regions held out of one holding none.
+  The tables (`ZoneNames.written0`, `read0`) hold the regions held: Tokyo 124 and 100 B,
+  Paris 159 and 510, every region 90,405 and 26,798 B. Measured and changed: a `HashMap`
+  of the names put every class's `hashCode` and `equals` in a program writing a zone's name
+  (49 KB, now arrays); the patterns and the periods as array literals cost 16 KB of top
+  level (now texts); `Long.parseLong` 3.7 KB (now a loop).
+- **What a program pays** (wasm, the artefacts' table): a program making no formatter, or
+  one holding a region and writing none, the same bytes; a date written by a pattern +1.9
+  KB, read +6.3 KB; a computed pattern 495,472 -> 532,923 (`.todo/k70`); a date by
+  `ofLocalizedDate(MEDIUM)` 332,031; Tokyo by `"... z"` 409,986, read 527,968; a time by
+  `"h:mm B"` 330,931.
+- **The grid** (`Grid.java`, 2,350 lines): the interpreter (63 s), the JVM (5.7 s), wasm
+  (5.6 s, 1,199,318 B) and the component (5.5 s) print a JDK's lines (the JDK 3.7 s, all on
+  a loaded machine); the k35, k42, k43 and k52 grids print theirs as before.
+- Not there: `.todo/k70` (`DecimalStyle`, `toFormat`, `ParsePosition`, `withResolverFields`,
+  `IsoChronology.resolveDate`, the deviations k43 and k52 left, the cost of a computed
+  pattern, the table of every region's names).
+- Pins: java-spec `localized-forms-a-zones-name-in-words-and-a-days-period` (standalone,
+  47 lines); `JavaZoneRulesTest` (the shipped names are the JDK's; a program's tables hold
+  what it holds); `JavaLoweringTest#theLibraryIsJavaSourceLoweredAsFarAsTheProgramReaches`
+  (the letters, a localized form's time).
 
 ## java.util.Date and java.sql (2026-11-20, k37)
 

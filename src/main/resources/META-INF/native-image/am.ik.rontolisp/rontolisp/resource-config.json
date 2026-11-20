@@ -345,6 +345,12 @@
       },
       {
         "condition": {
+          "typeReachable": "am.ik.rontolisp.java.JavaZoneNames"
+        },
+        "pattern": "am/ik/rontolisp/java/zone-names\\.txt"
+      },
+      {
+        "condition": {
           "typeReachable": "am.ik.rontolisp.eval.ClojureLibrary"
         },
         "pattern": "am/ik/rontolisp/eval/clojure\\.lisp"

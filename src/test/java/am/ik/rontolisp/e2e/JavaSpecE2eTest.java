@@ -468,8 +468,10 @@ class JavaSpecE2eTest {
 		for (int i = file.split("/").length; i > 0; i--) {
 			dir = java.util.Objects.requireNonNull(dir.getParent());
 		}
+		// the default locale the subset has, whatever the host's
 		List<String> command = new ArrayList<>(
-				List.of(Path.of(System.getProperty("java.home"), "bin", "java").toString()));
+				List.of(Path.of(System.getProperty("java.home"), "bin", "java").toString(), "-Duser.language=en",
+						"-Duser.country=US"));
 		if (classes != null) {
 			command.addAll(List.of("-cp", classes.toString()));
 		}

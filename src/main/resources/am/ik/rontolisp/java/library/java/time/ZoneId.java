@@ -15,13 +15,19 @@
 package java.time;
 
 import java.io.Serializable;
+import java.time.format.DateTimeFormatterBuilder;
+import java.time.format.TextStyle;
 import java.time.temporal.TemporalAccessor;
+import java.time.temporal.TemporalField;
 import java.time.temporal.TemporalQueries;
+import java.time.temporal.TemporalQuery;
+import java.time.temporal.UnsupportedTemporalTypeException;
 import java.time.zone.ZoneRules;
 import java.time.zone.ZoneRulesException;
 import java.util.Collections;
 import java.util.HashMap;
 import java.util.HashSet;
+import java.util.Locale;
 import java.util.Map;
 import java.util.Objects;
 import java.util.Set;
@@ -206,7 +212,9 @@ public abstract class ZoneId implements Serializable {
                 ids.add("Etc/GMT+" + hours);
             }
         }
-        names0(ids);
+        if (regional()) {
+            names0(ids);
+        }
         return ids;
     }
 
@@ -266,6 +274,36 @@ public abstract class ZoneId implements Serializable {
     }
 
     public abstract String getId();
+
+    /** The zone's name in words as a whole, which a formatter of the style writes. */
+    public String getDisplayName(TextStyle style, Locale locale) {
+        Objects.requireNonNull(style, "textStyle");
+        Objects.requireNonNull(locale, "locale");
+        return new DateTimeFormatterBuilder().appendGenericZoneText(style).toFormatter(locale).format(new Named(this));
+    }
+
+    /** A value that has a zone and nothing else: what getDisplayName writes the name of. */
+    private static final class Named implements TemporalAccessor {
+
+        private final ZoneId zone;
+
+        Named(ZoneId zone) {
+            this.zone = zone;
+        }
+
+        public boolean isSupported(TemporalField field) {
+            return false;
+        }
+
+        public long getLong(TemporalField field) {
+            throw new UnsupportedTemporalTypeException("Unsupported field: " + field);
+        }
+
+        @SuppressWarnings("unchecked")
+        public <R> R query(TemporalQuery<R> query) {
+            return query == TemporalQueries.zoneId() ? (R) zone : null;
+        }
+    }
 
     public abstract ZoneRules getRules();
 

@@ -1,0 +1,9 @@
+# providers of the program
+app.Main$Mine  # trailing comment
+
+  lib.LibGreeter
+app.Abstract
+app.NoCtor
+app.Throws
+app.Main$Mine
+lib.LibGreeter$Nested

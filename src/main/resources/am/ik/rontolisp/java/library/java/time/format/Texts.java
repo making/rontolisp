@@ -72,6 +72,62 @@ final class Texts {
         static final String[] NARROW = {"1", "2", "3", "4"};
     }
 
+    /**
+     * The patterns of the localized forms (ofLocalizedDate and its kind) of a kind of
+     * locale: the dates in full, long, medium and short, then the times, each ended by
+     * '|'. A date and a time stand side by side with a space between in the root's,
+     * with a comma and a space in English.
+     */
+    private static String styles(int kind) {
+        return kind == 0 ? "y MMMM d, EEEE|y MMMM d|y MMM d|y-MM-dd|HH:mm:ss zzzz|HH:mm:ss z|HH:mm:ss|HH:mm|"
+                : kind == 2 ? "EEEE, d MMMM y|d MMMM y|d MMM y|dd/MM/y|HH:mm:ss zzzz|HH:mm:ss z|HH:mm:ss|HH:mm|"
+                        : "EEEE, MMMM d, y|MMMM d, y|MMM d, y|" + (kind == 1 ? "M/d/yy" : "y-MM-dd")
+                                + "|h:mm:ss\u202fa zzzz|h:mm:ss\u202fa z|h:mm:ss\u202fa|h:mm\u202fa|";
+    }
+
+    /** The piece of a text of pieces each ended by '|' at an index. */
+    static String piece(String text, int index) {
+        int at = 0;
+        for (int i = 0; i < index; i++) {
+            at = text.indexOf('|', at) + 1;
+        }
+        return text.substring(at, text.indexOf('|', at));
+    }
+
+    /** The pattern of a localized form in a kind of locale; a style may be null, not both. */
+    static String pattern(int kind, FormatStyle date, FormatStyle time) {
+        String styles = styles(kind);
+        if (time == null) {
+            return piece(styles, date.ordinal());
+        }
+        String written = piece(styles, 4 + time.ordinal());
+        return date == null ? written : piece(styles, date.ordinal()) + (kind == 0 ? " " : ", ") + written;
+    }
+
+    /**
+     * The periods of a day a kind of locale writes (the pattern letter B), as hours of the
+     * day two by two, each a letter from A: each one's first and the one after its last,
+     * equal for midnight and noon, which are a minute and are written before the span
+     * they lie in.
+     */
+    static String periods(int kind) {
+        return kind == 0 ? "AMMY" : "AAMMAMMSSVVY";
+    }
+
+    /**
+     * The words of the periods of a day of a kind of locale, in full (0), short (1) or
+     * narrow (2), each ended by '|'.
+     */
+    static String periodWords(int kind, int style) {
+        if (kind == 0) {
+            return "AM|PM|";
+        }
+        if (style < 2) {
+            return "midnight|noon|in the morning|in the afternoon|in the evening|at night|";
+        }
+        return kind == 3 ? "mid|n|mor|aft|eve|night|" : "mi|n|in the morning|in the afternoon|in the evening|at night|";
+    }
+
     /** Which words a locale has: 0 the root's, 1 English, 2 British, 3 Canadian. */
     static int kind(Locale locale) {
         if (locale.getLanguage().isEmpty()) {
