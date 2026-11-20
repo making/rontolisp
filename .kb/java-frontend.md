@@ -3355,7 +3355,9 @@ class of a package of our own was needed (`deviations.md`, "The HTTP server").
   parameter, a local, a `for` and an enhanced `for` variable and a lambda's parameter of an
   integral type are declared of its Common Lisp type at the head of the body binding it
   (`JavaForms.integerType`: `(signed-byte 32)` an `int`, `64` a `long`, `16` and `8` a
-  `short` and a `byte`, `(unsigned-byte 16)` a `char`; `declaring`, and `boundInTurn`, a
+  `short` and a `byte`, `(integer 0 1114111)` a `char`, a string's elements being code
+  points (`doc/*/java/deviations.md`; `(unsigned-byte 16)` trapped on the first one past
+  U+FFFF, `Properties.escaped` of the corpus); `declaring`, and `boundInTurn`, a
   `let` each for several declarators, since a `let*` gives its inner `let` every
   declaration). An operand of an integer operation whose form does not say its range -- a
   call, a field, a conditional -- is asserted with `the` (`JavaForms.known`), a static field
@@ -3367,7 +3369,7 @@ class of a package of our own was needed (`deviations.md`, "The HTTP server").
   `instanceof Long` (`.kb/jvm-int-fusion.md`). `JavaResumable` drops a `the` around an await.
   A Common Lisp caller handing a method a value out of a parameter's range is a false
   declaration (on wasm a trap; `doc/*/java/index.md`); a `native` method's integral result is
-  wrapped to its type, a `char` result to a UTF-16 unit.
+  wrapped to its type.
 - **Every integral wrap is `(%mask-signed-field w x)`** (`JavaForms.wrap`, `signed`). Until
   k56 `int` kept the unconditional mask `(- (logand (+ x 2^31) 2^32-1) 2^31)`: the masked
   field measured the same time (`WrapInt` x10: 0.85 / 0.77 s against 0.91 / 0.74) and

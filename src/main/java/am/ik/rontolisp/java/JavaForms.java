@@ -129,11 +129,11 @@ final class JavaForms {
 
 	/**
 	 * The Common Lisp type of the values of an integral type -- {@code (signed-byte 32)}
-	 * for an {@code int}, {@code (unsigned-byte 16)} for a {@code char} -- or
-	 * {@code null} for any other type. What the lowering declares of a variable and
-	 * asserts of a value with {@code the}: the backends that keep integers raw take such
-	 * a value without the test that would send another to their generic path
-	 * ({@code .kb/java-frontend.md}, "Numbers").
+	 * for an {@code int}; for a {@code char} every code, a string's elements being code
+	 * points here -- or {@code null} for any other type. What the lowering declares of a
+	 * variable and asserts of a value with {@code the}: the backends that keep integers
+	 * raw take such a value without the test that would send another to their generic
+	 * path ({@code .kb/java-frontend.md}, "Numbers").
 	 */
 	static @Nullable LispVal integerType(JavaType type) {
 		if (!(type instanceof JavaType.Primitive primitive)) {
@@ -142,7 +142,7 @@ final class JavaForms {
 		return switch (primitive) {
 			case BYTE -> list(cl("signed-byte"), integer(8));
 			case SHORT -> list(cl("signed-byte"), integer(16));
-			case CHAR -> list(cl("unsigned-byte"), integer(16));
+			case CHAR -> list(cl("integer"), integer(0), integer(Character.MAX_CODE_POINT));
 			case INT -> list(cl("signed-byte"), integer(32));
 			case LONG -> list(cl("signed-byte"), integer(64));
 			default -> null;
@@ -258,8 +258,7 @@ final class JavaForms {
 			}
 			LispVal result = form(function, arguments);
 			if (returnType == JavaType.Primitive.CHAR) {
-				// a char is a UTF-16 unit: the low 16 bits of the code
-				return call("logand", call("char-code", result), integer(0xFFFF));
+				return call("char-code", result);
 			}
 			if (returnType == JavaType.Primitive.BYTE || returnType == JavaType.Primitive.SHORT) {
 				return signed(result, returnType == JavaType.Primitive.BYTE ? 8 : 16);

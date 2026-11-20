@@ -136,10 +136,11 @@ class JavaLoweringTest {
 							+ "|x| 2)))",
 					"(DEFUN |L1.wide(long,int)| (|x| |y|) (DECLARE (TYPE (SIGNED-BYTE 64) |x|) (TYPE (SIGNED-BYTE "
 							+ "32) |y|)) (%MASK-SIGNED-FIELD 64 (ASH (%MASK-SIGNED-FIELD 64 (+ |x| |y|)) 3)))",
-					"(DEFUN |L1.show(Shape,Object,char,boolean)| (|s| |o| |c| |b|) (DECLARE (TYPE (UNSIGNED-BYTE "
-							+ "16) |c|)) (%STRING-CONCAT (%STRING-CONCAT (%STRING-CONCAT (%STRING-CONCAT (%STRING-CONCAT "
-							+ "\"s=\" (|%string| |s|)) (|%string| |o|)) (RONTOLISP::%JAVA-CHAR-STRING |c|)) (IF |b| "
-							+ "\"true\" \"false\")) (RONTOLISP::%JAVA-DOUBLE-STRING (|Shape.area()%v| |s|))))",
+					"(DEFUN |L1.show(Shape,Object,char,boolean)| (|s| |o| |c| |b|) (DECLARE (TYPE (INTEGER 0 "
+							+ "1114111) |c|)) (%STRING-CONCAT (%STRING-CONCAT (%STRING-CONCAT (%STRING-CONCAT "
+							+ "(%STRING-CONCAT \"s=\" (|%string| |s|)) (|%string| |o|)) (RONTOLISP::%JAVA-CHAR-STRING "
+							+ "|c|)) (IF |b| \"true\" \"false\")) (RONTOLISP::%JAVA-DOUBLE-STRING (|Shape.area()%v| "
+							+ "|s|))))",
 					"(DEFUN |L1.loop(int[])| (|xs|) (LET ((|sum| 0)) (DECLARE (TYPE (SIGNED-BYTE 32) |sum|)) (LET "
 							+ "((|i| 0)) (DECLARE (TYPE (SIGNED-BYTE 32) |i|)) (BLOCK |%break| (WHILE (< |i| (THE "
 							+ "(SIGNED-BYTE 32) (LENGTH (OR |xs| (RONTOLISP::%JAVA-NPE))))) (BLOCK |%continue| (IF (< "
@@ -1003,7 +1004,7 @@ class JavaLoweringTest {
 						+ "(%MASK-SIGNED-FIELD 32 (+ (%MASK-SIGNED-FIELD 32 (+ |j%LIST| (THE (SIGNED-BYTE 32) "
 						+ "(|demo.app.T.j%CAR| |this|)))) 16)))",
 				"(DEFUN |demo.app.Main.main(String[])| (|args|) (LET ((|j%T| (|demo.app.T.new()|))) (LET ((|c| "
-						+ "98)) (DECLARE (TYPE (UNSIGNED-BYTE 16) |c|)) (LET ((|big| 2147483648)) (DECLARE (TYPE "
+						+ "98)) (DECLARE (TYPE (INTEGER 0 1114111) |c|)) (LET ((|big| 2147483648)) (DECLARE (TYPE "
 						+ "(SIGNED-BYTE 64) |big|)) (WRITE-LINE (%STRING-CONCAT (%STRING-CONCAT (%STRING-CONCAT "
 						+ "(%STRING-CONCAT (%STRING-CONCAT (%STRING-CONCAT (%DECIMAL-PIECE (|demo.app.T.CDR(int)| (OR "
 						+ "|j%T| (RONTOLISP::%JAVA-NPE)) 2)) \"n=16y\") (RONTOLISP::%JAVA-CHAR-STRING |c|)) "
