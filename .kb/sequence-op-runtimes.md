@@ -130,7 +130,7 @@ already trusted at the same site for array EMISSION (`.kb/declarations-type-chec
 
 Source 2 exists because the weak fact is not the kind:
 `(make-array (* 2 (length output)) :element-type '(unsigned-byte 8))` has no compile-time KIND but
-is `%arrayp` either way. `initExprKind` must keep refusing it (a wrong rank is a wrong accessor);
+is `%arrayp` either way. `initExprPin` must keep refusing it (a wrong rank is a wrong accessor);
 `provesArrayValue` must not. `Ctx.arrayLocals` is scoped/shadowed/restored beside
 `Ctx.declaredArrays` in `WasmLetCompiler`. `makeArrayBuildsArrayValue` is conservative in the three
 shapes `compileMake` can route to a string: a CHARACTER element type, an element type spelled as a

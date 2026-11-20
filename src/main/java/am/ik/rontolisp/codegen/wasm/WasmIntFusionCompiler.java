@@ -1302,7 +1302,7 @@ final class WasmIntFusionCompiler {
 	 * The integer ranges a function body's head declares, for its parameters: the
 	 * declarations at the head, and those at the head of a body that is one
 	 * {@code (block name ...)} or {@code %fn-block} wrap -- where a defun's and a local
-	 * function's sit -- as {@code WasmArrayCompiler.functionBodyDeclaredKinds} reads the
+	 * function's sit -- as {@code WasmArrayCompiler.functionBodyDeclaredPins} reads the
 	 * array kinds. Specials are left out.
 	 * @param bodyExprs the body forms
 	 * @param ctx the function's compile context

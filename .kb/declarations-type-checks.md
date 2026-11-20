@@ -112,7 +112,7 @@ Four sources (`WasmArrayCompiler.arrayKindOfExpr`):
    from `WasmLetCompiler` (bound AND free declarations; a free declaration covers the body, where a
    lambda list's generated `let*` prologue leaves parameter declarations). Specials never
    registered; skipped at top level and in async bodies.
-2. A binding INITIALIZER this compile chose a representation for (`initExprKind`): a literal
+2. A binding INITIALIZER this compile chose a representation for (`initExprPin`): a literal
    packed `make-array` (rank-1 literal size, no fill-pointer/adjustable/displacement), a
    `make-array` with NO `:element-type` (`GENERAL` whatever its dimensions -- a computed size, a
    list of them -- and with `:fill-pointer` / `:adjustable`; not `:displaced-to`: since
@@ -187,7 +187,7 @@ fields with `_seq_len` behind it (`.kb/length-runtime.md`), the generic call els
 - A `replace`/`fill` whose DESTINATION is pinned non-string calls the array-arm-only shared runtime
   (`provesArrayValue`, [sequence-op-runtimes.md](sequence-op-runtimes.md)); a false declaration
   traps in the arm's `%row-major-aset`. That predicate also answers on the WEAKER fact "an array of
-  some representation" (`Ctx.arrayLocals`) -- **`initExprKind` must keep refusing those**: it picks
+  some representation" (`Ctx.arrayLocals`) -- **`initExprPin` must keep refusing those**: it picks
   an accessor and a wrong rank is a wrong accessor.
 - Independent of declarations: at `--optimize=size` the GENERIC rank-1 `%aset` hoists array/index/
   value into temps once (`emitHoistedAset1`); speed levels keep the legacy shape, whose packed-int
