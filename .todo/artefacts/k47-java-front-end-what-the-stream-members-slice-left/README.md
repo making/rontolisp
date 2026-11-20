@@ -41,10 +41,20 @@ Results are in `.kb/java-frontend.md`, "The sorted collections". Each probe is r
   - `Wide`: bounds too far apart for a `double` or a `float`, against five candidate
     formulas over 2,000 seeds: halving the bounds and doubling the draw gives a JDK's bits
     on 14,000 doubles and 10,000 floats, scaling the draw by each bound 7,417 doubles.
+  - `Enums`, `Enums2`, `Enums3`: `EnumSet` and `EnumMap` -- the factories, an iterator of
+    each under changes (a set's of up to and of more than 64 constants), a map's entries
+    after their key left and after their iterator removed them, the refusals. What differs
+    is a hash code (an enum constant's is an identity number) and what an entry removed by
+    its iterator answers to `toString` and `hashCode` (its identity). `Enums4`: an element
+    of another enum (`class A != class B`), and of no enum through a raw type (a JDK's
+    `ClassCastException`, here the run time's error: "A type argument is not checked").
+    `EnumOrder`: the corpus case as a file.
 - `sizes/` -- wasm bytes by `size.sh` of `.todo/artefacts/k26-java-front-end-what-the-streams-slice-left/sizes/`
   (`BEFORE=<exec jar of 17ddb5e21>`): `SzTree` 136,456, `SzHash` 143,443, `SzTreeSet`
   142,364, `SzNav` 140,539, `SzSkip` 164,996, `SzRemoveAll` 156,880 -> 157,547, `SzUnmod`
   175,139 (175,139 -> 177,338 with the JDK's messages, `SzUnmodMap` 163,860 -> 166,142,
-  `SzUnmodSet` 104,850 -> 105,151). The size programs of k12 and k26: unchanged.
+  `SzUnmodSet` 104,850 -> 105,151). `SzEnumSet` 138,652, `SzEnumMap` 132,973 (`SzEnumHash`,
+  over a `HashMap`, 145,706). `SzRandom` 85,199 before and after. The size programs of k12
+  and k26: unchanged.
 - `bench/TreeBench.java` -- 200,000 puts and gets, a walk and 100,000 removes, best of three:
   JDK 25 196 ms (`HashMap` 46), the JVM class 369 (209), precompiled wasm 739 (270).

@@ -403,8 +403,13 @@ algorithm came from, and the answer goes in the file's header.
   check refuses a bound and in what order, with its words (a skip list's are not a tree's),
   which view's spliterator reports which characteristics and size, and which entries are
   copies. `AbstractSet.removeAll` and `Map.remove` / `replace` of a value are the
-  documentation's own statements of them. The answers are lines of `java-spec.yaml`, which
-  the JDK leg asks again.
+  documentation's own statements of them. `EnumSet` and `EnumMap` the same way (a word of
+  bits, a slot each; what an iterator and an entry do under changes, and the words of the
+  refusals, read off the answers), and `Random`'s `nextBytes` and `nextFloat()` from the
+  algorithms the documentation states, its draws between bounds from the streams' (k26)
+  and, for bounds too far apart, from the one of five candidate formulas giving a JDK's
+  bits on 24,000 draws. The answers are lines of `java-spec.yaml`, which the JDK leg asks
+  again.
 - **Unicode normalization (k29, 2026-11-19).** `eval/unicode-normalization.lisp` was
   written from Unicode Standard Annex #15 and the Unicode Standard's sections 3.11
   (decomposition, canonical ordering, canonical composition) and 3.12 (Hangul by

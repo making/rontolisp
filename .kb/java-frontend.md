@@ -76,7 +76,8 @@ untyped input split by the type asked for, sent to YAVI as a pull request and me
 over its sources: k46 (2026-11-20; "YAVI compiled to wasm" below; the examples' release is
 `.todo/k50`); `TreeMap`, `TreeSet`, the sorted and navigable interfaces and their
 views, the wrappers of them, `ConcurrentSkipListMap` / `Set`, `Map.remove` and `replace` of a
-value: k47 (2026-11-20; "The sorted collections" below).
+value, `EnumSet` and `EnumMap`, `Random`'s bytes, floats and draws between bounds: k47
+(2026-11-20; "The sorted collections", "The enum collections" below).
 
 ## Where it sits
 
@@ -1504,6 +1505,25 @@ about is the tree's own.** Written from the API documentation and JDK 25's answe
   lines on the four backends.
 - Pins: java-spec `a-tree-map-keeps-its-keys-in-order-and-a-view-is-a-range-of-them` and the
   sorted rows of `a-spliterator-reports-what-a-jdk-reports-of-each-collection-and-a-stream-is-made-of-one`.
+
+## The enum collections (2026-11-20, k47)
+
+`EnumSet` is a `long` word for each 64 constants of its enum, a bit by ordinal, over the
+constants `Class.getEnumConstants()` answers (a value since k30: "A class as a value");
+`RegularEnumSet` and `JumboEnumSet`, the classes a JDK names a set of up to and of more
+than 64 constants by, are empty subclasses. `EnumMap` is a slot for each constant (the
+value and whether there is one). What a JDK 25 answered beside the documentation, all
+lines of the corpus (`Enums*.java` of the k47 artefacts): an iterator of a set reads a word
+when it comes to it (a constant removed after that is still given, one added is not); a
+map's iterator reads the slots as they are and never refuses; a map's entry is its slot,
+`IllegalStateException` `Entry was removed` once its iterator removed it, and set again
+after its key left the map it holds the value without the map's count (a JDK's `size()`
+goes on counting one less, down to `-1`); `range` refuses `from > to` in those words,
+`copyOf` an empty collection `Collection is empty`, a copy of an empty map that is no
+`EnumMap` `Specified map is empty`, a constant of another enum `class A != class B`. Their
+hash codes are their constants' identity numbers ("The decisions"). Sizes (wasm bytes): a
+set made, added to and walked 138,652; a map put to, merged and walked 132,973 (a
+`HashMap` 145,706). Pin: java-spec `an-enum-set-is-a-bit-of-each-constant-and-an-enum-map-a-slot`.
 
 ## java.math (2026-11-20, k31)
 
