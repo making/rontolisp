@@ -242,12 +242,14 @@ what the map answers are a JDK's. A map's `keySet()`, `values()`, `entrySet()` a
 `descendingMap()` are a new view at each call, where a JDK's map answers the same object every
 time: `m.values().equals(m.values())` is `false`.
 
-**A few answers of the unmodifiable lists differ.** A list of `List.of` of one or two
+**A few answers of the unmodifiable collections differ.** A list of `List.of` of one or two
 elements refuses an index outside it with `ArrayIndexOutOfBoundsException: Index 2 out of
 bounds for length 2`, a JDK's with `IndexOutOfBoundsException: Index: 2 Size: 2`, and its
 iterator's `remove()` before `next()` throws `IllegalStateException`, a JDK's
-`UnsupportedOperationException`. The entries of a map of `Map.of` refuse even a change that
-changes nothing and answer `contains(null)`. The list of `Stream.toList()` is
+`UnsupportedOperationException`. A set of `Set.of` and a map of `Map.of` answer a `null` asked
+for (`contains(null)` is `false`), where a JDK's throw `NullPointerException`, and the views of
+such a map refuse even a change that changes nothing. A list of `Arrays.asList` refuses a
+removal with no message, a JDK's with `remove`. The list of `Stream.toList()` is
 `Collections.unmodifiableList`'s, where a JDK's is a list of `List.of`'s kind that holds nulls:
 an index outside it is an `IndexOutOfBoundsException`, and its reversed view checks an index
 before it refuses a change. `List.of()`, `Set.of()` and `Map.of()` are a new object at each
@@ -669,7 +671,7 @@ Each of these is an error naming the construct and its position.
 - Of `java.util.concurrent`, what [The JDK classes](classes.md) does not list: the queues
   ordered by priority or by delay. A `Timer`'s `schedule` of a `Date`. Thread groups.
 - Any JDK class or member [The JDK classes](classes.md) does not list:
-  `PriorityQueue`, `Scanner`, files
+  `Scanner`, files
   (`File`, `FileReader`, `java.nio.file`), `Calendar`,
   reflection. Of `java.net`, everything but `URI`, the addresses of a server and the
   [HTTP client](#the-http-client): `URL`, sockets, `HttpURLConnection`.

@@ -443,8 +443,8 @@ algorithm came from, and the answer goes in the file's header.
   refuses (and that `tailSet` of a range keeps only its other end), what a default view's
   ends cost the map. The answers are lines of `java-spec.yaml`, which the JDK leg asks
   again.
-- **The collections of `Collections`, `List.of`'s refusals and a bridge's cast (k60,
-  2026-11-20).** Written from the API documentation (the abstract collections' stated
+- **The collections of `Collections`, `List.of`'s refusals, a bridge's cast and
+  `PriorityQueue` (k60, 2026-11-20).** Written from the API documentation (the abstract collections' stated
   defaults, the null checks `forEach`, `removeIf` and their kind specify) and JDK 25's
   answers to probes (`Imm.java`, 1,406 lines: every member of 22 immutable and unmodifiable
   collections; `Imm2.java`: the empty iterators, `singletonMap`'s views, the parts of
@@ -454,8 +454,12 @@ algorithm came from, and the answer goes in the file's header.
   answers: which members of a collection of one refuse at once (`removeIf`, the iterator's
   `remove`), the words of each index refusal, that a map of one mapping's `values()` is a
   set, which bulk changes a reversed view walks, that `CopyOnWriteArrayList`'s view hands
-  an index on unchecked. The answers are lines of `java-spec.yaml`, which the JDK leg asks
-  again.
+  an index on unchecked. `PriorityQueue` is the binary heap of Williams (1964) with Floyd's
+  construction (1964), as textbooks have them; nobody opened OpenJDK's source. Which of
+  equal elements goes where, the order of a walk that removes and which changes a walk
+  notices were read off a JDK's answers to seeded runs compared with a heap written beside
+  it (`PQOrder.java`, `PQWalk.java`, `PQMore.java`). The answers are lines of
+  `java-spec.yaml`, which the JDK leg asks again.
 - **Computed resource names, `Properties`, `ResourceBundle`, `ServiceLoader` (k58,
   2026-11-20).** Written from the API documentation (`Properties.load`'s grammar and
   `store`'s escapes and order of keys, `ResourceBundle.getBundle`'s lookup with its

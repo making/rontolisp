@@ -241,16 +241,19 @@ rontolisp が割り当てる識別番号と、`Name@` にその番号の 16 進�
 `keySet()`、`values()`、`entrySet()`、`descendingMap()` は呼ぶたびに新しいビューです。JDK のマップは
 毎回同じオブジェクトを返します。そのため `m.values().equals(m.values())` は `false` です。
 
-**変更できないリストの答えのいくつかは JDK と異なります。** 要素が 1 個か 2 個の `List.of` の
-リストは、範囲外の添字を `ArrayIndexOutOfBoundsException: Index 2 out of bounds for length 2` で
-拒みます。JDK は `IndexOutOfBoundsException: Index: 2 Size: 2` です。そのイテレータの `next()` 前の
-`remove()` は `IllegalStateException` を投げます。JDK は `UnsupportedOperationException` です。
-`Map.of` のマップのエントリーは、何も変えない変更も拒み、`contains(null)` に答えます。
-`Stream.toList()` のリストは `Collections.unmodifiableList` のリストです。JDK では null を持てる
-`List.of` 系のリストです。そのため範囲外の添字は `IndexOutOfBoundsException` になり、逆順ビューは
-変更を拒む前に添字を検査します。`List.of()`、`Set.of()`、`Map.of()` は呼ぶたびに新しい
-オブジェクトです。`AbstractList` 系のリストのイテレータが末尾を越えると `NoSuchElementException` を
-投げ、その原因は空です。JDK ではリストの `IndexOutOfBoundsException` が原因になります。
+**変更できないコレクションの答えのいくつかは JDK と異なります。** 要素が 1 個か 2 個の
+`List.of` のリストは、範囲外の添字を `ArrayIndexOutOfBoundsException: Index 2 out of bounds for
+length 2` で拒みます。JDK は `IndexOutOfBoundsException: Index: 2 Size: 2` です。そのイテレータの
+`next()` 前の `remove()` は `IllegalStateException` を投げます。JDK は
+`UnsupportedOperationException` です。`Set.of` のセットと `Map.of` のマップは、`null` を問われても
+答えます（`contains(null)` は `false`）。JDK は `NullPointerException` を投げます。そのマップの
+ビューは、何も変えない変更も拒みます。`Arrays.asList` のリストは削除をメッセージなしで拒みます。
+JDK のメッセージは `remove` です。`Stream.toList()` のリストは `Collections.unmodifiableList` の
+リストです。JDK では null を持てる `List.of` 系のリストです。そのため範囲外の添字は
+`IndexOutOfBoundsException` になり、逆順ビューは変更を拒む前に添字を検査します。`List.of()`、
+`Set.of()`、`Map.of()` は呼ぶたびに新しいオブジェクトです。`AbstractList` 系のリストのイテレータが
+末尾を越えると `NoSuchElementException` を投げ、その原因は空です。JDK ではリストの
+`IndexOutOfBoundsException` が原因になります。
 
 **`Math` の関数は `StrictMath` の関数です。** そのため、結果はどのバックエンドとプロセッサでも
 同じです。JDK の `Math.sin`、`Math.exp` などは、最後の桁がこれと異なることがあります。
@@ -686,7 +689,7 @@ WebSocket です。`version(..)` で指定した値は保持され、問い合�
 - `java.util.concurrent` のうち、[使える JDK のクラス](classes.md)の表にないもの。優先度順または遅延順の
   キューです。`Date` を取る `Timer` の `schedule`、スレッドグループも拒否されます。
 - [使える JDK のクラス](classes.md)の表にない JDK のクラスとメンバー。
-  `PriorityQueue`、`Scanner`、ファイル（`File`、`FileReader`、
+  `Scanner`、ファイル（`File`、`FileReader`、
   `java.nio.file`）、`Calendar`、
   リフレクションなどです。
   `java.net` では、`URI`、サーバーのアドレス、[HTTP クライアント](#the-http-client)以外の

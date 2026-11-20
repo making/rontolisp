@@ -57,6 +57,7 @@
 | `SortedSet`、`NavigableSet`、`TreeSet` | `TreeMap` のキーの上の `Set` のメンバー。`comparator`、`first`、`last`、`lower`、`floor`、`ceiling`、`higher`、`pollFirst`、`pollLast`、`getFirst`、`getLast`、`removeFirst`、`removeLast`、`addFirst`、`addLast`、`descendingSet`、`descendingIterator`、`reversed`。境界を含むかの指定がある、またはない `subSet`、`headSet`、`tailSet`。引数なし、コンパレータ、コレクション、ソート済みセットを取る `new TreeSet<>()` |
 | `EnumSet`、`EnumMap` | 1 つの列挙型の定数を定数の順に持つ `Set` と `Map` のメンバー。`EnumSet.noneOf`、`allOf`、1 つ以上の定数を取る `of`、`range`、`complementOf`、コレクションまたは `EnumSet` を取る `copyOf`。列挙型のクラス、`EnumMap`、マップを取る `new EnumMap<>()` |
 | `Queue`、`Deque`、`ArrayDeque` | `Collection` のメンバー。`offer`、`poll`、`peek`、`element`、`remove`。`addFirst`、`addLast`、`offerFirst`、`offerLast`、`removeFirst`、`removeLast`、`pollFirst`、`pollLast`、`getFirst`、`getLast`、`peekFirst`、`peekLast`、`push`、`pop`、`removeFirstOccurrence`、`removeLastOccurrence`、`descendingIterator`、`reversed` |
+| `AbstractQueue`、`PriorityQueue` | `Queue` のメンバー。優先度キューは初期容量、コンパレータ、またはその両方を取るか、コレクション、ソート済みセット、別の優先度キューから作ります。`comparator` |
 | `LinkedList` | `List` と `Deque` のメンバー。`reversed` は `LinkedList` です。要素に `null` を使えます。引数なし、コレクションを取るコンストラクタ |
 | `AbstractCollection`、`AbstractList`、`AbstractSequentialList`、`AbstractSet`、`AbstractMap` | プログラムのクラスがコレクションになるために継承するクラス |
 | `Vector`、`Stack`、`Enumeration` | `ArrayList` のメンバー。`addElement`、`elementAt`、`firstElement`、`lastElement`、`setElementAt`、`insertElementAt`、`removeElementAt`、`removeElement`、`removeAllElements`、`elements`。`push`、`pop`、`peek`、`empty`、`search`。`hasMoreElements`、`nextElement`、`asIterator` |

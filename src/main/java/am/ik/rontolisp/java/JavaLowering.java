@@ -6281,7 +6281,7 @@ final class JavaLowering implements JavaEmitter.Context {
 	 */
 	private @Nullable Inference applicable(Method candidate, @Nullable JavaType site, List<JavaType> explicit,
 			List<TypeParameter> inferred, List<@Nullable Typed> typed, List<Expression> arguments, boolean boxing,
-			boolean spread, boolean contested, Late late) {
+			boolean spread, boolean contested, Late late, @Nullable JavaType expected, @Nullable JavaType made) {
 		int count = arguments.size();
 		if (spread ? !candidate.varargs || count < candidate.parameters.size() - 1
 				: candidate.parameters.size() != count) {
@@ -6320,7 +6320,8 @@ final class JavaLowering implements JavaEmitter.Context {
 				// with one argument for a variable arity parameter, the phases taking it
 				// as the array come first: a call that does not lower against the array's
 				// type does not fit there, and is an element in the last phase
-				if (!late.lowers(this, i, arguments.get(i), JavaTypes.substitute(formal, inference.solution(true)))) {
+				if (!late.lowers(this, i, arguments.get(i),
+						JavaTypes.substitute(formal, tried(candidate, site, inference, variables, expected, made)))) {
 					return null;
 				}
 			}
@@ -6344,6 +6345,38 @@ final class JavaLowering implements JavaEmitter.Context {
 			}
 		}
 		return inference;
+	}
+
+	/**
+	 * What a candidate's type parameters are, for an argument that waits tried against
+	 * its parameter: what the arguments said, and of a parameter they said nothing of,
+	 * what the type the call is wanted as says through the candidate's return type -- a
+	 * creation with {@code <>} given a comparator its type is wanted for
+	 * ({@code PriorityQueue
+	 *
+	<P>
+	 *  q = new PriorityQueue<>(Comparator.comparingInt(p -> ..))}).
+	 */
+	private Map<TypeParameter, JavaType> tried(Method candidate, @Nullable JavaType site, Inference inference,
+			List<TypeParameter> variables, @Nullable JavaType expected, @Nullable JavaType made) {
+		Map<TypeParameter, JavaType> known = inference.solution(true);
+		if (expected == null || expected.isPrimitive()) {
+			return known;
+		}
+		JavaType returned = made != null ? made : this.types.memberType(candidate.returnType, site, candidate.owner);
+		if (!JavaTypes.mentions(returned, inference.variables)) {
+			return known;
+		}
+		Inference wanted = this.types.new Inference(variables);
+		wanted.upperBound(returned, expected);
+		Map<TypeParameter, JavaType> said = wanted.solution(false);
+		Map<TypeParameter, JavaType> tried = new HashMap<>(known);
+		for (Map.Entry<TypeParameter, JavaType> entry : said.entrySet()) {
+			if (inference.isFree(entry.getKey())) {
+				tried.put(entry.getKey(), entry.getValue());
+			}
+		}
+		return tried;
 	}
 
 	/**
@@ -6627,7 +6660,7 @@ final class JavaLowering implements JavaEmitter.Context {
 			spread = phase == 2;
 			for (Method candidate : candidates) {
 				Inference inference = applicable(candidate, site, explicit, inferred, typed, arguments, phase > 0,
-						spread, candidates.size() > 1, lates);
+						spread, candidates.size() > 1, lates, expected, made);
 				if (inference != null) {
 					fitting.add(candidate);
 					inferences.put(candidate, inference);

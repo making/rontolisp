@@ -84,8 +84,8 @@ value, `EnumSet` and `EnumMap`, `Random`'s bytes, floats and draws between bound
 collections and their reversed views, with what their probes found in the collections
 beside them: k55 (2026-11-20; "The sequenced collections" below); the collections of no
 element, of one and of n copies of `Collections`, `singletonMap`, the refusals of
-`List.of`'s list and a bridge's cast: k60 (2026-11-20; "The collections of Collections and a
-bridge's cast" below).
+`List.of`'s list, a bridge's cast and `PriorityQueue`: k60 (2026-11-20; "The collections of
+Collections, a bridge's cast and PriorityQueue" below).
 
 ## Where it sits
 
@@ -1084,6 +1084,13 @@ lub of the lowers, else an upper, else OPEN.
   none taking it is the first error. A failure, not a success, marks it, so a program that
   lowered keeps its forms and its cost. Rejected as before: lowering every such argument a
   second time.
+- **Such a call tried against a candidate is tried against what the target says** (k60,
+  `tried`): with several candidates of the arity, a parameter of the candidate nothing else
+  said of takes what the type the call is wanted as says through the candidate's return type
+  (the class's type for a creation with `<>`). `PriorityQueue<P> q = new
+  PriorityQueue<>(Comparator.comparingInt(p -> p.rank()))` was `Object.rank() is not
+  supported` against all five constructors of one argument, and so was a `TreeSet` or a
+  `TreeMap` of such a comparator.
 - **One such call given for a variable arity parameter is tried against the array first**
   (k39, 2026-11-20): the phases taking it as the array come before the one taking it as
   an element, so a variable arity candidate takes a waiting argument at its last parameter
@@ -1796,13 +1803,14 @@ are `.todo/artefacts/k55-java-front-end-what-the-stream-members-and-the-sorted-c
   `next` and `previous` call each other's, which made a JVM tail group of members of two
   arities: [jvm-self-tail-calls.md](jvm-self-tail-calls.md)).
 
-## The collections of Collections and a bridge's cast (2026-11-20, k60)
+## The collections of Collections, a bridge's cast and PriorityQueue (2026-11-20, k60)
 
 **Invariant: the collections of no element, of one and of n copies of `Collections` are
 classes of their own over the abstract collections, so a change is refused where it would
-change something and answered where it would not; those of `List.of`, `Set.of` and `Map.of`
-refuse every change and a null asked for; an arm of a dispatcher whose body takes a narrower
-type than the method called tests the argument as a JDK's bridge method casts it.** Written
+change something and answered where it would not; the list of `List.of` refuses every change
+and a null asked for; an arm of a dispatcher whose body takes a narrower type than the method
+called tests the argument as a JDK's bridge method casts it; `PriorityQueue` is a binary
+heap whose order is a JDK's.** Written
 from the API documentation and JDK 25's answers to probes
 ([java-frontend-provenance.md](java-frontend-provenance.md)); the probes are
 `.todo/artefacts/k60-java-front-end-what-k55-left/`.
@@ -1815,7 +1823,11 @@ from the API documentation and JDK 25's answers to probes
   `removeIf` and the iterator of one element refuse at once, `emptyList`'s `get` says
   `Index: 0`, `singletonList`'s `Index: 1, Size: 1`, `nCopies`' is `checkIndex`'s, the views
   of a map of one mapping are sets of one element (`values()` too). Their reversed views are
-  the changing ones (a JDK's are).
+  the changing ones (a JDK's are). Each has only the members whose answers are not its
+  abstract class's, and what several answer alike is a member of a class above them
+  (`Few`, `FewSet`, `FewMap`), one arm of a dispatcher: the five classes' spliterators as
+  five arms were 1.3 KB of YAVI's schema example, an empty list walked by `AbstractList`'s
+  iterator 1.3 KB of a program of none other.
 - **The defaults check for null as specified**: `Iterable.forEach`, `Collection.removeIf`,
   `List.replaceAll`, `Map.forEach` / `replaceAll`, `AbstractCollection.removeAll` /
   `retainAll`; `AbstractList.addAll(int, ..)` checks its index first. `Objects.requireNonNull(o)`
@@ -1826,16 +1838,14 @@ from the API documentation and JDK 25's answers to probes
   a list of one or two were 440 B more in every `List.of` program and are not made); a null
   asked for is refused, and so are `addAll(int, ..)`, `removeIf`, `replaceAll`,
   `removeFirst` / `removeLast` at once; `subList` is a `SubList`, a copy refusing an index
-  with `checkIndex`'s words. `Set.of`'s and `Map.of`'s null queries are refused; `Map.of`'s
-  keys and values are `AbstractMap`'s views (a change through the entries' iterator,
-  `remove`). `Unchanging` and `ListView` refuse `addAll` at once, `ListView.subList` is a
-  `ListView`.
+  with `checkIndex`'s words. `Unchanging` and `ListView` refuse `addAll` at once,
+  `ListView.subList` is a `ListView`.
 - **Reversed views**: `removeAll` / `retainAll` walk the view and remove through its
   iterator, as a JDK's do (through `Arrays.asList`, `unmodifiableList`); `removeFirst` /
   `removeLast` of an empty view refuse before a change. `CopyOnWriteArrayList.reversed()` is
   a view of its own handing the list the index of the other end unchecked (`get(-1)` of six:
   `Index 6 out of bounds for length 6`), its walk the snapshot backward. `Arrays.asList`'s
-  list is `Arrays.ArrayList`, whose iterator removes nothing (`remove`).
+  list is named `Arrays.ArrayList`.
 - **A bridge's cast**: an arm whose body takes a parameter narrower, erased, than the method
   called (`Integer.compareTo(Integer)` for `Comparable.compareTo(Object)`, a program's
   `compareTo(Version)`, `JavaLowering.bridged`) tests it: `null` or an instance passes,
@@ -1845,19 +1855,42 @@ from the API documentation and JDK 25's answers to probes
   (three arms), a `TreeSet` 142,377 -> 142,876, navigation 140,531 -> 141,065. A
   dispatcher made for the one body too was 2.6 KB in a program putting into an `EnumMap`
   through `Map` (the class names of any value it then needs): not made.
-- **Measured** (the size programs of k12, k26, k47 and k55): unchanged but those above, a
-  program over `List.of` smaller (`MapOnly` 137,639 -> 137,302, `FlatOnly` 127,939 ->
-  126,933, `SzRemoveAll` 157,547 -> 156,534), `SzUnmodMap` 163,606 -> 163,795 (`Map.of`'s null
-  check).
+- **`PriorityQueue`** (and `AbstractQueue`, as the specification states its members): a
+  binary heap in an array (Williams 1964; a collection in no order made a heap by Floyd's
+  1964 sinking, and so are the survivors of `removeIf` / `removeAll` / `retainAll`, kept in
+  their order). Which of equal elements goes where, which pairs the comparator is asked
+  about and the order of a walk that removes are a JDK's answers: an element climbs while it
+  is less than its parent, sinks below the lesser child (the left of two equal) while it is
+  greater; a removal puts the last element in the hole, sinking it or else climbing it, and
+  one that climbed behind a walk is given after the array, in the order moved (`PQOrder`,
+  60,000 steps; `PQWalk`, 2,000 walks; `PQSeeded`, a 48,400-line transcript, every line a
+  JDK's on the four backends). A walk checks the changes at `next` and `remove`, `hasNext`
+  not; `forEach` and a bulk removal ask every element of the array there was and then refuse
+  a change made meanwhile (`removeIf` of nothing is a change, a JDK's answer). With no
+  comparator an element added is cast to `Comparable` first, the first one too; one of a
+  collection is not (a queue of one `Object` is made). Its spliterator is
+  `SIZED|SUBSIZED|NONNULL` and does not split. Sizes: a program adding and polling 138,238 B
+  of wasm; 1,000,000 adds and polls of `Integer`s 5.0 s on wasm, 3.7 s as a JVM class, 0.57
+  s under a JDK.
+- **Measured** (wasm bytes; the size programs of k12, k26, k47 and k55): unchanged but those
+  above and a program over `List.of`, smaller (`MapOnly` 137,639 -> 137,302, `FlatOnly`
+  127,939 -> 126,933, `SzRemoveAll` 157,547 -> 156,534, `SzUnmodSet` 104,824 -> 104,124).
+  YAVI's examples: `Member.java` 663,174 -> 662,353, `Booking.java` 1,204,473 -> 1,208,802
+  (`singletonList`'s class, the bridged arms of its own validators, `Iterable.forEach`
+  with a null check). Measured and not made: a null asked of `Set.of` and `Map.of` refused
+  (some 300 B in a program asking them), `Map.of`'s keys and values as `AbstractMap`'s views
+  (500 B), `Arrays.asList`'s iterator of its own for the words `remove` (0.9 to 1.4 KB in a
+  program walking it and another list).
 - **Left** (`deviations.md`, `.todo/k71`): a list of `List.of` of one or two refuses an index
   with the array's words; `List.of`'s iterator's `remove()` before `next()` is
-  `IllegalStateException`; `Map.of`'s entries refuse a change that changes nothing;
+  `IllegalStateException`; `Set.of` and `Map.of` answer a null, and `Map.of`'s views refuse a
+  change that changes nothing; `Arrays.asList` refuses a removal with no message;
   `Stream.toList()` is `unmodifiableList`'s list (`rontolisp.internal` reaches no class of
   `java.util` that is not public); the empty `List.of()` is a new object; an `AbstractList`
   iterator past the end has no cause (a `catch` there would be in every program walking such
   a list); a map's views are new at each call, so `values().equals(values())` is `false`.
-- Pins: java-spec `a-deque-an-optional-the-utilities-and-the-older-classes` (`immutables()`),
-  `JavaLoweringTest#typeParametersLambdasAndBoxes` (the bridged arms).
+- Pins: java-spec `a-deque-an-optional-the-utilities-and-the-older-classes` (`immutables()`,
+  `priorities()`), `JavaLoweringTest#typeParametersLambdasAndBoxes` (the bridged arms).
 
 ## java.math (2026-11-20, k31)
 

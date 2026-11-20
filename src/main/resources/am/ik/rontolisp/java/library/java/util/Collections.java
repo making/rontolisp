@@ -3,7 +3,6 @@
 // (.kb/java-frontend-provenance.md). Lowered with every program that names it.
 package java.util;
 
-import java.util.function.BiConsumer;
 import java.util.function.BiFunction;
 import java.util.function.Consumer;
 import java.util.function.Function;
@@ -623,24 +622,37 @@ public final class Collections {
         return o == null ? e == null : o.equals(e);
     }
 
-    static final class EmptyList<E> extends AbstractList<E> implements RandomAccess {
+    // Each has only the members whose answers are not its abstract class's; what several
+    // answer alike is one member of a class above them, one arm of a dispatcher.
+    abstract static class Few<E> extends AbstractList<E> implements RandomAccess {
+
+        // a list of no element or of one is sorted; copies are sorted and set as a list's
+        // are, which refuses the set
+        public void sort(Comparator<? super E> c) {
+            if (this instanceof CopiesList<?>) {
+                Object[] sorted = toArray();
+                Arrays.sortObjects(sorted, 0, sorted.length, c);
+                for (int i = 0; i < sorted.length; i++) {
+                    set(i, (E) sorted[i]);
+                }
+            }
+        }
+
+        public Spliterator<E> spliterator() {
+            if (this instanceof SingletonList<?>) {
+                return Splits.one(this);
+            }
+            return Splits.counted(this, size() == 0 ? Spliterator.SIZED | Spliterator.SUBSIZED
+                    : Spliterator.ORDERED | Spliterator.SIZED | Spliterator.SUBSIZED);
+        }
+    }
+
+    static final class EmptyList<E> extends Few<E> {
 
         static final EmptyList<Object> SELF = new EmptyList<>();
 
         public int size() {
             return 0;
-        }
-
-        public boolean isEmpty() {
-            return true;
-        }
-
-        public boolean contains(Object o) {
-            return false;
-        }
-
-        public boolean containsAll(Collection<?> c) {
-            return c.isEmpty();
         }
 
         public E get(int index) {
@@ -650,52 +662,9 @@ public final class Collections {
         public Iterator<E> iterator() {
             return emptyIterator();
         }
-
-        public ListIterator<E> listIterator() {
-            return emptyListIterator();
-        }
-
-        public Object[] toArray() {
-            return new Object[0];
-        }
-
-        public <T> T[] toArray(T[] a) {
-            if (a.length > 0) {
-                a[0] = null;
-            }
-            return a;
-        }
-
-        public boolean removeIf(Predicate<? super E> filter) {
-            Objects.requireNonNull(filter);
-            return false;
-        }
-
-        public void replaceAll(UnaryOperator<E> operator) {
-            Objects.requireNonNull(operator);
-        }
-
-        public void sort(Comparator<? super E> c) {
-        }
-
-        public void forEach(Consumer<? super E> action) {
-            Objects.requireNonNull(action);
-        }
-
-        public Spliterator<E> spliterator() {
-            return Splits.counted(this, Spliterator.SIZED | Spliterator.SUBSIZED);
-        }
-
-        public boolean equals(Object o) {
-            return o instanceof List && ((List<?>) o).isEmpty();
-        }
-
-        public int hashCode() {
-            return 1;
-        }
     }
 
-    static final class SingletonList<E> extends AbstractList<E> implements RandomAccess {
+    static final class SingletonList<E> extends Few<E> {
 
         private final E element;
 
@@ -705,10 +674,6 @@ public final class Collections {
 
         public int size() {
             return 1;
-        }
-
-        public boolean contains(Object o) {
-            return same(o, element);
         }
 
         public E get(int index) {
@@ -729,24 +694,9 @@ public final class Collections {
         public void replaceAll(UnaryOperator<E> operator) {
             throw new UnsupportedOperationException();
         }
-
-        public void sort(Comparator<? super E> c) {
-        }
-
-        public void forEach(Consumer<? super E> action) {
-            action.accept(element);
-        }
-
-        public Spliterator<E> spliterator() {
-            return Splits.one(this);
-        }
-
-        public int hashCode() {
-            return 31 + (element == null ? 0 : element.hashCode());
-        }
     }
 
-    static final class CopiesList<E> extends AbstractList<E> implements RandomAccess {
+    static final class CopiesList<E> extends Few<E> {
 
         private final int n;
 
@@ -778,14 +728,6 @@ public final class Collections {
             return element;
         }
 
-        public Object[] toArray() {
-            Object[] out = new Object[n];
-            for (int i = 0; i < n; i++) {
-                out[i] = element;
-            }
-            return out;
-        }
-
         public List<E> subList(int from, int to) {
             if (from < 0) {
                 throw new IndexOutOfBoundsException("fromIndex = " + from);
@@ -798,14 +740,16 @@ public final class Collections {
             }
             return new CopiesList<>(to - from, element);
         }
+    }
+
+    abstract static class FewSet<E> extends AbstractSet<E> {
 
         public Spliterator<E> spliterator() {
-            return Splits.counted(this, n == 0 ? Spliterator.SIZED | Spliterator.SUBSIZED
-                    : Spliterator.ORDERED | Spliterator.SIZED | Spliterator.SUBSIZED);
+            return size() == 0 ? Splits.counted(this, Spliterator.SIZED | Spliterator.SUBSIZED) : Splits.one(this);
         }
     }
 
-    static final class EmptySet<E> extends AbstractSet<E> {
+    static final class EmptySet<E> extends FewSet<E> {
 
         static final EmptySet<Object> SELF = new EmptySet<>();
 
@@ -816,49 +760,9 @@ public final class Collections {
         public int size() {
             return 0;
         }
-
-        public boolean isEmpty() {
-            return true;
-        }
-
-        public boolean contains(Object o) {
-            return false;
-        }
-
-        public boolean containsAll(Collection<?> c) {
-            return c.isEmpty();
-        }
-
-        public Object[] toArray() {
-            return new Object[0];
-        }
-
-        public <T> T[] toArray(T[] a) {
-            if (a.length > 0) {
-                a[0] = null;
-            }
-            return a;
-        }
-
-        public boolean removeIf(Predicate<? super E> filter) {
-            Objects.requireNonNull(filter);
-            return false;
-        }
-
-        public void forEach(Consumer<? super E> action) {
-            Objects.requireNonNull(action);
-        }
-
-        public Spliterator<E> spliterator() {
-            return Splits.counted(this, Spliterator.SIZED | Spliterator.SUBSIZED);
-        }
-
-        public int hashCode() {
-            return 0;
-        }
     }
 
-    static final class SingletonSet<E> extends AbstractSet<E> {
+    static final class SingletonSet<E> extends FewSet<E> {
 
         private final E element;
 
@@ -874,87 +778,13 @@ public final class Collections {
             return 1;
         }
 
-        public boolean contains(Object o) {
-            return same(o, element);
-        }
-
         public boolean removeIf(Predicate<? super E> filter) {
             throw new UnsupportedOperationException();
         }
-
-        public void forEach(Consumer<? super E> action) {
-            action.accept(element);
-        }
-
-        public Spliterator<E> spliterator() {
-            return Splits.one(this);
-        }
-
-        public int hashCode() {
-            return element == null ? 0 : element.hashCode();
-        }
     }
 
-    // A map of no mapping: its views are the empty set.
-    static final class EmptyMap<K, V> extends AbstractMap<K, V> {
-
-        static final EmptyMap<Object, Object> SELF = new EmptyMap<>();
-
-        public int size() {
-            return 0;
-        }
-
-        public boolean isEmpty() {
-            return true;
-        }
-
-        public boolean containsKey(Object key) {
-            return false;
-        }
-
-        public boolean containsValue(Object value) {
-            return false;
-        }
-
-        public V get(Object key) {
-            return null;
-        }
-
-        public V getOrDefault(Object key, V defaultValue) {
-            return defaultValue;
-        }
-
-        public Set<K> keySet() {
-            return emptySet();
-        }
-
-        public Collection<V> values() {
-            return emptySet();
-        }
-
-        public Set<Map.Entry<K, V>> entrySet() {
-            return emptySet();
-        }
-
-        public boolean equals(Object o) {
-            return o instanceof Map && ((Map<?, ?>) o).isEmpty();
-        }
-
-        public int hashCode() {
-            return 0;
-        }
-
-        public void forEach(BiConsumer<? super K, ? super V> action) {
-            Objects.requireNonNull(action);
-        }
-
-        public void replaceAll(BiFunction<? super K, ? super V, ? extends V> function) {
-            Objects.requireNonNull(function);
-        }
-
-        public V putIfAbsent(K key, V value) {
-            throw new UnsupportedOperationException();
-        }
+    // A map of no mapping or of one: a change that may change nothing is refused.
+    abstract static class FewMap<K, V> extends AbstractMap<K, V> {
 
         public boolean remove(Object key, Object value) {
             throw new UnsupportedOperationException();
@@ -979,15 +809,28 @@ public final class Collections {
         public V compute(K key, BiFunction<? super K, ? super V, ? extends V> function) {
             throw new UnsupportedOperationException();
         }
+    }
 
-        public V merge(K key, V value, BiFunction<? super V, ? super V, ? extends V> function) {
-            throw new UnsupportedOperationException();
+    // Its views are the empty set.
+    static final class EmptyMap<K, V> extends FewMap<K, V> {
+
+        static final EmptyMap<Object, Object> SELF = new EmptyMap<>();
+
+        public Set<K> keySet() {
+            return emptySet();
+        }
+
+        public Collection<V> values() {
+            return emptySet();
+        }
+
+        public Set<Map.Entry<K, V>> entrySet() {
+            return emptySet();
         }
     }
 
-    // A map of one mapping: its views are sets of one element, its entry one nothing
-    // changes.
-    static final class SingletonMap<K, V> extends AbstractMap<K, V> {
+    // Its views are sets of one element, its entry one nothing changes.
+    static final class SingletonMap<K, V> extends FewMap<K, V> {
 
         private final K key;
 
@@ -1002,24 +845,12 @@ public final class Collections {
             return 1;
         }
 
-        public boolean isEmpty() {
-            return false;
-        }
-
         public boolean containsKey(Object k) {
             return same(k, key);
         }
 
-        public boolean containsValue(Object v) {
-            return same(v, value);
-        }
-
         public V get(Object k) {
             return same(k, key) ? value : null;
-        }
-
-        public V getOrDefault(Object k, V defaultValue) {
-            return same(k, key) ? value : defaultValue;
         }
 
         public Set<K> keySet() {
@@ -1034,43 +865,11 @@ public final class Collections {
             return singleton(new AbstractMap.SimpleImmutableEntry<>(key, value));
         }
 
-        public void forEach(BiConsumer<? super K, ? super V> action) {
-            action.accept(key, value);
-        }
-
         public void replaceAll(BiFunction<? super K, ? super V, ? extends V> function) {
             throw new UnsupportedOperationException();
         }
 
         public V putIfAbsent(K key, V value) {
-            throw new UnsupportedOperationException();
-        }
-
-        public boolean remove(Object key, Object value) {
-            throw new UnsupportedOperationException();
-        }
-
-        public boolean replace(K key, V oldValue, V newValue) {
-            throw new UnsupportedOperationException();
-        }
-
-        public V replace(K key, V value) {
-            throw new UnsupportedOperationException();
-        }
-
-        public V computeIfAbsent(K key, Function<? super K, ? extends V> function) {
-            throw new UnsupportedOperationException();
-        }
-
-        public V computeIfPresent(K key, BiFunction<? super K, ? super V, ? extends V> function) {
-            throw new UnsupportedOperationException();
-        }
-
-        public V compute(K key, BiFunction<? super K, ? super V, ? extends V> function) {
-            throw new UnsupportedOperationException();
-        }
-
-        public V merge(K key, V value, BiFunction<? super V, ? super V, ? extends V> function) {
             throw new UnsupportedOperationException();
         }
     }

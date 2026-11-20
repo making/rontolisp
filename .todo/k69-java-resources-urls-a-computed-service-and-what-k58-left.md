@@ -24,5 +24,5 @@ k58 carries the files a resource name computed where the program runs may find, 
 - `ResourceBundle.Control` and `getBundle(.., Module)`; `Properties.loadFromXML` /
   `storeToXML`.
 - The candidate locales of a script and a variant, and the Norwegian and Chinese cases the
-  documentation states, once `Locale` has such locales (`.todo/k60`, its bullet on a locale
+  documentation states, once `Locale` has such locales (`.todo/k71`, its bullet on a locale
   that is not English).

@@ -246,18 +246,10 @@ final class ImmutableCollections {
     }
 
     // A set is equal to a set of the same elements: one of these is to its held set's.
-    // The set of Set.of refuses a null asked for.
     static class SetN<E> extends Unchanging<E> implements Set<E> {
 
         SetN(Set<E> held, int how) {
             super(held, how);
-        }
-
-        public boolean contains(Object o) {
-            if (how != HELD) {
-                Objects.requireNonNull(o);
-            }
-            return held.contains(o);
         }
 
         public boolean equals(Object o) {
@@ -368,31 +360,12 @@ final class ImmutableCollections {
             return held.size();
         }
 
-        // a null asked of the map of Map.of is refused
-        private void asked(Object o) {
-            if (how != HELD) {
-                Objects.requireNonNull(o);
-            }
-        }
-
         public boolean containsKey(Object key) {
-            asked(key);
             return held.containsKey(key);
         }
 
-        public boolean containsValue(Object value) {
-            asked(value);
-            return held.containsValue(value);
-        }
-
         public V get(Object key) {
-            asked(key);
             return held.get(key);
-        }
-
-        public V getOrDefault(Object key, V defaultValue) {
-            asked(key);
-            return held.getOrDefault(key, defaultValue);
         }
 
         public V remove(Object key) {
@@ -444,14 +417,12 @@ final class ImmutableCollections {
             throw new UnsupportedOperationException();
         }
 
-        // the keys and values of Map.of's map are AbstractMap's, whose changes go through
-        // the entries' iterator, which removes nothing
         public Set<K> keySet() {
-            return how == HELD ? new SetN<>(held.keySet(), how) : super.keySet();
+            return new SetN<>(held.keySet(), how);
         }
 
         public Collection<V> values() {
-            return how == HELD ? new Unchanging<>(held.values(), how) : super.values();
+            return new Unchanging<>(held.values(), how);
         }
 
         public Set<Map.Entry<K, V>> entrySet() {

@@ -1056,8 +1056,7 @@ public final class Arrays {
         return hash;
     }
 
-    // The list Arrays.asList answers: the array itself, so of a fixed size. Its iterator
-    // removes nothing, with the words of Iterator's remove.
+    // The list Arrays.asList answers: the array itself, so of a fixed size.
     static final class ArrayList<E> extends AbstractList<E> implements RandomAccess {
 
         private final E[] held;
@@ -1083,10 +1082,6 @@ public final class Arrays {
             return old;
         }
 
-        public Iterator<E> iterator() {
-            return new ArrayItr<>(held);
-        }
-
         public Object[] toArray() {
             Object[] out = new Object[held.length];
             System.arraycopy(held, 0, out, 0, held.length);
@@ -1095,28 +1090,6 @@ public final class Arrays {
 
         public void sort(Comparator<? super E> c) {
             sortObjects(held, 0, held.length, c);
-        }
-    }
-
-    static final class ArrayItr<E> implements Iterator<E> {
-
-        private final E[] held;
-
-        private int cursor;
-
-        ArrayItr(E[] held) {
-            this.held = held;
-        }
-
-        public boolean hasNext() {
-            return cursor < held.length;
-        }
-
-        public E next() {
-            if (cursor >= held.length) {
-                throw new NoSuchElementException();
-            }
-            return held[cursor++];
         }
     }
 }
