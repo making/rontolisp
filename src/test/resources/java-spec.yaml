@@ -4992,7 +4992,9 @@ cases:
               System.out.println(MessageFormat.format("{0} and {1} and {2}", 1000, "b") + " "
                       + MessageFormat.format("{0}{1}", new Object[] {1, 2}) + " " + MessageFormat.format("{0}", (Object[]) null));
               MessageFormat f = new MessageFormat("a {0}");
-              System.out.println(f.getLocale() + " " + f.format(new Object[] {12345}) + " " + f.format(new Object[0]) + " "
+              // the default locale is the host's on a JDK and Locale.US here, so only that it is the default
+              System.out.println(f.getLocale().equals(Locale.getDefault()) + " " + f.format(new Object[] {12345}) + " "
+                      + f.format(new Object[0]) + " "
                       + f.format((Object[]) null));
               f.applyPattern("b ''{1}'' {0}");
               Object both = new Object[] {1, 2};
@@ -5056,7 +5058,7 @@ cases:
       683.931|-1,779.67|3.372|25.717|-3,860.603|0.369|432.166|-7,336.587|0.153|319.937|-2,181.207|0.69|
       218.22|-4,859.548|1,684,792,241,227,682.8|369.904|-2,941.831|0.518|591.447|-8,502.481|79,338,238,376,305,472|590.402|-7,836.194|72.764|
       1,000 and b and {2} 12 {0}
-      en_US a 12,345 a {0} a {0}
+      true a 12,345 a {0} a {0}
       b ''{1}'' {0} b '2' 1
       null b 'y' x
       a number with no locale
