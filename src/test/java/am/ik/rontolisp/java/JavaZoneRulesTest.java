@@ -634,9 +634,10 @@ class JavaZoneRulesTest {
 			.startsWith("Asia/Tokyo\u0001GMT+09:00\u0001\u0001GMT+10:00\u0001\u0001GMT+09:00\u0001Tokyo\u0001JST\u0001")
 			.contains("\u0001Japan Standard Time\u0001")
 			.endsWith("\u0002");
-		assertThat(names.read(List.of("Asia/Tokyo"))).contains("\u0001110Japan Standard Time\u0001");
+		// (a name read alike in English, British and Canadian is one entry, N its kinds)
+		assertThat(names.read(List.of("Asia/Tokyo"))).contains("\u0001N10Japan Standard Time\u0001");
 		assertThat(names.read(List.of("Africa/Accra"))).startsWith("Africa/Accra\u0001")
-			.contains("\u0001112Accra Time");
+			.contains("\u0001N12Accra Time");
 		// (a JDK reads Accra's names as Abidjan's, and in British English as London's)
 		assertThat(names.read(List.of("Africa/Accra", "Africa/Abidjan", "Europe/London")))
 			.startsWith("Africa/Abidjan\u0001")

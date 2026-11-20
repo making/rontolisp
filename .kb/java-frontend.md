@@ -2515,9 +2515,9 @@ three only where it can make the part that writes it.** Provenance:
   KB, read +6.3 KB; a computed pattern 495,472 -> 532,923 (`.todo/k70`); a date by
   `ofLocalizedDate(MEDIUM)` 332,031; Tokyo by `"... z"` 409,986, read 527,968; a time by
   `"h:mm B"` 330,931.
-- **The grid** (`Grid.java`, 2,350 lines): the interpreter (43 s), the JVM (4.5 s), wasm
-  (2.7 s, 1,276,913 B) and the component (2.8 s) print a JDK's lines (the JDK 2.5 s); the
-  k35, k42, k43 and k52 grids print theirs as before.
+- **The grid** (`Grid.java`, 2,350 lines): the interpreter (63 s), the JVM (5.7 s), wasm
+  (5.6 s, 1,199,318 B) and the component (5.5 s) print a JDK's lines (the JDK 3.7 s, all on
+  a loaded machine); the k35, k42, k43 and k52 grids print theirs as before.
 - Not there: `.todo/k70` (`DecimalStyle`, `toFormat`, `ParsePosition`, `withResolverFields`,
   `IsoChronology.resolveDate`, the deviations k43 and k52 left, the cost of a computed
   pattern, the table of every region's names).

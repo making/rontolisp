@@ -18,11 +18,11 @@ the JDK prints the same under `LANG=C.UTF-8` and another `TZ`.
 
 ```bash
 R="java -cp target/classes am.ik.rontolisp.cli.RontoLispCli"   # or -jar the exec jar
-java Grid.java > jdk.txt                                       # 2.5 s
-$R Grid.java > interpreter.txt                                 # 43 s
-$R Grid.java -o Grid.jar && java -jar Grid.jar > jvm.txt       # 4.5 s, 381,962 B
-$R Grid.java -o grid.wasm && wasmtime run grid.wasm > wasm.txt                 # 2.7 s, 1,276,913 B
-$R Grid.java -o grid-c.wasm --component && wasmtime run grid-c.wasm > comp.txt # 2.8 s, 1,281,186 B
+java Grid.java > jdk.txt                                       # 3.7 s
+$R Grid.java > interpreter.txt                                 # 63 s
+$R Grid.java -o Grid.jar && java -jar Grid.jar > jvm.txt       # 5.7 s, 371,464 B
+$R Grid.java -o grid.wasm && wasmtime run grid.wasm > wasm.txt                 # 5.6 s, 1,199,318 B
+$R Grid.java -o grid-c.wasm --component && wasmtime run grid-c.wasm > comp.txt # 5.5 s, 1,203,582 B
 ```
 
 `ENGLISH` comes last among the locales: a JDK that has written a zone's names for
