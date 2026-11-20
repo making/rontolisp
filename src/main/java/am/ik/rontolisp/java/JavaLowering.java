@@ -371,6 +371,13 @@ final class JavaLowering implements JavaEmitter.Context {
 	/** The settings of the constant strings a program compares by reference. */
 	private final List<LispVal> internings = new ArrayList<>();
 
+	/**
+	 * The settings of the static initialization that cannot throw: the class objects, the
+	 * constant fields, the defaults a field holds ahead of its initializer, the flags of
+	 * the lazy classes.
+	 */
+	private final List<LispVal> settings = new ArrayList<>();
+
 	private final List<LispVal> initializers = new ArrayList<>();
 
 	/** The interfaces {@code instanceof} or a cast tests. */
@@ -879,6 +886,12 @@ final class JavaLowering implements JavaEmitter.Context {
 		boolean runs = this.session == null && !(this.loaded && mainOf(launched()) == null);
 		LispVal entry = runs ? entry() : NIL;
 		List<LispVal> initialization = initialization();
+		if (runs && !initialization.isEmpty()) {
+			// the static initializers that run before main are a function of their own:
+			// a form is one method of a JVM class, and a form with an exit is not cut
+			this.functions.add(list(cl("defun"), INITIALIZATION, NIL, progn(initialization)));
+			initialization = List.of(list(INITIALIZATION));
+		}
 		List<LispVal> made = new ArrayList<>();
 		made.addAll(this.variables);
 		made.addAll(this.functions);
@@ -886,6 +899,7 @@ final class JavaLowering implements JavaEmitter.Context {
 		made.addAll(this.catchTests.values());
 		made.addAll(generated);
 		made.addAll(this.internings);
+		made.addAll(this.settings);
 		LispVal started = runs ? uncaught(initialization, entry) : progn(initialization);
 		if (this.reporter != null) {
 			made.add(this.reporter);
@@ -1962,6 +1976,9 @@ final class JavaLowering implements JavaEmitter.Context {
 	private static final String THROWABLE = "java.lang.Throwable";
 
 	private static final LispSymbol UNCAUGHT = new LispSymbol("%uncaught");
+
+	/** The function running the static initializers of the classes initialized first. */
+	private static final LispSymbol INITIALIZATION = new LispSymbol("%initialization");
 
 	/** The function a program whose exceptions can enclose others is reported by. */
 	private @Nullable LispVal reporter;
@@ -10041,12 +10058,19 @@ final class JavaLowering implements JavaEmitter.Context {
 		return !buffer.initialized.contains(declaration.name);
 	}
 
+	/**
+	 * {@return the static initializers of the classes initialized before {@code main}}
+	 * What cannot throw is set ahead of them by top-level forms of its own
+	 * ({@link #settings}), and the functions initializing the lazy classes are made.
+	 */
 	private List<LispVal> initialization() {
 		if (this.order.decide(this.initEffects, this.methodEffects, type -> immutable(type, new HashSet<>()))) {
 			this.classes.changed();
 		}
 		boolean threads = scheduled();
-		List<LispVal> forms = new ArrayList<>(this.classInits);
+		// the settings that cannot throw are top-level forms ahead of the
+		// initialization; what can throw is reported as what main leaves uncaught
+		List<LispVal> settings = new ArrayList<>(this.classInits);
 		for (JavaClass declaration : this.classes.all()) {
 			if (declaration.intrinsic || (isPartial(declaration) && !this.classes.used.contains(declaration))) {
 				continue;
@@ -10065,7 +10089,7 @@ final class JavaLowering implements JavaEmitter.Context {
 			// replaced: it holds null
 			for (Field field : this.declared.get(0).fields) {
 				if (names(field.type, buffer.declared)) {
-					forms.add(call("setq", JavaNames.global(field), defaultValue(field.type)));
+					settings.add(call("setq", JavaNames.global(field), defaultValue(field.type)));
 				}
 			}
 		}
@@ -10097,16 +10121,17 @@ final class JavaLowering implements JavaEmitter.Context {
 				}
 				Object constant = constantOf(field);
 				if (constant != null) {
-					forms.add(call("setq", JavaNames.global(field),
+					settings.add(call("setq", JavaNames.global(field),
 							constant instanceof String text ? constantString(text).form() : constant(constant).form()));
 				}
 				else if (fresh && (field.initializer == null || this.order.isLazy(declaration)
 						|| called.reads.contains(field))) {
 					// a field read ahead of its initializer holds its type's default
-					forms.add(call("setq", JavaNames.global(field), defaultValue(field.type)));
+					settings.add(call("setq", JavaNames.global(field), defaultValue(field.type)));
 				}
 			}
 		}
+		List<LispVal> forms = new ArrayList<>();
 		for (JavaClass declaration : this.order.eager()) {
 			forms.addAll(Objects.requireNonNull(this.staticInits.get(declaration)));
 		}
@@ -10118,7 +10143,7 @@ final class JavaLowering implements JavaEmitter.Context {
 			LispSymbol done = JavaNames.initialized(declaration);
 			this.variables.add(list(cl("defvar"), done));
 			if (isFresh(declaration)) {
-				forms.add(call("setq", done, NIL));
+				settings.add(call("setq", done, NIL));
 			}
 			List<LispVal> body = new ArrayList<>();
 			body.add(call("setq", done, T));
@@ -10156,6 +10181,7 @@ final class JavaLowering implements JavaEmitter.Context {
 			}
 			this.functions.add(list(cl("defun"), JavaNames.initializer(declaration), NIL, run));
 		}
+		this.settings.addAll(settings);
 		return forms;
 	}
 

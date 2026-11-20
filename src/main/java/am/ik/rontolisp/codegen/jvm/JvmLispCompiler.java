@@ -4868,7 +4868,7 @@ public final class JvmLispCompiler implements LispCompiler {
 		// *error-output*'s default is a stream VALUE, so its layout constant has to be
 		// interned BEFORE the layout half of <clinit> is assembled just below -- and
 		// emitted before the seed reads it, which is why the seed loop comes after
-		// layoutClinitCode in the <clinit> assembly.
+		// layoutClinitSteps in the <clinit> assembly.
 		boolean seedsStreamValue = false;
 		for (Map.Entry<String, LispVal> streamVar : StreamDesignators.standardStreamDefaults().entrySet()) {
 			seedsStreamValue |= streamVar.getValue() instanceof LispCons
@@ -4882,15 +4882,15 @@ public final class JvmLispCompiler implements LispCompiler {
 		// The layout half of <clinit>, assembled HERE because it mints CONSTANT_String
 		// entries and the constant pool is serialized by .writeConstantPool(cp) below,
 		// before the writeFields/writeMethods lambdas run.
-		final MethodCode layoutClinitCode = new MethodCode();
-		mainCtx.layoutPool.emitClinitInit(layoutClinitCode, cp);
+		final JvmClinitSteps layoutClinitSteps = new JvmClinitSteps("_clinit$layouts");
+		mainCtx.layoutPool.emitClinitInit(layoutClinitSteps, cp);
 		// The bignum-literal half of <clinit>, assembled HERE for the same reason: it
 		// mints the CONSTANT_String decimal forms, and the pool is complete because
 		// every body (defun, top-level chunk, lambda, outlined fused site) has been
 		// compiled by now. Empty for a program with no bignum literal, which is then
 		// emitted byte for byte as before.
-		final MethodCode bigIntClinitCode = new MethodCode();
-		mainCtx.bigIntPool.emitClinitInit(bigIntClinitCode, cp);
+		final JvmClinitSteps bigIntClinitSteps = new JvmClinitSteps("_clinit$bignums");
+		mainCtx.bigIntPool.emitClinitInit(bigIntClinitSteps, cp);
 		// When the standard-stream handles are reserved, the stream table must EXIST
 		// from the start with those slots empty. _addStream reserves the COUNT, but it
 		// runs only when something is opened -- while the reserved handle 2 is a live
@@ -5413,6 +5413,9 @@ public final class JvmLispCompiler implements LispCompiler {
 		MethodCode clinitTailCode = new MethodCode();
 		MethodCode clinitBodyCode = null;
 		List<MethodCode> funcrefFillSegmentCodes = new ArrayList<>();
+		// the methods the work growing with the program is cut into past one segment
+		// (JvmClinitSteps), whose field writes a fragment retargets as the head's
+		List<MethodCode> clinitSegmentCodes = new ArrayList<>();
 		MethodCode funcrefCode = null;
 		if (mainCtx.conditionChannel.used || mainCtx.conditionChannel.nleUsed || teTlField != null
 				|| !mainCtx.layoutPool.isEmpty() || !mainCtx.bigIntPool.isEmpty() || structTableClinitFinal != null
@@ -5502,11 +5505,13 @@ public final class JvmLispCompiler implements LispCompiler {
 				// same initializer -- never lazily: a racy first binding from two
 				// request threads would mint two ThreadLocals and lose one
 				// binding.
-				clinitHeadCode.append(dynVarRuntime.clinitCode());
+				clinitSegmentCodes
+					.addAll(dynVarRuntime.clinitSteps().appendTo(clinitHeadCode, definition, cp, thisClass));
 			}
 			if (unboundMarker != null) {
 				// The UNBOUND marker and the globals that start with it.
-				clinitHeadCode.append(unboundMarker.clinitCode());
+				clinitSegmentCodes
+					.addAll(unboundMarker.clinitSteps().appendTo(clinitHeadCode, definition, cp, thisClass));
 			}
 			if (streamsFieldRef != null) {
 				// _streams = new Object[16]; _streamCount = 3 -- the reserved
@@ -5525,8 +5530,8 @@ public final class JvmLispCompiler implements LispCompiler {
 			// The bignum literals go in before the layouts: they are plain
 			// values with no dependency of their own, and every later fragment
 			// (and the top-level runner, invoked last) may read them.
-			clinitHeadCode.append(bigIntClinitCode);
-			clinitHeadCode.append(layoutClinitCode);
+			clinitSegmentCodes.addAll(bigIntClinitSteps.appendTo(clinitHeadCode, definition, cp, thisClass));
+			clinitSegmentCodes.addAll(layoutClinitSteps.appendTo(clinitHeadCode, definition, cp, thisClass));
 			// The standard stream variables' defaults, one table
 			// (StreamDesignators) feeding BOTH homes: the per-name global field
 			// a direct read uses, and the eval runtime's _genv mirror that
@@ -5660,6 +5665,9 @@ public final class JvmLispCompiler implements LispCompiler {
 				};
 				clinitHeadCode.retargetFieldWrites(retarget);
 				clinitTailCode.retargetFieldWrites(retarget);
+				for (MethodCode segment : clinitSegmentCodes) {
+					segment.retargetFieldWrites(retarget);
+				}
 				for (FieldRefEntry dead : deadFields.values()) {
 					definition.addField(AccessFlag.ACC_PRIVATE | AccessFlag.ACC_STATIC, dead.name(), dead.type());
 				}
@@ -8212,12 +8220,13 @@ public final class JvmLispCompiler implements LispCompiler {
 		}
 
 		/**
-		 * Appends the layout initializers to the shared {@code <clinit>} body.
-		 * @param code the {@code <clinit>} body being assembled
+		 * Writes the layout initializers, one step each.
+		 * @param steps the {@code <clinit>} work they join
 		 * @param cp the constant pool (mints the layout strings)
 		 */
-		void emitClinitInit(MethodCode code, ConstantPool cp) {
+		void emitClinitInit(JvmClinitSteps steps, ConstantPool cp) {
 			for (LayoutField lf : this.byTag.values()) {
+				MethodCode code = steps.step();
 				List<String> parts = new ArrayList<>();
 				parts.add(lf.layout().tag());
 				parts.add(lf.layout().printName());
@@ -8322,12 +8331,13 @@ public final class JvmLispCompiler implements LispCompiler {
 		}
 
 		/**
-		 * Appends the bignum initializers to the shared {@code <clinit>} body.
-		 * @param code the {@code <clinit>} body being assembled
+		 * Writes the bignum initializers, one step each.
+		 * @param steps the {@code <clinit>} work they join
 		 * @param cp the constant pool (mints the decimal strings)
 		 */
-		void emitClinitInit(MethodCode code, ConstantPool cp) {
+		void emitClinitInit(JvmClinitSteps steps, ConstantPool cp) {
 			for (BigIntField bf : this.byValue.values()) {
+				MethodCode code = steps.step();
 				code.new_(Objects.requireNonNull(this.bigIntegerCls));
 				code.dup();
 				code.ldc(cp.stringEntry(bf.value().toString()));

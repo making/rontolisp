@@ -227,11 +227,25 @@ conversion tooling live in `.todo/artefacts/a8*`/`a9*` and git history.
   _top$0: method code exceeds the JVM's 65535-byte limit: 97874`; 1,500 arguments fit. Each argument is already
   smaller than a method of its own would be, so outlining them saves nothing: the pushes are
   the bytes. A quoted list of 3,000 elements compiles (the literal builders below).
-  Nor a Java program's initialization: `(%reporting-uncaught .. init.. (main))` is one form
-  with an exit, so the `java-spec.yaml` corpus stopped at `method _top$0: method code exceeds
-  the JVM's 65535-byte limit: 65740` (2026-11-20, k55) until its 2,296 interned strings were
-  set by forms of their own (`.kb/java-frontend.md`, "The library"); 44,218 B are left in
-  it, the class objects and static initializers (`.todo/k63`).
+  Nor was a Java program's initialization: `(%reporting-uncaught .. init.. (main))` is one
+  form with an exit, so the `java-spec.yaml` corpus stopped at `method _top$0: method code
+  exceeds the JVM's 65535-byte limit: 65740` (2026-11-20, k55), and one class whose static
+  block held 3,000 statements and a loop at `422144`. Since k63 the form holds no
+  initializer: what cannot throw is a top-level form of its own, the initializers that run
+  before `main` are the function `%initialization`, cut as any defun is
+  ([java-frontend.md](java-frontend.md), "Static initialization"). The corpus's form went
+  from 45,834 B to a call (`%initialization` 6,430 B).
+- **`<clinit>`'s work that grows with the program is cut into methods** (k63,
+  `JvmClinitSteps`): the UNBOUND marker's settings (6 B a global of no value), the instance
+  layouts (some 25 B a `defstruct` or Java class), the bignums and the bound specials'
+  ThreadLocals are each a run of stack-neutral steps, written into `<clinit>` while the run
+  fits 12,000 B (byte for byte as before) and past it into `_clinit$unbound$N`,
+  `_clinit$layouts$N`, `_clinit$bignums$N`, `_clinit$dynvar$N` called in order. Measured
+  2026-11-20: 12,000 `(defvar *vN*)` were a `<clinit>` of 72,011 B, 2,000 Java classes of
+  three static fields each 86,049 B; 5,000 Java classes with a static block each, or with
+  three static fields each, now compile and print the JDK's line. Not cut:
+  `JvmReadRuntimeBuilder.structTableClinit` (the `#S` directory, one entry a struct type
+  under `read`), which keeps its array on the stack across entries.
 
 - An array literal of any family is filled by `_ql$N` builders past a budget, and a run of equal
   immediates costs one `addAll` ([array-literals.md](array-literals.md), "A long literal").
@@ -303,4 +317,6 @@ is never reused.
   `RontoLispCliTest#aProgramPastOneClassesPoolTravelsWithItsPartsInEveryOutputShape`, and the
   three JVM legs of `MitoE2eTest`
 - `Uax15E2eTest`, `ClUnicodeTablesTest`; ci-spec `runtime-type-dispatch-and-symbol-designators`
-- `JvmLispCompilerTest#anArrayLiteralOfAnyFamilyIsHeldToNoMethodLimit`
+- `JvmLispCompilerTest#anArrayLiteralOfAnyFamilyIsHeldToNoMethodLimit`,
+  `#aTopLevelFormOrAnInitializerPastTheMethodSizeLimitIsCut` (12,000 globals of no value),
+  `JavaSpecE2eTest#aStaticInitializationPastOneMethodOfAJvmClassRuns`

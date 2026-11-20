@@ -168,9 +168,11 @@ beside them: k55 (2026-11-20; "The sequenced collections" below).
   variable bound to `(%java-thrown c)`; a condition no clause takes goes on as it came;
   `finally` is `unwind-protect`. What the run time raises is converted AT THE CATCH
   ("Exceptions" below).
-- **The program runs inside `(%reporting-uncaught #'%java-uncaught-line (%host-exit 1) init.. (main))`**:
+- **The program runs inside `(%reporting-uncaught #'%java-uncaught-line (%host-exit 1) (%initialization) (main))`**:
   what nothing caught is a JDK's line, the pipeline's location lines under it and the status 1
   on four backends, with no handler holding the condition ("Exceptions" below).
+  `%initialization` is there only where a class is initialized before `main` ("Static
+  initialization" below).
 - **`instanceof` / a cast**: a class is its predicate; an interface the generated `Iface%is`
   (the predicates of the topmost classes implementing it, of the library's values that are it,
   and of its lambdas: "Lambdas" below); a library class its own (`simple-string-p`, `integerp`,
@@ -1380,7 +1382,8 @@ measured programs.
   comparison is unchanged. Each setting is a top-level form ahead of the initialization
   (`JavaLowering.internings`, k55): inside the one initialization form, the corpus's 2,296
   of them took that form's JVM method to 65,740 B, past the 65,535 a method holds (a form is
-  cut only where [jvm-method-size-limits.md](jvm-method-size-limits.md) says). `new Object()` is `(make-array 0 :fill-pointer 0)`: no other value
+  cut only where [jvm-method-size-limits.md](jvm-method-size-limits.md) says; the rest of
+  the initialization left the form with k63, "Static initialization"). `new Object()` is `(make-array 0 :fill-pointer 0)`: no other value
   of a program is a vector with a fill pointer that is no string.
 - **`String.format`** is `%java-format` over the argument array and the program's `%string`
   (and, where the program makes a `BigInteger` or a `BigDecimal`, the function writing
@@ -3539,6 +3542,19 @@ virtual call can run --, classes used):
   only when something can read it there (no initializer, a lazy class, a read through a method
   the initialization calls or by a qualified name ahead of the field).
 - The decision is made at the end of a pass and the next pass is lowered with it.
+- **Where it runs** (k63): what cannot throw -- the class objects, the constant fields, the
+  defaults a field holds ahead of its initializer, the lazy classes' flags -- is set by
+  top-level forms of its own ahead of the entry (`JavaLowering.settings`, after
+  `internings`); the eager classes' initializers, in their order, are the body of
+  `(defun %initialization ..)`, called by the entry ahead of `main`, so a run-time error
+  in one is still reported as what `main` left uncaught. In the entry form they were one
+  JVM method, never cut (a loop's exit in it), and a static block of 3,000 statements
+  stopped the compile ([jvm-method-size-limits.md](jvm-method-size-limits.md), "Bodies
+  bounded by construction"); a defun is cut as any. A program initializing no class
+  before `main` is byte for byte as before (a hello: wasm 17,179 B both ways); one that
+  does pays the function (`examples/java/shop` wasm 328,166 -> 328,188 B). Only a program
+  that runs: a session's buffer and a loaded library keep the initializers in their
+  top-level `progn`.
 - Classes that need no other run in the order of lowering, so one source compiles to the same bytes
   every time: the per-class and per-method records are insertion-ordered maps, never an
   identity-hashed one (2026-11-20; the same YAVI example compiled three times by one jar is

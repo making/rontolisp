@@ -185,8 +185,8 @@ class JavaLoweringTest {
 							+ "(CAR |%e|) \"java.lang.ArithmeticException\") (|ArithmeticException.new(String)| (CDR |%e|))))))",
 					// what nothing caught is the pipeline's own report with the program's
 					// line in it: no handler holds the condition
-					"(%REPORTING-UNCAUGHT #'RONTOLISP::%JAVA-UNCAUGHT-THROWN-LINE (%HOST-EXIT 1) (SETQ |Base.count| 0) "
-							+ "(SETQ |Base.LIMIT| 10) (SETQ |Throwable.traces| 0) (|L1.main(String[])| (VECTOR)))");
+					"(%REPORTING-UNCAUGHT #'RONTOLISP::%JAVA-UNCAUGHT-THROWN-LINE (%HOST-EXIT 1) (|L1.main(String[])| "
+							+ "(VECTOR)))");
 		// every exception class the run time's table names is one the lowering can make
 		Matcher named = Pattern.compile("\"(java\\.(?:lang|util)\\.\\w+Exception)\"").matcher(runtimeLibrary());
 		while (named.find()) {
@@ -240,7 +240,8 @@ class JavaLoweringTest {
 		// is a variable of its statement, set where the test holds; a labeled loop's
 		// block has the label's name; a variable arity call makes the array; a class
 		// whose static initialization shows is initialized at its first use, any other
-		// before main.
+		// before main by a function of its own, after the settings that cannot throw,
+		// each a form of its own.
 		assertThat(
 				lower("""
 						sealed interface Shape permits Circle, Square { }
@@ -325,10 +326,12 @@ class JavaLoweringTest {
 							+ "|this|) |%outer|) |this|))",
 					"(DEFUN |Log.<clinit>| NIL (IF |Log.<clinit>%done| NIL (PROGN (SETQ |Log.<clinit>%done| T) "
 							+ "(WRITE-LINE \"log\"))))",
-					"(%REPORTING-UNCAUGHT #'RONTOLISP::%JAVA-UNCAUGHT-LINE (%HOST-EXIT 1) (SETQ |Level.$VALUES| NIL) (SETQ |Log.lines| 0) (SETQ |Level.LOW| (|Level.new(String,int)| "
-							+ "\"LOW\" 0)) (SETQ |Level.HIGH| (|Level.new(String,int)| \"HIGH\" 1)) (SETQ |Level.$VALUES| (VECTOR "
-							+ "|Level.LOW| |Level.HIGH|)) (SETQ |Level.ALL| (|Level.values()|)) (SETQ |Log.<clinit>%done| "
-							+ "NIL) (|L2.main(String[])| (VECTOR)))");
+					"(DEFUN |%initialization| NIL (PROGN (SETQ |Level.LOW| (|Level.new(String,int)| \"LOW\" 0)) (SETQ "
+							+ "|Level.HIGH| (|Level.new(String,int)| \"HIGH\" 1)) (SETQ |Level.$VALUES| (VECTOR |Level.LOW| "
+							+ "|Level.HIGH|)) (SETQ |Level.ALL| (|Level.values()|))))")
+			.containsSubsequence("(SETQ |Level.$VALUES| NIL)", "(SETQ |Log.lines| 0)", "(SETQ |Log.<clinit>%done| NIL)",
+					"(%REPORTING-UNCAUGHT #'RONTOLISP::%JAVA-UNCAUGHT-LINE (%HOST-EXIT 1) (|%initialization|) "
+							+ "(|L2.main(String[])| (VECTOR)))");
 	}
 
 	@Test
@@ -780,11 +783,11 @@ class JavaLoweringTest {
 						+ "|kept|))) (WRITE-LINE (%STRING-CONCAT (%STRING-CONCAT (OR (|L12.above(Class)| |held|) \"null\") "
 						+ "(IF (EQ |held| |Kept%class|) \"true\" \"false\")) (IF (EQUAL (|%class-name| |kept|) \"Kept\") "
 						+ "\"true\" \"false\"))))))")
-			.anyMatch(form -> form
-				.startsWith("(%REPORTING-UNCAUGHT #'RONTOLISP::%JAVA-UNCAUGHT-LINE (%HOST-EXIT 1) (SETQ "
-						+ "|Object%class| " + made
-						+ "\"java.lang.Object\" \"Object\" NIL 0 NIL NIL NIL NIL NIL)) (SETQ |Kept%class| " + made
-						+ "\"Kept\" \"Kept\" NIL 0 |Object%class| NIL NIL NIL NIL)) (|L12.main(String[])| "));
+			.containsSubsequence(
+					"(SETQ |Object%class| " + made + "\"java.lang.Object\" \"Object\" NIL 0 NIL NIL NIL NIL NIL))",
+					"(SETQ |Kept%class| " + made + "\"Kept\" \"Kept\" NIL 0 |Object%class| NIL NIL NIL NIL))",
+					"(%REPORTING-UNCAUGHT #'RONTOLISP::%JAVA-UNCAUGHT-LINE (%HOST-EXIT 1) (|L12.main(String[])| "
+							+ "(VECTOR)))");
 		assertThat(lower("""
 				class L13 {
 				    public static void main(String[] args) {
@@ -997,8 +1000,9 @@ class JavaLoweringTest {
 						+ "(%STRING-CONCAT (%STRING-CONCAT (%STRING-CONCAT (%DECIMAL-PIECE (|demo.app.T.CDR(int)| (OR "
 						+ "|j%T| (RONTOLISP::%JAVA-NPE)) 2)) \"n=16y\") (RONTOLISP::%JAVA-CHAR-STRING |c|)) (%DECIMAL-PIECE "
 						+ "|big|)) \"2147483647\") \"-0.0\") \"4.5\"))))))",
-				"(%REPORTING-UNCAUGHT #'RONTOLISP::%JAVA-UNCAUGHT-LINE (%HOST-EXIT 1) (SETQ |demo.app.T.NIL| 16) "
-						+ "(SETQ |demo.app.T.TEXT| \"n=16y\") (|demo.app.Main.main(String[])| (VECTOR)))");
+				"(SETQ |demo.app.T.NIL| 16)", "(SETQ |demo.app.T.TEXT| \"n=16y\")",
+				"(%REPORTING-UNCAUGHT #'RONTOLISP::%JAVA-UNCAUGHT-LINE (%HOST-EXIT 1) (|demo.app.Main.main(String[])| "
+						+ "(VECTOR)))");
 	}
 
 	@Test
@@ -1132,12 +1136,9 @@ class JavaLoweringTest {
 						+ "(RONTOLISP::%JAVA-THROW (|ExceptionInInitializerError.of(Throwable)| |%t19|) "
 						+ "#'|Throwable.toString()|)))) (PROGN (RONTOLISP::%JAVA-INIT-ENTER) (SETQ "
 						+ "|Late.<clinit>%done| (IF |%t21| |%t21| :ENDED)) (RONTOLISP::%JAVA-INIT-LEAVE T))))))))))",
-				"(RONTOLISP::%JAVA-THREAD-MAIN (LAMBDA NIL (PROGN (SETQ |Cell.hits| 0) (SETQ |Lazy.made| 0) (SETQ "
-						+ "|Late.made| 0) (SETQ |Throwable.traces| 0) (SETQ |Thread.defaultHandler| NIL) (SETQ "
-						+ "|Thread.guarding| NIL) (SETQ |Thread.MIN_PRIORITY| 1) (SETQ |Thread.NORM_PRIORITY| 5) "
-						+ "(SETQ |Thread.MAX_PRIORITY| 10) (SETQ |Thread.unnamed| 0) (SETQ |Thread.identifiers| 1) (SETQ "
-						+ "|Lazy.<clinit>%done| NIL) (SETQ |Late.<clinit>%done| NIL) (|T1.main(String[])| (VECTOR)))) (LAMBDA (|%t|) "
-						+ "(|Thread.finish(Thread)| |%t|)) (LAMBDA (|%o|) (|Throwable.trace(Throwable)| |%o|)))");
+				"(RONTOLISP::%JAVA-THREAD-MAIN (LAMBDA NIL (PROGN (|%initialization|) (|T1.main(String[])| (VECTOR)))) "
+						+ "(LAMBDA (|%t|) (|Thread.finish(Thread)| |%t|)) (LAMBDA (|%o|) (|Throwable.trace(Throwable)| "
+						+ "|%o|)))");
 		// where the target has one stack a thread is a body suspended and resumed:
 		// the functions a thread can wait in are async-defuns and a call of one an
 		// await; a function that only ends with such a call answers its future; a
@@ -1271,9 +1272,7 @@ class JavaLoweringTest {
 						+ "\"getClass()\"))))",
 				"(DEFUN |%uncaught| (|%c| |%text|) (RONTOLISP::%JAVA-UNCAUGHT-THROWN-LINE |%c| (LET ((|%o| "
 						+ "(RONTOLISP::%JAVA-THROWN |%c|))) (IF |%o| (|Throwable.trace(Throwable)| |%o|) |%text|))))",
-				"(%REPORTING-UNCAUGHT #'|%uncaught| (%HOST-EXIT 1) (SETQ |Lazy.made| 0) (SETQ |Late.made| 0) "
-						+ "(SETQ |Throwable.traces| 0) (SETQ |Lazy.<clinit>%done| NIL) (SETQ |Late.<clinit>%done| NIL) "
-						+ "(|T2.main()|))");
+				"(%REPORTING-UNCAUGHT #'|%uncaught| (%HOST-EXIT 1) (|T2.main()|))");
 	}
 
 	@Test

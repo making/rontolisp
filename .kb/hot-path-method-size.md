@@ -81,7 +81,7 @@ chunker can adopt it.
   spine: coalton's environment updates, one statement per definition in one `let`, stopped the
   library's JVM compile at `method _top$501: method code exceeds the JVM's 65535-byte limit:
   214749`. Pins `AstOutlinerTest#aTopLevelFormOfSmallPartsIsLeftWholeUnlessItIsARunOfStatements`,
-  `JvmLispCompilerTest#aTopLevelFormPastTheMethodSizeLimitOutlinesItsBranches` (a 6000-statement
+  `JvmLispCompilerTest#aTopLevelFormOrAnInitializerPastTheMethodSizeLimitIsCut` (a 6000-statement
   `let`).
 - **The budget is measured, not predicted**.
   `JvmLispCompiler.compile` reports an oversized defun through a `MethodTooLarge` signal and
