@@ -4211,6 +4211,28 @@ class JvmLispCompilerTest {
 	}
 
 	@Test
+	void theStructDirectoryThatARunTimeReadResolvesIsCutPastOneMethod() throws Exception {
+		// <clinit> fills one directory entry (~40 bytes) per struct type of a program
+		// that
+		// reads; 2,100 of them were one <clinit> past the 64 KB cap
+		StringBuilder sb = new StringBuilder();
+		for (int i = 0; i < 2100; i++) {
+			sb.append("(defstruct st").append(i).append(" a)\n");
+		}
+		sb.append("(print (st2099-a (read-from-string \"#S(ST2099 :A 5)\")))\n");
+		List<LispVal> forms = am.ik.rontolisp.eval.LispPreludeLibrary
+			.process(LispReader.readAllFromString(sb.toString()));
+		java.util.Set<String> methods = new java.util.HashSet<>();
+		for (java.lang.classfile.MethodModel method : java.lang.classfile.ClassFile.of()
+			.parse(new JvmLispCompiler("Test").compile(forms))
+			.methods()) {
+			methods.add(method.methodName().stringValue());
+		}
+		assertThat(methods).contains("_clinit$structs$1");
+		assertThat(compileAndRun(forms)).isEqualTo("5");
+	}
+
+	@Test
 	void aFunctionNameTablePastTheMethodSizeBudgetIsSegmented() throws Exception {
 		// _funName is the funcId -> name table behind #<function NAME>: one 11-byte row
 		// per
