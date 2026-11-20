@@ -279,6 +279,17 @@ the shorthand adds one unsigned compare against the array size limit and hands a
 it to `_arr_dims`, which checks every dimension (`.kb/error-handling.md`, "A make-array
 dimension"); outside EH mode the site is unchanged.
 
+**A dimension proven an integer is the shorthand alone** (2026-11-21, k76;
+`WasmArrayCompiler.integerDimension`): a literal, a form whose shape or declaration bounds
+it (`WasmIntFusionCompiler.knownRange`, a `the` included) or integer arithmetic over such
+(`answersInteger`). No list arm; a packed integer width no rank test and no general arm; a
+character array its rank-1 marker. A range within `[0, array-dimension-limit)` is checked by
+nothing; otherwise in EH mode an i31 test and the compare hand anything else to `_arr_dims`,
+which reports it, then `unreachable`. Java's `new T[n]` asserts its size
+([java-frontend.md](java-frontend.md), "Numbers"). Sizes: a method making a `long[]` 174 ->
+150 B, an `int[]` 153 -> 61, an `Object[]` 127 -> 103; Lisp examples the same or smaller
+(`llm.lisp` 1,117,390 -> 1,116,044).
+
 **NOT done**: a whole-allocation `$_array_make` mirroring the JVM's `_arrayMake`. What is
 left inline would move behind a callee that branches on
 `:fill-pointer`/`:adjustable`/rank at RUN time where

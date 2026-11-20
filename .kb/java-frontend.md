@@ -3762,7 +3762,7 @@ class of a package of our own was needed (`deviations.md`, "The HTTP server").
   2,779, `rule` 2,355 -> 2,208), its instance methods `placed` 5,166 -> 2,793 and `ruled` 4,829
   -> 3,028; `ZonedDateTime.of(.., ZoneId.of("Europe/Paris")).plusHours(1)` 173,105 -> 166,183;
   `Sieve` 21,305 -> 19,699; `SieveLoop` 18,402 -> 16,797, its time 8.2-9.0 -> 7.6-8.3 s (a
-  sieve of 50,000,000 bound by memory); YAVI `Booking.java` 1,128,428 -> 1,125,245,
+  sieve of 50,000,000 -- not bound by memory: the store's boxed index, k76 below); YAVI `Booking.java` 1,128,428 -> 1,125,245,
   `Member.java` 648,210 -> 646,545; 2,000,000 offsets of an instant and a local date-time in
   Europe/Paris 4.83 -> 2.59 s; a `long[1000]` summed 10^5 times 93.8 -> 1.44 s
   (`.kb/wasm-int-fusion.md`). The JVM (that offsets program's jar 65,079 -> 65,003 B, both
@@ -3779,6 +3779,19 @@ class of a package of our own was needed (`deviations.md`, "The HTTP server").
   the mask (`.kb/wasm-int-fusion.md`, "Quotients of two integers", where the numbers are: the
   zone reader 12,765 -> 10,951 B, `Zone` 166,183 -> 157,926, 30,000,000 divisions 1.80 -> 0.67
   s). The JVM's `_iquo` was already a `LDIV`.
+- **`new T[n]` is a rank-1 `make-array` on wasm** (2026-11-21, k76): the size is asserted
+  `(the (integer 0 2147483647) (%java-array-length n))`, which the dimension parse reads as an
+  integer (`.kb/array-literals.md`, "What a wasm `make-array` site costs"); and a store into an
+  array of an `int`, `char`, `short` or `byte` takes a raw index (`.kb/declarations-type-checks.md`,
+  "Declaration-driven array emission"). Measured (base `57598eafd`, bytes of wasm; the
+  programs and `measure.sh` of k64's artefact): the zone reader 10,483 -> 10,289 (`region`
+  6,085 -> 5,939); `Zone` 155,833 -> 155,201; `Sieve` 19,699 -> 19,253; `SieveLoop` 16,797 ->
+  16,402 and 8.9 -> 1.8 s (the JVM 2.9 s); `ZoneLoop` 104,378 -> 103,839, `LongSum` 17,358 ->
+  17,237, both times unchanged; YAVI `Booking.java` 1,106,560 -> 1,098,196, `Member.java`
+  641,617 -> 637,212. No function of these grew. Left: `new T[n][m]` (`%java-new-array`'s
+  sizes prove nothing), and a `long[]` store, a general array's, still boxes its index
+  (10^8 stores 0.68 s against an `int[]`'s 0.48;
+  `.todo/artefacts/k76-java-wasm-what-is-left-of-an-arrays-making-and-store/`).
 - **`byte` and `short`** are integers an operator promotes to `int` and an assignment of a
   constant that fits, a cast or a compound assignment narrows (`JavaForms.signed`).
   **`float` is the double of its value** -- every binary32 is a binary64 -- and each operation's

@@ -2918,7 +2918,9 @@ overflow) and trapped on wasm; `(make-array -1)` was `make-array: -1` / an unnam
   clears it on success), and lands a dotted tail in `_type_err_list`. The inline i31 shorthand
   stays inline; in EH mode it adds one unsigned compare and hands an out-of-range i31 to
   `_arr_dims` to be reported. Outside EH mode the site keeps its bytes: a negative i31 meets
-  `array.new`'s own trap, every other bad dimension `_idx_in`'s.
+  `array.new`'s own trap, every other bad dimension `_idx_in`'s. A dimension the site proves
+  an integer has no list arm, and none of these checks where its range is within the limit
+  ([array-literals.md](array-literals.md), "What a wasm `make-array` site costs").
 - `MAKE-ARRAY` is the last row of `OperandTypes.operators()` (funnel-typed) and in
   `WasmOperandTypes.INDEXED`, so a module spelling it carries the index arm.
 - Pinned by `ci-spec.yaml`'s `make-array-dimensions-outside-the-limit-signal-a-type-error` (the
