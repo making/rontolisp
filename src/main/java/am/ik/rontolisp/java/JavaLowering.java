@@ -374,6 +374,13 @@ final class JavaLowering implements JavaEmitter.Context {
 	/** The settings of the constant strings a program compares by reference. */
 	private final List<LispVal> internings = new ArrayList<>();
 
+	/**
+	 * The settings of the static initialization that cannot throw: the class objects, the
+	 * constant fields, the defaults a field holds ahead of its initializer, the flags of
+	 * the lazy classes.
+	 */
+	private final List<LispVal> settings = new ArrayList<>();
+
 	private final List<LispVal> initializers = new ArrayList<>();
 
 	/** The interfaces {@code instanceof} or a cast tests. */
@@ -488,6 +495,19 @@ final class JavaLowering implements JavaEmitter.Context {
 
 	/** The local and anonymous classes lowered already in this pass. */
 	private final Set<JavaClass> loweredLocals = new LinkedHashSet<>();
+
+	/**
+	 * The anonymous classes made with {@code <>} in this pass, and what lowering each
+	 * made: the class may be lowered again against another supertype.
+	 */
+	private final Map<JavaClass, Lowering> inferredLowerings = new HashMap<>();
+
+	/**
+	 * What lowering an anonymous class made: its functions and the classes lowered with
+	 * it, itself first.
+	 */
+	private record Lowering(List<LispVal> forms, List<JavaClass> classes) {
+	}
 
 	/** The bindings of the patterns of the statement being lowered. */
 	private List<Local> patternVariables = new ArrayList<>();
@@ -874,6 +894,12 @@ final class JavaLowering implements JavaEmitter.Context {
 		boolean runs = this.session == null && !(this.loaded && mainOf(launched()) == null);
 		LispVal entry = runs ? entry() : NIL;
 		List<LispVal> initialization = initialization();
+		if (runs && !initialization.isEmpty()) {
+			// the static initializers that run before main are a function of their own:
+			// a form is one method of a JVM class, and a form with an exit is not cut
+			this.functions.add(list(cl("defun"), INITIALIZATION, NIL, progn(initialization)));
+			initialization = List.of(list(INITIALIZATION));
+		}
 		List<LispVal> made = new ArrayList<>();
 		made.addAll(this.variables);
 		made.addAll(this.functions);
@@ -881,6 +907,7 @@ final class JavaLowering implements JavaEmitter.Context {
 		made.addAll(this.catchTests.values());
 		made.addAll(generated);
 		made.addAll(this.internings);
+		made.addAll(this.settings);
 		LispVal started = runs ? uncaught(initialization, entry) : progn(initialization);
 		if (this.reporter != null) {
 			made.add(this.reporter);
@@ -1482,8 +1509,8 @@ final class JavaLowering implements JavaEmitter.Context {
 		this.scopes.pop();
 	}
 
-	private List<LispSymbol> bindParameters(Method method) {
-		List<LispSymbol> symbols = new ArrayList<>();
+	private List<Local> bindParameters(Method method) {
+		List<Local> locals = new ArrayList<>();
 		JavaSyntax.Method written = method.declaration;
 		for (int i = 0; i < method.parameters.size(); i++) {
 			Local local;
@@ -1498,9 +1525,48 @@ final class JavaLowering implements JavaEmitter.Context {
 				local = bind(parameter.name(), method.inside(method.parameters.get(i)), parameter.pos(), parameter);
 				local.isFinal = parameter.isFinal();
 			}
-			symbols.add(local.symbol());
+			locals.add(local);
 		}
-		return symbols;
+		return locals;
+	}
+
+	private static List<LispSymbol> symbols(List<Local> locals) {
+		return locals.stream().map(Local::symbol).toList();
+	}
+
+	/**
+	 * A body with the integral ones among its variables declared of their types
+	 * ({@link JavaForms#integerType}) ahead of its forms.
+	 */
+	private static List<LispVal> declaring(List<Local> locals, List<LispVal> forms) {
+		LispVal declaration = JavaForms.integerDeclaration(symbols(locals), locals.stream().map(Local::type).toList());
+		if (declaration == null) {
+			return forms;
+		}
+		List<LispVal> declared = new ArrayList<>(forms.size() + 1);
+		declared.add(declaration);
+		declared.addAll(forms);
+		return declared;
+	}
+
+	/**
+	 * Locals bound in turn around a body: one {@code let} each where one of them is of an
+	 * integral type, which its own {@code let} declares; one {@code let*} where none is.
+	 */
+	private static LispVal boundInTurn(List<Declared> locals, List<LispVal> body, String binder) {
+		boolean integral = locals.stream().anyMatch(declared -> JavaForms.integerType(declared.local().type()) != null);
+		if (!integral) {
+			List<LispVal> bindings = new ArrayList<>();
+			locals.forEach(declared -> bindings.add(list(declared.local().symbol(), declared.value())));
+			return form(cl(bindings.size() == 1 ? binder : "let*"), prepend(list(bindings), body));
+		}
+		List<LispVal> inner = body;
+		for (int i = locals.size() - 1; i >= 0; i--) {
+			Declared declared = locals.get(i);
+			inner = List.of(form(cl("let"), prepend(list(list(declared.local().symbol(), declared.value())),
+					declaring(List.of(declared.local()), inner))));
+		}
+		return inner.get(0);
 	}
 
 	/** The call running a lazy class's static initialization, or {@code null}. */
@@ -1519,7 +1585,11 @@ final class JavaLowering implements JavaEmitter.Context {
 
 	private void method(Method method) {
 		JavaSyntax.Method written = Objects.requireNonNull(method.declaration);
-		if (written.modifiers().contains("@Override") && !isPartial(method.owner) && !overrides(method)) {
+		// with <>, every method an anonymous class declares that is not private
+		// overrides one
+		if ((written.modifiers().contains("@Override")
+				|| (!method.isPrivate && this.inferredLowerings.containsKey(method.owner))) && !isPartial(method.owner)
+				&& !overrides(method)) {
 			throw error(written.pos(), "method does not override or implement a method from a supertype");
 		}
 		this.staticContext = method.isStatic;
@@ -1534,7 +1604,8 @@ final class JavaLowering implements JavaEmitter.Context {
 		if (!method.isStatic) {
 			parameters.add(THIS);
 		}
-		parameters.addAll(bindParameters(method));
+		List<Local> bound = bindParameters(method);
+		parameters.addAll(symbols(bound));
 		LispVal body = functionBody(Objects.requireNonNull(written.body()));
 		this.scopes.pop();
 		this.effects = saved;
@@ -1548,7 +1619,8 @@ final class JavaLowering implements JavaEmitter.Context {
 		if (first != null) {
 			body = call("progn", first, body);
 		}
-		this.functions.add(list(cl("defun"), JavaNames.function(method), list(parameters), body));
+		this.functions.add(form(cl("defun"),
+				prepend(JavaNames.function(method), prepend(list(parameters), declaring(bound, List.of(body))))));
 	}
 
 	/**
@@ -1645,7 +1717,8 @@ final class JavaLowering implements JavaEmitter.Context {
 		this.effects = new Effects();
 		this.methodEffects.put(constructor, this.effects);
 		this.scopes.push(new Scope(null));
-		List<LispSymbol> parameters = bindParameters(constructor);
+		List<Local> bound = bindParameters(constructor);
+		List<LispSymbol> parameters = symbols(bound);
 		List<Statement> statements = written == null ? List.of() : Objects.requireNonNull(written.body()).statements();
 		ConstructorCall explicit = null;
 		for (Statement statement : statements) {
@@ -1716,7 +1789,8 @@ final class JavaLowering implements JavaEmitter.Context {
 			all.add(THIS);
 			all.addAll(parameters);
 			LispVal body = frame.exits ? form(cl("block"), prepend(FUNCTION_BLOCK, forms)) : progn(forms);
-			this.functions.add(list(cl("defun"), JavaNames.function(constructor), list(all), body));
+			this.functions.add(form(cl("defun"),
+					prepend(JavaNames.function(constructor), prepend(list(all), declaring(bound, List.of(body))))));
 		}
 		if ((owner.isAbstract && !owner.isEnum) || (isPartial(owner) && !this.classes.made.contains(owner))) {
 			// no instance is made: the constructor is reached from a subclass's only
@@ -1953,6 +2027,9 @@ final class JavaLowering implements JavaEmitter.Context {
 	private static final String THROWABLE = "java.lang.Throwable";
 
 	private static final LispSymbol UNCAUGHT = new LispSymbol("%uncaught");
+
+	/** The function running the static initializers of the classes initialized first. */
+	private static final LispSymbol INITIALIZATION = new LispSymbol("%initialization");
 
 	/** The function a program whose exceptions can enclose others is reported by. */
 	private @Nullable LispVal reporter;
@@ -3622,6 +3699,13 @@ final class JavaLowering implements JavaEmitter.Context {
 		return JavaForms.string(JavaZones.shipped().table(this.classes.everyRegion ? null : this.classes.regions));
 	}
 
+	@Override
+	public LispVal zoneNames(boolean read) {
+		JavaZoneNames names = JavaZoneNames.shipped();
+		java.util.Collection<String> held = this.classes.everyRegion ? null : this.classes.regions;
+		return JavaForms.string(read ? names.read(held) : names.written(held));
+	}
+
 	/**
 	 * The answer to a condition that is a question the library's own source asks of the
 	 * program it is lowered into ({@link JavaIntrinsics#answered}); {@code null} for any
@@ -4251,7 +4335,8 @@ final class JavaLowering implements JavaEmitter.Context {
 		if (lazilyRead(field)) {
 			return new Typed(call("progn", list(JavaNames.initializer(field.owner)), read), field.type);
 		}
-		return new Typed(read, field.type);
+		// a static's variable is no local, which a declaration would cover
+		return new Typed(JavaForms.asserted(field.type, read), field.type);
 	}
 
 	/**
@@ -4629,9 +4714,10 @@ final class JavaLowering implements JavaEmitter.Context {
 						return constant(folded);
 					}
 				}
+				LispVal known = JavaForms.known(promoted.type(), promoted.form());
 				return operator.equals("-")
-						? new Typed(JavaForms.wrap(promoted.type(), call("-", promoted.form())), promoted.type())
-						: new Typed(call("lognot", promoted.form()), promoted.type());
+						? new Typed(JavaForms.wrap(promoted.type(), call("-", known)), promoted.type())
+						: new Typed(call("lognot", known), promoted.type());
 			}
 			default:
 		}
@@ -4692,8 +4778,9 @@ final class JavaLowering implements JavaEmitter.Context {
 				b = widen(b, promoted);
 				Object folded = a.constant() != null && b.constant() != null
 						? fold(operator, a.constant(), b.constant(), promoted) : null;
-				return folded != null ? constant(folded)
-						: new Typed(call(operator, a.form(), b.form()), Primitive.BOOLEAN);
+				return folded != null ? constant(folded) : new Typed(
+						call(operator, JavaForms.known(promoted, a.form()), JavaForms.known(promoted, b.form())),
+						Primitive.BOOLEAN);
 			}
 			case "&", "|", "^":
 				if (logical) {
@@ -4750,8 +4837,8 @@ final class JavaLowering implements JavaEmitter.Context {
 				return constant(folded);
 			}
 		}
-		LispVal x = a.form();
-		LispVal y = b.form();
+		LispVal x = JavaForms.known(type, a.form());
+		LispVal y = JavaForms.known(type, b.form());
 		if (type == Primitive.FLOAT) {
 			// the binary64 result of two binary32 operands, rounded once more, is the
 			// binary32 result: the double holds every bit the rounding reads
@@ -4760,7 +4847,7 @@ final class JavaLowering implements JavaEmitter.Context {
 		}
 		LispVal form = switch (operator) {
 			case "+", "-", "*" -> JavaForms.wrap(type, call(operator, x, y));
-			case "/" -> type == Primitive.DOUBLE ? call("/", x, y) : JavaForms.wrap(type, call("truncate", x, y));
+			case "/" -> type == Primitive.DOUBLE ? call("/", x, y) : JavaForms.wrap(type, quotient(type, x, y));
 			case "%" -> type == Primitive.DOUBLE ? runtimeCall("double-rem", x, y) : call("rem", x, y);
 			case "&" -> call("logand", x, y);
 			case "|" -> call("logior", x, y);
@@ -4769,8 +4856,21 @@ final class JavaLowering implements JavaEmitter.Context {
 		return new Typed(form, type);
 	}
 
-	private static Typed shift(String operator, Typed value, Typed count) {
-		JavaType type = value.type();
+	/**
+	 * {@code (truncate x y)} of two integral operands: the quotient of two {@code int}s
+	 * is one of {@code [-2^31, 2^31]} -- {@code MIN_VALUE / -1} the one past the type,
+	 * which the wrap around takes back -- and asserted so; the quotient of two
+	 * {@code long}s may leave i64 and is not.
+	 */
+	private static LispVal quotient(JavaType type, LispVal x, LispVal y) {
+		LispVal quotient = call("truncate", x, y);
+		return type == Primitive.LONG ? quotient
+				: list(cl("the"), list(cl("integer"), integer(-(1L << 31)), integer(1L << 31)), quotient);
+	}
+
+	private static Typed shift(String operator, Typed given, Typed count) {
+		JavaType type = given.type();
+		Typed value = new Typed(JavaForms.known(type, given.form()), type, given.constant());
 		int mask = type == Primitive.LONG ? 63 : 31;
 		Object by = count.constant() == null ? null : number(count.constant());
 		if (value.constant() != null && by != null) {
@@ -4780,7 +4880,7 @@ final class JavaLowering implements JavaEmitter.Context {
 			}
 		}
 		LispVal distance = by != null ? integer(((Number) by).longValue() & mask)
-				: call("logand", count.form(), integer(mask));
+				: call("logand", JavaForms.known(count.type(), count.form()), integer(mask));
 		LispVal back = by != null ? integer(-(((Number) by).longValue() & mask)) : call("-", distance);
 		if (operator.equals(">>>") && by != null) {
 			// A shift by a known count keeps the bits below the sign's copies: no bignum.
@@ -4930,7 +5030,7 @@ final class JavaLowering implements JavaEmitter.Context {
 				if (a.constant() != null && b.constant() != null) {
 					return constant(Objects.requireNonNull(fold(operator, a.constant(), b.constant(), promoted)));
 				}
-				test = call("=", a.form(), b.form());
+				test = call("=", JavaForms.known(promoted, a.form()), JavaForms.known(promoted, b.form()));
 			}
 			else if (a.type() == Primitive.BOOLEAN && b.type() == Primitive.BOOLEAN) {
 				test = call("eq", a.form(), b.form());
@@ -5591,6 +5691,7 @@ final class JavaLowering implements JavaEmitter.Context {
 		Initializing savedInitializing = this.initializing;
 		this.initializing = null;
 		List<LispVal> parameters = new ArrayList<>();
+		List<Local> boundParameters = new ArrayList<>();
 		for (int i = 0; i < lambda.parameters().size(); i++) {
 			Parameter parameter = lambda.parameters().get(i);
 			JavaType type = function.parameters().get(i);
@@ -5604,6 +5705,7 @@ final class JavaLowering implements JavaEmitter.Context {
 			}
 			Local bound = bind(parameter.name(), this.types.ground(type), parameter.pos(), parameter);
 			parameters.add(bound.symbol());
+			boundParameters.add(bound);
 		}
 		JavaType wanted = function.returnType();
 		boolean inferring = inference != null && JavaTypes.mentions(wanted, inference.variables);
@@ -5659,7 +5761,11 @@ final class JavaLowering implements JavaEmitter.Context {
 				inference.lowerBound(wanted, shared);
 			}
 		}
-		return new Typed(lambdaValue(target, madeFor(target, list(cl("lambda"), list(parameters), body))),
+		return new Typed(
+				lambdaValue(target,
+						madeFor(target,
+								form(cl("lambda"),
+										prepend(list(parameters), declaring(boundParameters, List.of(body)))))),
 				Objects.requireNonNull(expected));
 	}
 
@@ -5927,6 +6033,18 @@ final class JavaLowering implements JavaEmitter.Context {
 	 */
 	private ClassType anonymousType(ClassType type, New creation, @Nullable JavaType expected, int pos) {
 		JavaClass made = type.declaration();
+		boolean conforms = switch (expected) {
+			case null -> true;
+			case ClassType named ->
+				named.declaration().name.equals("java.lang.Object") || made.isSubclassOf(named.declaration());
+			case Primitive primitive -> primitive == Primitive.VOID;
+			case ArrayType array -> false;
+			default -> true;
+		};
+		if (!conforms) {
+			// no type arguments make the class one: said before its body is lowered
+			throw error(pos, "incompatible types: cannot infer type arguments for " + made.simpleName() + "<>");
+		}
 		JavaType found;
 		if (made.isInterface) {
 			Inference inference = this.types.new Inference(diamondParameters(type));
@@ -6127,15 +6245,32 @@ final class JavaLowering implements JavaEmitter.Context {
 	/**
 	 * Whether an argument is a call whose own arguments may need the type it is wanted
 	 * as: a lambda or a method reference among them takes the types of its parameters
-	 * from what the call infers, which can come from that type alone.
+	 * from what the call infers, which can come from that type alone; or an anonymous
+	 * class made with {@code <>}, whose supertype can come from that type alone.
 	 */
 	private static boolean mayNeedTarget(Expression argument) {
+		if (argument instanceof New creation && creation.type().diamond() && creation.body() != null) {
+			return true;
+		}
 		List<Expression> arguments = switch (argument) {
 			case Call call -> call.arguments();
 			case New creation when creation.type().diamond() && creation.body() == null -> creation.arguments();
 			default -> List.of();
 		};
 		return arguments.stream().anyMatch(each -> needsTarget(each) || mayNeedTarget(each));
+	}
+
+	/**
+	 * Whether an argument is an anonymous class made with {@code <>}, or a call or a
+	 * creation with {@code <>} holding one among its arguments.
+	 */
+	private static boolean anonymousDiamond(Expression argument) {
+		return switch (argument) {
+			case New creation when creation.type().diamond() ->
+				creation.body() != null || creation.arguments().stream().anyMatch(JavaLowering::anonymousDiamond);
+			case Call call -> call.arguments().stream().anyMatch(JavaLowering::anonymousDiamond);
+			default -> false;
+		};
 	}
 
 	/**
@@ -6612,6 +6747,7 @@ final class JavaLowering implements JavaEmitter.Context {
 		int count = arguments.size();
 		Set<Integer> late = new HashSet<>();
 		LispReadException lateError = null;
+		boolean typedAsGiven = candidates.stream().anyMatch(candidate -> candidate.raw);
 		for (Expression argument : arguments) {
 			if (needsTarget(argument)) {
 				typed.add(null);
@@ -6621,7 +6757,9 @@ final class JavaLowering implements JavaEmitter.Context {
 			this.flexible = argument instanceof Call || (argument instanceof New creation && creation.type().diamond());
 			Typed lowered;
 			if (mayNeedTarget(argument)) {
-				if (eager == null) {
+				if (eager == null || (anonymousDiamond(argument) && !typedAsGiven)) {
+					// an anonymous class made with <> is lowered once, against the type
+					// its parameter gives it -- unless a member takes it as it is typed
 					late.add(typed.size());
 					typed.add(null);
 					continue;
@@ -8648,6 +8786,20 @@ final class JavaLowering implements JavaEmitter.Context {
 		}
 		JavaClass made = this.classes.local(Objects.requireNonNull(creation.body()), this.currentClass,
 				this.staticContext || this.early, extendedType);
+		if (creation.type().diamond() && !extendedType.equals(made.supertype(extended))) {
+			// made with <> against another type (a candidate tried, a call lowered once
+			// more, an earlier pass): what lowering it made in this pass is dropped, the
+			// body lowered again
+			Lowering earlier = this.inferredLowerings.remove(made);
+			if (earlier != null) {
+				Set<LispVal> dropped = Collections.newSetFromMap(new IdentityHashMap<>());
+				dropped.addAll(earlier.forms());
+				this.functions.removeIf(dropped::contains);
+				earlier.classes().forEach(this.loweredLocals::remove);
+			}
+			// what the passes repeat for is not this: a pass tries the same types
+			made.parameterized.put(extended, extendedType);
+		}
 		// outer.new Inner() { .. }: the instance around its superclass is the one given
 		made.superOuterGiven = creation.outer() != null;
 		if (!made.superOuterGiven && givesSuperOuter(made)) {
@@ -8689,7 +8841,22 @@ final class JavaLowering implements JavaEmitter.Context {
 			made.methods.add(constructor);
 			this.classes.changed();
 		}
-		lowerLocal(made);
+		if (creation.type().diamond() && !this.loweredLocals.contains(made)) {
+			int forms = this.functions.size();
+			int classes = this.loweredLocals.size();
+			this.inferredLowerings.put(made, new Lowering(List.of(), List.of()));
+			try {
+				lowerLocal(made);
+			}
+			finally {
+				this.inferredLowerings.put(made,
+						new Lowering(List.copyOf(this.functions.subList(forms, this.functions.size())),
+								this.loweredLocals.stream().skip(classes).toList()));
+			}
+		}
+		else {
+			lowerLocal(made);
+		}
 		called(constructor);
 		uses(made);
 		makes(made);
@@ -8857,16 +9024,11 @@ final class JavaLowering implements JavaEmitter.Context {
 	}
 
 	private LispVal localVariable(LocalVariable variable, List<Statement> statements, int rest, boolean tail) {
-		List<LispVal> bindings = new ArrayList<>();
+		List<Declared> locals = new ArrayList<>();
 		for (Declarator declarator : variable.declarators()) {
-			Declared declared = declare(variable, declarator);
-			bindings.add(list(declared.local().symbol(), declared.value()));
+			locals.add(declare(variable, declarator));
 		}
-		List<LispVal> let = new ArrayList<>();
-		let.add(cl(bindings.size() == 1 ? "let" : "let*"));
-		let.add(list(bindings));
-		let.addAll(sequence(statements, rest, tail));
-		return list(let);
+		return boundInTurn(locals, sequence(statements, rest, tail), "let");
 	}
 
 	private List<LispVal> scoped(Statement statement, boolean tail) {
@@ -9051,12 +9213,11 @@ final class JavaLowering implements JavaEmitter.Context {
 				Target target = loopTarget();
 				this.scopes.push(new Scope(null));
 				List<LispVal> before = new ArrayList<>();
-				List<LispVal> bindings = new ArrayList<>();
+				List<Declared> locals = new ArrayList<>();
 				for (Statement initializer : loop.initializers()) {
 					if (initializer instanceof LocalVariable variable) {
 						for (Declarator declarator : variable.declarators()) {
-							Declared declared = declare(variable, declarator);
-							bindings.add(list(declared.local().symbol(), declared.value()));
+							locals.add(declare(variable, declarator));
 						}
 					}
 					else {
@@ -9074,7 +9235,7 @@ final class JavaLowering implements JavaEmitter.Context {
 							return forms;
 						}), target));
 				this.scopes.pop();
-				LispVal form = bindings.isEmpty() ? progn(before) : form(cl("let*"), prepend(list(bindings), before));
+				LispVal form = locals.isEmpty() ? progn(before) : boundInTurn(locals, before, "let*");
 				return List.of(located(form, loop.pos()));
 			}
 			case ForEach loop:
@@ -9281,7 +9442,8 @@ final class JavaLowering implements JavaEmitter.Context {
 		List<LispVal> body = scoped(loop.body(), false);
 		this.targets.pop();
 		this.scopes.pop();
-		List<LispVal> round = loopBody(List.of(JavaForms.let(variable, value, body)), target);
+		List<LispVal> round = loopBody(List.of(JavaForms.let(variable, value, declaring(List.of(bound), body))),
+				target);
 		List<LispVal> bindings = new ArrayList<>();
 		LispVal test;
 		if (through == null) {
@@ -10071,12 +10233,19 @@ final class JavaLowering implements JavaEmitter.Context {
 		return !buffer.initialized.contains(declaration.name);
 	}
 
+	/**
+	 * {@return the static initializers of the classes initialized before {@code main}}
+	 * What cannot throw is set ahead of them by top-level forms of its own
+	 * ({@link #settings}), and the functions initializing the lazy classes are made.
+	 */
 	private List<LispVal> initialization() {
 		if (this.order.decide(this.initEffects, this.methodEffects, type -> immutable(type, new HashSet<>()))) {
 			this.classes.changed();
 		}
 		boolean threads = scheduled();
-		List<LispVal> forms = new ArrayList<>(this.classInits);
+		// the settings that cannot throw are top-level forms ahead of the
+		// initialization; what can throw is reported as what main leaves uncaught
+		List<LispVal> settings = new ArrayList<>(this.classInits);
 		for (JavaClass declaration : this.classes.all()) {
 			if (declaration.intrinsic || (isPartial(declaration) && !this.classes.used.contains(declaration))) {
 				continue;
@@ -10095,7 +10264,7 @@ final class JavaLowering implements JavaEmitter.Context {
 			// replaced: it holds null
 			for (Field field : this.declared.get(0).fields) {
 				if (names(field.type, buffer.declared)) {
-					forms.add(call("setq", JavaNames.global(field), defaultValue(field.type)));
+					settings.add(call("setq", JavaNames.global(field), defaultValue(field.type)));
 				}
 			}
 		}
@@ -10127,16 +10296,17 @@ final class JavaLowering implements JavaEmitter.Context {
 				}
 				Object constant = constantOf(field);
 				if (constant != null) {
-					forms.add(call("setq", JavaNames.global(field),
+					settings.add(call("setq", JavaNames.global(field),
 							constant instanceof String text ? constantString(text).form() : constant(constant).form()));
 				}
 				else if (fresh && (field.initializer == null || this.order.isLazy(declaration)
 						|| called.reads.contains(field))) {
 					// a field read ahead of its initializer holds its type's default
-					forms.add(call("setq", JavaNames.global(field), defaultValue(field.type)));
+					settings.add(call("setq", JavaNames.global(field), defaultValue(field.type)));
 				}
 			}
 		}
+		List<LispVal> forms = new ArrayList<>();
 		for (JavaClass declaration : this.order.eager()) {
 			forms.addAll(Objects.requireNonNull(this.staticInits.get(declaration)));
 		}
@@ -10148,7 +10318,7 @@ final class JavaLowering implements JavaEmitter.Context {
 			LispSymbol done = JavaNames.initialized(declaration);
 			this.variables.add(list(cl("defvar"), done));
 			if (isFresh(declaration)) {
-				forms.add(call("setq", done, NIL));
+				settings.add(call("setq", done, NIL));
 			}
 			List<LispVal> body = new ArrayList<>();
 			body.add(call("setq", done, T));
@@ -10186,6 +10356,7 @@ final class JavaLowering implements JavaEmitter.Context {
 			}
 			this.functions.add(list(cl("defun"), JavaNames.initializer(declaration), NIL, run));
 		}
+		this.settings.addAll(settings);
 		return forms;
 	}
 

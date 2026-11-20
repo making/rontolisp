@@ -149,6 +149,12 @@ interface JavaEmitter {
 		LispVal regions();
 
 		/**
+		 * The names in words of the regions the program holds, as its library reads them:
+		 * the names it writes, or the names it reads ({@code JavaZoneNames}).
+		 */
+		LispVal zoneNames(boolean read);
+
+		/**
 		 * Whether the program can hold a {@code TemporalAccessor} of a class outside
 		 * {@code java.time} itself: a formatter's result, a class of its own.
 		 */

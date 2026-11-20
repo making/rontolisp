@@ -31,13 +31,16 @@ import java.time.Instant;
 import java.time.LocalDateTime;
 import java.time.ZoneOffset;
 import java.util.ArrayList;
+import java.util.Collection;
 import java.util.List;
-import java.util.Set;
 
 final class ZoneChanges extends ZoneRules {
 
     /** The regions read so far and their names: few, so they are looked through. */
     private static String[] names = new String[4];
+
+    /** The names of the regions the program holds, read once (held). */
+    private static String[] held;
 
     private static ZoneRules[] read = new ZoneRules[4];
 
@@ -185,24 +188,51 @@ final class ZoneChanges extends ZoneRules {
         return null;
     }
 
-    /** The names of the regions the program holds, added to a set. */
-    static void names(Set<String> names) {
-        String table = table0();
-        int head = table.indexOf(' ');
-        List<String> areas = new ArrayList<>();
-        for (int at = 0; at < head; at = table.indexOf(',', at) + 1) {
-            areas.add(table.substring(at, table.indexOf(',', at)));
-        }
-        int at = head + 1;
-        while (at < table.length()) {
-            int rules = table.indexOf(' ', at);
-            for (int end = table.indexOf('!', at); end >= 0 && end < rules; end = table.indexOf('!', at)) {
-                char first = table.charAt(at);
-                names.add(first < 'A' ? areas.get(first - '#') + table.substring(at + 1, end)
-                        : table.substring(at, end));
-                at = end + 1;
+    /**
+     * The names of the regions the program holds, read once: the head's areas, then each
+     * name up to its '!', which no set of rules has.
+     */
+    static synchronized String[] held() {
+        String[] names = held;
+        if (names == null) {
+            String table = table0();
+            int head = table.indexOf(' ');
+            int areas = 0;
+            for (int at = 0; at < head; at = table.indexOf(',', at) + 1) {
+                areas++;
             }
-            at = rules + 1;
+            String[] area = new String[areas];
+            for (int at = 0, i = 0; at < head; at = table.indexOf(',', at) + 1) {
+                area[i++] = table.substring(at, table.indexOf(',', at));
+            }
+            int count = 0;
+            for (int i = head; i < table.length(); i++) {
+                if (table.charAt(i) == '!') {
+                    count++;
+                }
+            }
+            names = new String[count];
+            int n = 0;
+            int at = head + 1;
+            while (at < table.length()) {
+                int rules = table.indexOf(' ', at);
+                for (int end = table.indexOf('!', at); end >= 0 && end < rules; end = table.indexOf('!', at)) {
+                    char first = table.charAt(at);
+                    names[n++] = first < 'A' ? area[first - '#'] + table.substring(at + 1, end)
+                            : table.substring(at, end);
+                    at = end + 1;
+                }
+                at = rules + 1;
+            }
+            held = names;
+        }
+        return names;
+    }
+
+    /** The names of the regions the program holds, added to a collection. */
+    static void names(Collection<String> names) {
+        for (String name : held()) {
+            names.add(name);
         }
     }
 

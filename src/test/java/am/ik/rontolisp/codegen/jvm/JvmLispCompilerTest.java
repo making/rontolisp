@@ -4159,7 +4159,7 @@ class JvmLispCompilerTest {
 	}
 
 	@Test
-	void aTopLevelFormPastTheMethodSizeLimitOutlinesItsBranches() throws Exception {
+	void aTopLevelFormOrAnInitializerPastTheMethodSizeLimitIsCut() throws Exception {
 		// f64: the top level is chunked only BETWEEN forms, so one form whose own code
 		// passes the 64 KB per-method cap has nowhere to go. Its branches become
 		// methods of their own instead (compiler/AstOutliner over the form's evaluated
@@ -4185,6 +4185,13 @@ class JvmLispCompilerTest {
 			sb.append("  (setq r (+ r (car (list ").append(i % 7).append(" 0))))\n");
 		}
 		sb.append("  (print r))\n");
+		// <clinit> sets each global of no value to the UNBOUND marker, 6 bytes a global:
+		// 12,000 of them were 72,011 bytes in that one method until the settings were
+		// cut into methods of their own (JvmClinitSteps)
+		for (int i = 0; i < 12000; i++) {
+			sb.append("(defvar *v").append(i).append("*)\n");
+		}
+		sb.append("(print (list (boundp '*v0*) (setq *v11999* 7)))\n");
 		List<LispVal> forms = am.ik.rontolisp.eval.LispPreludeLibrary
 			.process(LispReader.readAllFromString(sb.toString()));
 		byte[] classBytes = new JvmLispCompiler("Test").compile(forms);
@@ -4198,7 +4205,8 @@ class JvmLispCompilerTest {
 		// The source builds no closure of its own, so a lambda method in the class is
 		// one the outlining introduced for a branch.
 		assertThat(sizes.keySet()).as("a branch became a method of its own").anyMatch(n -> n.startsWith("_lambda_"));
-		assertThat(compileAndRun(forms)).isEqualTo("(BRANCH-3 2239603)\n17997");
+		assertThat(sizes.keySet()).as("the globals' settings were cut").contains("_clinit$unbound$5");
+		assertThat(compileAndRun(forms)).isEqualTo("(BRANCH-3 2239603)\n17997\n(NIL 7)");
 	}
 
 	@Test

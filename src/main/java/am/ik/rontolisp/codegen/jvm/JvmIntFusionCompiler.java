@@ -594,9 +594,12 @@ final class JvmIntFusionCompiler {
 		if (ops > MAX_OPS || site.leaves.size() > MAX_EXPR_LEAVES) {
 			return false;
 		}
-		if (ops < 2 && !hasRawRead(site.leaves) && !hasConstOperand(tree)) {
+		if (ops < 2 && !hasRawRead(site.leaves) && !hasConstOperand(tree)
+				&& !(tree instanceof OpNode op && LispNames.MASK_SIGNED_FIELD.equals(op.op()))) {
 			// A single operation over plain boxed leaves runs no leaner fused; the
 			// generic call keeps owning that shape (and its emission stays byte-stable).
+			// A masked signed field has no call to keep: it declines to the lowering,
+			// inline at every site, where the fused site is one call of a shared method.
 			return false;
 		}
 		boolean lineFree = reportsOnlyCallerSite(root, ctx.siteCurrent);

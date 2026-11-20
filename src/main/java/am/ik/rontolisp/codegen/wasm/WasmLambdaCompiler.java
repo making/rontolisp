@@ -170,7 +170,6 @@ final class WasmLambdaCompiler {
 		}
 
 		Map<String, Integer> savedLocals = new HashMap<>(ctx.locals);
-		Set<String> savedBoxed = ctx.boxedVars;
 		// The parameters are bound HERE, in the caller's frame, so this is a binder and
 		// it owes the same question every other binder asks: does a closure in the body
 		// read this name? One owner answers it -- FreeVarAnalyzer.findCapturedVars, the
@@ -181,21 +180,10 @@ final class WasmLambdaCompiler {
 		Set<String> capturedParams = FreeVarAnalyzer.findCapturedVars(bodyExprs, new HashSet<>(paramNames),
 				ctx.functions.keySet(), ctx.captureMemo);
 		capturedParams.addAll(WasmLandingPad.regionAssignedVars(bodyExprs, new HashSet<>(paramNames), ctx.regionMemo));
-		ctx.boxedVars = new HashSet<>(savedBoxed);
-		// The maps are keyed on names, so an outer unboxed dual-representation local or
-		// local integer lambda the parameters SHADOW must stop answering for the body.
-		Map<String, WasmIntFusionCompiler.RawLocal> savedRawLocals = ctx.rawLocals;
-		Map<String, WasmIntFusionCompiler.LocalIntLambda> savedLocalLambdas = ctx.localIntLambdas;
-		if (paramNames.stream().anyMatch(savedRawLocals::containsKey)) {
-			Map<String, WasmIntFusionCompiler.RawLocal> shadowed = new HashMap<>(savedRawLocals);
-			paramNames.forEach(shadowed::remove);
-			ctx.rawLocals = shadowed;
-		}
-		if (paramNames.stream().anyMatch(savedLocalLambdas::containsKey)) {
-			Map<String, WasmIntFusionCompiler.LocalIntLambda> shadowed = new HashMap<>(savedLocalLambdas);
-			paramNames.forEach(shadowed::remove);
-			ctx.localIntLambdas = shadowed;
-		}
+		// What an outer binding of a parameter's name was -- a raw local, a declared
+		// range or array kind, a cell -- stops answering for the body.
+		WasmShadowedNames outer = WasmShadowedNames.shadow(paramNames, ctx);
+		ctx.boxedVars = new HashSet<>(ctx.boxedVars);
 
 		for (int i = 0; i < positional; i++) {
 			String name = paramNames.get(i);
@@ -262,9 +250,7 @@ final class WasmLambdaCompiler {
 		}
 
 		ctx.locals = savedLocals;
-		ctx.boxedVars = savedBoxed;
-		ctx.rawLocals = savedRawLocals;
-		ctx.localIntLambdas = savedLocalLambdas;
+		outer.restore(ctx);
 	}
 
 	/**

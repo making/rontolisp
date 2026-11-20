@@ -486,6 +486,7 @@ final class WasmHandlerCaseCompiler {
 		String spillVarName = "__hc_ne_spill$" + spillSlot;
 		java.util.Map<String, Integer> shadowedSlots = new java.util.HashMap<>();
 		ctx.locals.put(spillVarName, spillSlot);
+		WasmShadowedNames outer = null;
 		try {
 			for (int i = 0; i < varVals.size(); i++) {
 				LispVal varVal = varVals.get(i);
@@ -511,6 +512,7 @@ final class WasmHandlerCaseCompiler {
 				}
 				shadowedSlots.put(varName, ctx.locals.put(varName, slot));
 			}
+			outer = WasmShadowedNames.shadow(shadowedSlots.keySet(), ctx);
 			if (clauseParts.size() <= 2) {
 				ctx.writer.write(Instruction.REF_NULL);
 				ctx.writer.writeHeapType(Type.EQ.code());
@@ -527,6 +529,9 @@ final class WasmHandlerCaseCompiler {
 			ctx.writer.writeUnsignedLeb128(resultSlot);
 		}
 		finally {
+			if (outer != null) {
+				outer.restore(ctx);
+			}
 			ctx.locals.remove(spillVarName);
 			for (java.util.Map.Entry<String, Integer> e : shadowedSlots.entrySet()) {
 				Integer prev = e.getValue();
@@ -551,9 +556,11 @@ final class WasmHandlerCaseCompiler {
 		List<LispVal> clauseParts = letBound(sourceClause, ctx);
 		String varName = null;
 		Integer shadowedSlot = null;
+		WasmShadowedNames outer = null;
 		if (clauseParts.get(1) instanceof LispCons varList && varList.car() instanceof LispSymbol var) {
 			varName = var.name();
 			shadowedSlot = ctx.locals.put(varName, valueSlot);
+			outer = WasmShadowedNames.shadow(List.of(varName), ctx);
 		}
 		try {
 			if (clauseParts.size() <= 2) {
@@ -572,6 +579,9 @@ final class WasmHandlerCaseCompiler {
 			ctx.writer.writeUnsignedLeb128(resultSlot);
 		}
 		finally {
+			if (outer != null) {
+				outer.restore(ctx);
+			}
 			if (varName != null) {
 				if (shadowedSlot != null) {
 					ctx.locals.put(varName, shadowedSlot);

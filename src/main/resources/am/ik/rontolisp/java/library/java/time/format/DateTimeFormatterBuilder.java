@@ -5,11 +5,11 @@
 // A formatter made part by part. A number appended right after another, with a fixed
 // width and no sign, is read as one of a run (Step.Digits); any other part ends the run.
 // A pattern's letters are the parts the API documentation gives for each letter and
-// count; the refusals' words are a JDK 25's. The letters that need a calendar's weeks,
-// a quarter, a day count of another calendar, a day's period or a zone's name in words
-// are refused by name.
+// count; the refusals' words are a JDK 25's. A localized form is the pattern of its
+// styles in the formatter's locale, as a JDK writes it (Texts).
 package java.time.format;
 
+import java.time.ZoneId;
 import java.time.chrono.ChronoLocalDate;
 import java.time.chrono.Chronology;
 import java.time.temporal.TemporalField;
@@ -18,6 +18,7 @@ import java.util.List;
 import java.util.Locale;
 import java.util.Map;
 import java.util.Objects;
+import java.util.Set;
 
 public final class DateTimeFormatterBuilder {
 
@@ -282,6 +283,66 @@ public final class DateTimeFormatterBuilder {
 
     public DateTimeFormatterBuilder appendZoneId() {
         return add(new Step.ZoneName(0));
+    }
+
+    public DateTimeFormatterBuilder appendZoneText(TextStyle textStyle) {
+        Objects.requireNonNull(textStyle, "textStyle");
+        return add(new Step.ZoneText(textStyle, false, null));
+    }
+
+    public DateTimeFormatterBuilder appendZoneText(TextStyle textStyle, Set<ZoneId> preferredZones) {
+        Objects.requireNonNull(textStyle, "textStyle");
+        Objects.requireNonNull(preferredZones, "preferredZones");
+        return add(new Step.ZoneText(textStyle, false, Set.copyOf(preferredZones)));
+    }
+
+    public DateTimeFormatterBuilder appendGenericZoneText(TextStyle textStyle) {
+        Objects.requireNonNull(textStyle, "textStyle");
+        return add(new Step.ZoneText(textStyle, true, null));
+    }
+
+    public DateTimeFormatterBuilder appendGenericZoneText(TextStyle textStyle, Set<ZoneId> preferredZones) {
+        Objects.requireNonNull(textStyle, "textStyle");
+        Objects.requireNonNull(preferredZones, "preferredZones");
+        return add(new Step.ZoneText(textStyle, true, Set.copyOf(preferredZones)));
+    }
+
+    public DateTimeFormatterBuilder appendDayPeriodText(TextStyle style) {
+        Objects.requireNonNull(style, "style");
+        TextStyle normal = style.asNormal();
+        return add(new Step.DayPeriod(normal == TextStyle.FULL ? 0 : normal == TextStyle.SHORT ? 1 : 2));
+    }
+
+    /**
+     * A localized form, the pattern of its styles in the formatter's locale: the compiler
+     * notes a zone's name in words where the time's style can be full or long, then
+     * calls localized.
+     */
+    public native DateTimeFormatterBuilder appendLocalized(FormatStyle dateStyle, FormatStyle timeStyle);
+
+    static DateTimeFormatterBuilder localized(DateTimeFormatterBuilder builder, FormatStyle dateStyle,
+            FormatStyle timeStyle) {
+        if (dateStyle == null && timeStyle == null) {
+            throw new IllegalArgumentException("Either the date or time style must be non-null");
+        }
+        return builder.add(new Step.Styled(dateStyle, timeStyle));
+    }
+
+    public static String getLocalizedDateTimePattern(FormatStyle dateStyle, FormatStyle timeStyle, Chronology chrono,
+            Locale locale) {
+        Objects.requireNonNull(locale, "locale");
+        Objects.requireNonNull(chrono, "chrono");
+        if (dateStyle == null && timeStyle == null) {
+            throw new IllegalArgumentException("Either dateStyle or timeStyle must be non-null");
+        }
+        return Texts.pattern(Texts.kind(locale), dateStyle, timeStyle);
+    }
+
+    /** A pattern's parts as one group, which a localized form writes and reads through. */
+    static Step.Group parts(String pattern) {
+        DateTimeFormatterBuilder builder = new DateTimeFormatterBuilder();
+        Patterns.read(builder, pattern);
+        return new Step.Group(builder.open().toArray(new Step[0]), false);
     }
 
     public DateTimeFormatterBuilder appendZoneRegionId() {

@@ -327,25 +327,31 @@ rontolisp でコンパイルし直すとプログラムに反映されます。`
 非推奨のメンバー（`getYear`、`getHours`）は名前を挙げて拒否します。
 
 **フォーマッターが書く語と週は `Locale` にあるロケールのものです。** 月、曜日、紀元、四半期、
-午前と午後は、ルートロケール、`ENGLISH`、`US`、`UK`、`CANADA` の語です。週は、`UK` では月曜日に
-始まり最初の週が年の 4 日を含み、それ以外では日曜日に始まり 1 日を含みます（`WeekFields.of`）。
-ロケールを指定しない `ofPattern` と ISO の形式は、デフォルトのロケールである `US` を使います。
-パターンの文字のうち、一日の時間帯（`B`）とゾーンの語による名前（`z`、`v`）は、パターンを読む
-時点で `UnsupportedOperationException` になります。`ofLocalizedDate` とその仲間、`DecimalStyle`、
-`toFormat`、`parseUnresolved`、`ParsePosition` から読む `parse`、`withResolverFields` は、
-名前を示して拒否されます。文字列中のゾーンの名前は、プログラムが持つゾーン（上記）の中から
-読みます。フォーマッターの文字列表現では、`parseDefaulting` は `Default(field,value)` と表示
-されます。JDK はオブジェクトの識別子を表示します。完全な形式の地域化オフセット（`OOOO` で
-`GMT+1` を読む場合など）の読み取り中に JDK がインデックスの例外で失敗する文字列は、先頭の位置で
-拒否します。また、寛容な読み取りで JDK は `CE` を紀元として読み、年の整列週の中の曜日を
-ここでは従っていない規則で決めます。`ChronoField` でないフィールド（週、四半期、ユリウス日、
-プログラムが書いたもの）は読んだ順に解決します。JDK の順序は実行のたびに変わります。違いが
-現れるのは、文字列が曜日を 2 度（名前とロケールの週の中の番号で）与える場合と、そうした
-フィールドが 2 つの日付または 2 つの時刻になる場合だけです。
+午前と午後、一日の時間帯、地域化された形式（`ofLocalizedDate` とその仲間）、ゾーンの語による
+名前は、ルートロケール、`ENGLISH`、`US`、`UK`、`CANADA` について JDK が書くものです。週は、`UK`
+では月曜日に始まり最初の週が年の 4 日を含み、それ以外では日曜日に始まり 1 日を含みます
+（`WeekFields.of`）。ロケールを指定しない `ofPattern`、地域化された形式、ISO の形式は、
+デフォルトのロケールである `US` を使います。`localizedBy` はそのロケールと ISO 暦を使います。
+これらのロケールはどれも、ほかの暦、ゾーン、数字を指定しないからです。ゾーンの語による名前は、
+ゾーンの ID と同じく、プログラムが持つゾーン（上記）の中から読みます。JDK がプログラムの持たない
+地域として読む名前は、プログラムが持つ地域のうちその名前を書くものとして読むか、読みません。
+JDK は、あるゾーンの名前を `ENGLISH` について書いたあと、同じゾーンの `UK` と `CANADA` の名前の
+一部を `ENGLISH` のものとして書きます（`CANADA` で `Abidjan Daylight Saving Time` と書いていた
+ものを `Abidjan Daylight Time` と書く）。ここで書く名前は、その前に JDK が書くものです。
+`DecimalStyle`、`toFormat`、`parseUnresolved`、`ParsePosition` から読む `parse`、
+`withResolverFields`、`ofLocalizedPattern` は、名前を示して拒否されます。フォーマッターの
+文字列表現では、`parseDefaulting` は `Default(field,value)` と表示されます。JDK はオブジェクトの
+識別子を表示します。完全な形式の地域化オフセット（`OOOO` で `GMT+1` を読む場合など）の
+読み取り中に JDK がインデックスの例外で失敗する文字列は、先頭の位置で拒否します。また、寛容な
+読み取りで JDK は `CE` を紀元として読み、年の整列週の中の曜日をここでは従っていない規則で
+決めます。`ChronoField` でないフィールド（週、四半期、ユリウス日、プログラムが書いたもの）は
+読んだ順に解決します。JDK の順序は実行のたびに変わります。違いが現れるのは、文字列が曜日を
+2 度（名前とロケールの週の中の番号で）与える場合と、そうしたフィールドが 2 つの日付または
+2 つの時刻になる場合だけです。
 
 **`java.time` の暦は ISO だけです。** `Chronology.of` はほかの暦を知らず、
 `getAvailableChronologies()` は ISO だけを返します。`IsoChronology.resolveDate`、
-`AbstractChronology`、`ZoneId.getDisplayName`、`Duration.dividedBy` は、名前を示して拒否されます。
+`AbstractChronology`、`Duration.dividedBy` は、名前を示して拒否されます。
 フィールドから値を作れなかった文字列のメッセージは、フィールドを決まった順で並べます
 （`{Year=2020, MonthOfYear=13}`）。時のない時刻の複数のフィールドが範囲外のときも、決まった
 フィールドを先に拒否します。JDK ではどちらの順序も実行のたびに変わります。`ValueRange`、

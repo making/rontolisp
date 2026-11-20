@@ -125,10 +125,11 @@ Collections, a bridge's cast and PriorityQueue" below).
   Rejected: `null` as `:null` (every reference test and every slot default pays, where only a
   `Boolean` box does now). A boxed `long`, `byte`, `short` and `float` is the cons
   `(value . tag)` ("Boxes" below).
-- **`int` is an integer kept in range** by the unconditional mask
-  `(- (logand (+ x 2^31) (2^32 - 1)) 2^31)`, `short` and `byte` the same at 16 and 8 bits;
-  `long` is `(%mask-signed-field 64 x)`; `char` an integer whose static type prints it, a
-  `float` the double of its value. No declaration is emitted ("Numbers" below).
+- **`int` is an integer kept in range** by `(%mask-signed-field 32 x)`, `short` and `byte`
+  the same at 16 and 8 bits, `long` at 64 (the unconditional mask
+  `(- (logand (+ x 2^31) (2^32 - 1)) 2^31)` until k56); `char` an integer whose static type
+  prints it, a `float` the double of its value. A variable of an integral type is declared of
+  its range, an operand the form does not bound asserted with `the` ("Numbers" below).
 - **A class is a `defstruct`** named by the class's BINARY name (`Outer$Inner`,
   `java.lang.ThreadLocal`; k01, `JavaNames.structure`: the structure's name is the one
   thing of a class the run time reads, for `Object.toString()`, and every other Lisp name
@@ -171,9 +172,11 @@ Collections, a bridge's cast and PriorityQueue" below).
   variable bound to `(%java-thrown c)`; a condition no clause takes goes on as it came;
   `finally` is `unwind-protect`. What the run time raises is converted AT THE CATCH
   ("Exceptions" below).
-- **The program runs inside `(%reporting-uncaught #'%java-uncaught-line (%host-exit 1) init.. (main))`**:
+- **The program runs inside `(%reporting-uncaught #'%java-uncaught-line (%host-exit 1) (%initialization) (main))`**:
   what nothing caught is a JDK's line, the pipeline's location lines under it and the status 1
   on four backends, with no handler holding the condition ("Exceptions" below).
+  `%initialization` is there only where a class is initialized before `main` ("Static
+  initialization" below).
 - **`instanceof` / a cast**: a class is its predicate; an interface the generated `Iface%is`
   (the predicates of the topmost classes implementing it, of the library's values that are it,
   and of its lambdas: "Lambdas" below); a library class its own (`simple-string-p`, `integerp`,
@@ -1199,6 +1202,27 @@ lub of the lowers, else an upper, else OPEN.
   with `<>` finds -- from the target for an interface, from the constructor's arguments
   (lowered a second time with the class's constructor) for a class --, refused as javac
   refuses when an argument found is a capture (`cannot infer type arguments for G<>`).
+- **As an argument it waits for its parameter's type** (k61, 2026-11-20; `mayNeedTarget`,
+  `anonymousDiamond`): such an argument, or a call or a `<>` creation holding one, is never
+  lowered with no target first (the `eager` try), but after the call's inference, as a
+  call holding a lambda is; with several candidates, against each one's parameter. It was
+  lowered with no target, extended `ArrayList<Object>` and was refused (`cannot be applied
+  to given types; .. found: String,`, the anonymous class's name being empty). A member
+  taking its argument as typed (`raw`, `println`) still takes it lowered with no target,
+  as javac's `Object` would. A class the expected type cannot be an instance of by its
+  class is refused before the body is lowered, with javac's line (`incompatible types:
+  cannot infer type arguments for HashMap<>`), so that a candidate whose parameter it
+  cannot be (`order(Runnable)` beside `order(Comparator<String>)`) is not taken.
+  - **Lowered again against another supertype** (`inferredLowerings`): an anonymous class
+    is one `JavaClass` per declaration (`JavaClasses.local`) lowered once a pass
+    (`loweredLocals`), so a candidate tried first (`total(Object)` beside
+    `total(List<Integer>)`) fixed its supertype, and a lowering that threw marked it
+    lowered with no functions. Now its supertype is set anew when a creation finds
+    another, and the functions and the classes its earlier lowering in the pass made are
+    dropped and lowered again. Not a `classes.changed()`: every pass tries the types in
+    the same order, so the passes never settled.
+  - **With `<>`, every method it declares that is not private overrides one** (JLS
+    15.9.5; javac's `method does not override or implement a method from a supertype`).
 - **Measured: `functionp` first is kept.** 20,000,000 calls of a lambda and 20,000,000 of a
   class through one interface, the lambda a function / a structure holding it: JVM 0.76 /
   1.57 s, wasm 1.35 / 1.41 s (2026-11-17, the `bench.sh` method, best of three).
@@ -1369,7 +1393,8 @@ measured programs.
   comparison is unchanged. Each setting is a top-level form ahead of the initialization
   (`JavaLowering.internings`, k55): inside the one initialization form, the corpus's 2,296
   of them took that form's JVM method to 65,740 B, past the 65,535 a method holds (a form is
-  cut only where [jvm-method-size-limits.md](jvm-method-size-limits.md) says). `new Object()` is `(make-array 0 :fill-pointer 0)`: no other value
+  cut only where [jvm-method-size-limits.md](jvm-method-size-limits.md) says; the rest of
+  the initialization left the form with k63, "Static initialization"). `new Object()` is `(make-array 0 :fill-pointer 0)`: no other value
   of a program is a vector with a fill pointer that is no string.
 - **`String.format`** is `%java-format` over the argument array and the program's `%string`
   (and, where the program makes a `BigInteger` or a `BigDecimal`, the function writing
@@ -2212,7 +2237,12 @@ has nothing of what a region needs -- the forms it had before.** Provenance:
   program holding all; a reader following them (find the set, skip its head, read its
   runs into this set's offsets) is 8,629 B of wasm, paid by every program holding a
   region, and `JavaZones.table` would have to resolve a copy whose set is not held. Not
-  taken; measured again after `.todo/k56`.
+  taken. **Measured again after k56** (2026-11-20, a reader re-written from that
+  description into `region`, `copied` and `place`, a program holding Paris): +8,394 B on the
+  build before, +5,867 after (`copied` 6,661 -> 4,651 B, most of what is left its `long[]`
+  reads, the generic dispatch); one with an `int[]` and an exception of its own also cost
+  `placed` 2,181 B of proofs the type-test fold had. Every program holding a region pays
+  it, 11,492 B come back only where one holds them all: still not taken.
 - **A program's table** (`JavaZones.table`, the constant `ZoneChanges.table0()` is) holds
   the regions it holds: the areas its names are shortened by (`America/`: a name up to
   its last slash, written as one character from `#`; an area is named where that saves
@@ -2221,9 +2251,9 @@ has nothing of what a region needs -- the forms it had before.** Provenance:
 - **Not taken: a region as arrays the compiler writes** (k51), to spare a program naming
   its regions the reader: Paris's 102 listed changes as three `long[]` literals are
   38,732 B of wasm (each second past an `i31` a boxed literal) against its 328 B of text,
-  so the reader (17.9 KB) is the cheaper half from the first region on. What the reader
-  costs is the arithmetic's: some 200 B of wasm per `int` or `long` operation
-  (`.todo/k56`).
+  so the reader (17.9 KB) is the cheaper half from the first region on. Some 200 B of
+  wasm per `int` or `long` operation were most of what the reader cost; since k56 it is
+  13.2 KB ("Numbers"), most of what is left its array accesses.
 - **The rules in the library**: `ZoneChanges` (under `ZoneRules`, which stays the rules
   of one offset: a program making none has `ZoneRules` as it was) holds the seconds of
   the changes with the clock's and the standard offset after each, and the yearly rules
@@ -2270,7 +2300,7 @@ has nothing of what a region needs -- the forms it had before.** Provenance:
   233; `now(zone).toString()` 8,361 -> 6,687 / 5,659 -> 4,858 / 614. The walk: JVM 15 ->
   14 s, wasm 29 -> 26 s, the interpreter 5.9 -> 5.7 min: the rest is its lines' strings.
   The bytes: a program holding a region +6.7 KB of wasm (`ruled` 3,546 -> 7,528,
-  `placed` 5,426 -> 7,699 from the same forms), the arithmetic's again (`.todo/k56`); a
+  `placed` 5,426 -> 7,699 from the same forms; since k56 4,829 and 5,166); a
   window of one year with its bounds made by `LocalDate` was +8.9 KB, an index computed
   per element instead of two loops +9.7.
 - **What a program pays** (wasm, `ZonedDateTime.of(.., ZoneId.of(..)).plusHours(1)`;
@@ -2288,7 +2318,8 @@ has nothing of what a region needs -- the forms it had before.** Provenance:
   changes); and `"..." + offset` in `ZoneRules.toString` is the generic `%string` of a
   value the backend cannot type, which kept the float arm of `%java-to-string` and 17 KB
   of float printing (190,054 with `offset.getId()`). Every `int` and `long` operation of
-  the library is masked to its width, which is what the reader's 18 KB are.
+  the library is masked to its width, which was what the reader's 18 KB were ("Numbers":
+  13.2 KB since k56).
 - **The walk** (`.todo/artefacts/k42-java-time-the-rules-of-a-region/Regions.java`): every
   zone's changes and yearly rules, the instants and local date-times on, beside and
   between every change (and those the yearly rules make in five later years), seeded
@@ -2520,13 +2551,110 @@ the sizes: `.todo/artefacts/k52-java-time-what-the-formatter-left/`.
 - **The grid** (`Grid.java`, 4,561 lines): the interpreter (26 s), the JVM (2.6 s), wasm
   (0.9 s, 1,172,798 B) and the component (1.2 s) print a JDK's lines (the JDK 2.4 s);
   the k35 and k43 grids print theirs as before.
-- Not there: `.todo/k57` (CLDR's `B`, `z`, `v` and localized forms, `DecimalStyle`,
-  `toFormat`, `ParsePosition`, `withResolverFields`, the deviations, the cost of a
-  computed pattern).
+- Not there: CLDR's `B`, `z`, `v` and localized forms came with k57 ("java.time: the names
+  in words, the localized forms and a day's periods"); the rest is `.todo/k70`.
 - Pins: java-spec `weeks-quarters-a-month-day-an-offset-time-and-the-iso-calendar`
   (standalone, 94 lines); `JavaLoweringTest#theLibraryIsJavaSourceLoweredAsFarAsTheProgramReaches`
   (the letters, the resolving and the calendar where a program names them);
   `JavaLoweringTest#aProgramOfSeveralFilesIsReadFromItsSourceTree` (the type argument).
+
+## java.time: the names in words, the localized forms and a day's periods (2026-11-20, k57)
+
+**Invariant: a formatter writes and reads a zone's name in words, a localized form and a
+period of the day as a JDK 25 does in the five locales `Locale` has, among the zones the
+program has; a program pays for the names of the regions it holds, and for each of the
+three only where it can make the part that writes it.** Provenance:
+[java-frontend-provenance.md](java-frontend-provenance.md). The grid and the sizes:
+`.todo/artefacts/k57-java-time-what-k52-left/`.
+
+- **The localized forms** (`ofLocalizedDate`, `ofLocalizedTime`, `ofLocalizedDateTime` of
+  one style or two, `appendLocalized`, `getLocalizedDateTimePattern`): the patterns of the
+  four kinds of locale (`Texts.kind`: the root, English, British, Canadian; `ENGLISH` and
+  `US` alike) as a JDK answers `getLocalizedDateTimePattern`, a date and a time joined by a
+  space in the root's and by `, ` in English, U+202F before `a`. `Step.Styled` makes a
+  kind's parts from its pattern the first time it writes or reads (`Localized(MEDIUM,)` in
+  the text). A formatter's calendar shows in the refusal of a value with no date
+  (`Unable to extract ZoneId from temporal 12:00 with chronology ISO`: `Writing.shown`).
+- **A zone's names** (`zone-names.txt`, generated by `JavaZoneRulesTest` from a running
+  JDK's public `TimeZone`, `ZoneId.getDisplayName`, `DateFormatSymbols.getZoneStrings` and
+  `DateTimeFormatter`; `JavaZoneNames` makes a program's two tables, `ZoneNames` of the
+  library reads them): for each region of the tz database the names of standard time,
+  daylight time and the zone as a whole, short and in full, in the four kinds; UTC's, GMT's
+  and the fixed zones' are rules of `ZoneNames.fixed` the generator asserts; an offset, a
+  prefixed offset (`UTC+09:00`) and `UT` are written as their ids, and so is `NARROW`. A
+  name a JDK writes as `GMT-05:00` is the zone's offset now, not at the instant written
+  (`GMT` for Abidjan in 1900), so it is a string of the table.
+- **Which time's name is written** (a JDK's answers): of a value with an instant, its
+  rules' `isDaylightSavings` but in 9 zones' spans, where a JDK writes the other name
+  (Inuvik's summers of 1972 to 1978, and Edmonton, Vancouver, Winnipeg and their kin from
+  their change of 2026-11-01 on): the generator asks the JDK at each change of the zone
+  and halfway to the next, and the table holds the spans; of a local date-time, the zone as
+  a whole in a gap or an overlap and else `isDaylightSavings` at its one offset, with no
+  span; of a value with no date-time, the zone as a whole.
+- **A JDK's names change with what it wrote before**: once it has written a zone's names
+  for `ENGLISH`, it writes some of that zone's names for `UK` and `CANADA` as `ENGLISH` has
+  them (148 zones, measured: `Abidjan Daylight Time` for `Abidjan Daylight Saving Time` in
+  `CANADA`); the generator asks `ENGLISH` last and the grid writes it last (user docs).
+- **Reading a name**: an offset, a prefix with or without one, then the longest of the
+  names a JDK reads in the kind and the style (short for `z` and `v`, full for `zzzz` and
+  `vvvv`) and of the ids the program has, a name beating an id as long; the ids are looked
+  through once per reading (`ZoneName.longestId`, in either case where the reading ignores
+  case), where asking `ZoneId.region` for each length read the program's table at every
+  name it lacks (850 µs on wasm with 40 regions; the grid's names 18 s -> 1.75 s). A name
+  is read as the zone a JDK reads it as, with the time it is a name of -- 0, 1 or 2,
+  -1 for an id, shown in `Parsed`'s text --, which places an overlap's local date-time at
+  the later offset for 0 and 2 and the earlier for 1. A JDK reads many names as another
+  zone than the one writing them (`Accra Time` as Abidjan, `EET` in the root as the id
+  `EET`, `British Summer Time` as Abidjan, and in British English `Accra Time` as London);
+  a program carries the names a JDK reads as a region it holds and, where a JDK reads one
+  of its regions' names as a region it does not hold, reads it as the first of its own that
+  writes it (`JavaZoneNames.read`); a name a JDK reads as none is not read. Preferred zones
+  take a name one of them writes. In the program's table a name read alike in several kinds
+  is one entry, and a root city with its `(+0)` and `(+1)` one entry.
+- **Found in `VV` on the way** (k43 did not follow a JDK): an offset past 18 hours after
+  `UTC`, `GMT` or `UT` refuses the zone at its start, where the prefix alone was read;
+  `z` is `Z` and an id is read in either case where the reading ignores case.
+- **A day's period** (`B`, `appendDayPeriodText`; `Texts.periods`, `Texts.periodWords`):
+  the root's `AM` and `PM`; English's midnight and noon (a minute each, written before the
+  span they lie in), the morning, afternoon, evening and night, Canadian narrow words of its
+  own. Read: the longest of the style's words and its halves of a day (`AM`), leniently of
+  every style's. Resolved (a JDK's answers): with the hour of a half of the day and no half,
+  the half in which the hour (mod 12) and its minute lie in the period, the first where in
+  neither; alone (no field of a time) its middle, strictly nothing; with an hour of the day,
+  that hour and minute checked against the period before the hour is (`Conflict found:
+  Resolved time 24:00 conflicts with DayPeriod(12:00-24:00)`; midnight holds 24:00),
+  leniently not; the last period read wins; a half read with it is checked against the
+  middle.
+- **`localizedBy`**: the locale and ISO's calendar (the same formatter where both are its
+  own); no locale `Locale` has names a calendar, a zone or digits. Its null refusal is a
+  JDK's helpful message.
+- **Who pays.** The pattern letters `z`, `v` (`Patterns.zones()`) and `B`
+  (`Patterns.periods()`) make their parts only where a pattern can name them; a localized
+  form's time notes `z` unless its style is short, medium or null (`JavaIntrinsics`
+  natives of `ofLocalizedTime`, `ofLocalizedDateTime`, `appendLocalized`). `Parsed.periods()`
+  and `Parsed.zoneTexts()` / `Step.zoneTexts()` (whether the program makes `Step.DayPeriod`
+  or `Step.ZoneText`) keep resolving a period and reading names out of every other
+  program; `Step.regional()` keeps the ids of the regions held out of one holding none.
+  The tables (`ZoneNames.written0`, `read0`) hold the regions held: Tokyo 124 and 100 B,
+  Paris 159 and 510, every region 90,405 and 26,798 B. Measured and changed: a `HashMap`
+  of the names put every class's `hashCode` and `equals` in a program writing a zone's name
+  (49 KB, now arrays); the patterns and the periods as array literals cost 16 KB of top
+  level (now texts); `Long.parseLong` 3.7 KB (now a loop).
+- **What a program pays** (wasm, the artefacts' table): a program making no formatter, or
+  one holding a region and writing none, the same bytes; a date written by a pattern +1.9
+  KB, read +6.3 KB; a computed pattern 495,472 -> 532,923 (`.todo/k70`); a date by
+  `ofLocalizedDate(MEDIUM)` 332,031; Tokyo by `"... z"` 409,986, read 527,968; a time by
+  `"h:mm B"` 330,931.
+- **The grid** (`Grid.java`, 2,350 lines): the interpreter (63 s), the JVM (5.7 s), wasm
+  (5.6 s, 1,199,318 B) and the component (5.5 s) print a JDK's lines (the JDK 3.7 s, all on
+  a loaded machine); the k35, k42, k43 and k52 grids print theirs as before.
+- Not there: `.todo/k70` (`DecimalStyle`, `toFormat`, `ParsePosition`, `withResolverFields`,
+  `IsoChronology.resolveDate`, the deviations k43 and k52 left, the cost of a computed
+  pattern, the table of every region's names).
+- Pins: java-spec `localized-forms-a-zones-name-in-words-and-a-days-period` (standalone,
+  47 lines); `JavaZoneRulesTest` (the shipped names are the JDK's; a program's tables hold
+  what it holds); `JavaLoweringTest#theLibraryIsJavaSourceLoweredAsFarAsTheProgramReaches`
+  (the letters, a localized form's time).
 
 ## java.util.Date and java.sql (2026-11-20, k37)
 
@@ -3325,10 +3453,50 @@ class of a package of our own was needed (`deviations.md`, "The HTTP server").
   (`.kb/jvm-int-fusion.md`, `.kb/wasm-int-fusion.md`), where the mask of an `int` at 64 bits
   needs the bignum literal `2^63`, which declines fusion: every step built a bignum. `x >>> k`
   with a literal `k` is `(logand (ash x -k) (2^(w-k) - 1))`, no bignum either.
-- **`int` keeps the unconditional mask.** `(%mask-signed-field 32 x)` measured the same time
-  (`WrapInt` x10: 0.85 / 0.77 s against 0.91 / 0.74) and `Sieve.wasm` 10,380 -> 10,988 bytes
-  (its fallback is `logxor`'s): not made. A mask in a `let` or behind a test loses 4x (the j68
-  artefact README).
+- **What the types prove reaches the backends as declarations** (2026-11-20, k56). A
+  parameter, a local, a `for` and an enhanced `for` variable and a lambda's parameter of an
+  integral type are declared of its Common Lisp type at the head of the body binding it
+  (`JavaForms.integerType`: `(signed-byte 32)` an `int`, `64` a `long`, `16` and `8` a
+  `short` and a `byte`, `(integer 0 1114111)` a `char`, a string's elements being code
+  points (`doc/*/java/deviations.md`; `(unsigned-byte 16)` trapped on the first one past
+  U+FFFF, `Properties.escaped` of the corpus); `declaring`, and `boundInTurn`, a
+  `let` each for several declarators, since a `let*` gives its inner `let` every
+  declaration). An operand of an integer operation whose form does not say its range -- a
+  call, a field, a conditional -- is asserted with `the` (`JavaForms.known`), a static field
+  where it is read (a global no declaration covers), an `int` quotient as `(integer -2^31
+  2^31)`: `MIN_VALUE / -1` is the one value past the type, which the wrap takes back. On
+  wasm-GC that is a site with no fallback and a variable kept raw where it is read mostly raw
+  (`.kb/declarations-type-checks.md`, "Declared integer ranges"); the interpreter and the
+  JVM read none, the JVM's fused methods being outlined, shared by shape and guarded by one
+  `instanceof Long` (`.kb/jvm-int-fusion.md`). `JavaResumable` drops a `the` around an await.
+  A Common Lisp caller handing a method a value out of a parameter's range is a false
+  declaration (on wasm a trap; `doc/*/java/index.md`); a `native` method's integral result is
+  wrapped to its type.
+- **Every integral wrap is `(%mask-signed-field w x)`** (`JavaForms.wrap`, `signed`). Until
+  k56 `int` kept the unconditional mask `(- (logand (+ x 2^31) 2^32-1) 2^31)`: the masked
+  field measured the same time (`WrapInt` x10: 0.85 / 0.77 s against 0.91 / 0.74) and
+  `Sieve.wasm` 10,380 -> 10,988 bytes, its fallback being `logxor`'s. With the fallbacks gone
+  the field is two shifts where the mask is three operations over five-byte constants, and on
+  the interpreter one call where the mask is three (2,000,000 steps of `h = 31 * h + i % 7`:
+  2.5 -> 2.0-2.2 s); over a lone leaf both compilers fuse it now, its lowering being inline.
+  A mask in a `let` or behind a test loses 4x (the j68 artefact README).
+- **Measured** (2026-11-20, base `e9313f180`; bytes of wasm unless named): a method of ten
+  `x = x + b;` over `int` parameters 2,098 -> 298, over `long` 1,948 -> 214; the zone reader
+  (`ZoneChanges.region`, `find`, `rule`, `written`, `number`) 17,920 -> 13,217;
+  `ZonedDateTime.of(.., ZoneId.of("Europe/Paris")).plusHours(1)` 197,022 -> 173,608
+  (`Zone.class` 278,339 -> 271,945); `Sieve` 22,493 -> 21,305; YAVI `Booking.java`
+  1,204,473 -> 1,129,086, `Member.java` 663,174 -> 647,893; the walk of the regions 599,559
+  -> 534,113 (`Regions.jar` 221,955 -> 217,368). The choices, by the same programs: every
+  declared local raw against none, Booking 1,136,369 against 1,143,837, by raw use
+  1,133,686; every declared parameter raw 1,143,772 (Zone 178,508), by raw use 1,133,686
+  (173,697); the mask against the field, Booking 1,133,686 / 1,129,086, Zone 173,697 /
+  173,608, `ten` 448 / 298. Times (wasm / JVM, best of three, CPU seconds unless named):
+  the walk 31 / 16.5 s of wall time before and after, its lines' strings, and on the
+  interpreter 6.9 -> 6.4 min (the masked field one call); 50,000,000 steps of the sieve loop
+  9.0 s before and after; 200 walks of `Sieve`'s tree 4.2 -> 4.0 / 1.8 s; 30,000,000 `int`
+  and 10,000,000 `long` steps 0.164 -> 0.110 / 0.50 s. What is left of the reader is its array accesses: a
+  `long[]` read is the generic dispatch, the arrays of a program being undeclared (a null
+  array raises `NullPointerException` where it is read).
 - **`byte` and `short`** are integers an operator promotes to `int` and an assignment of a
   constant that fits, a cast or a compound assignment narrows (`JavaForms.signed`).
   **`float` is the double of its value** -- every binary32 is a binary64 -- and each operation's
@@ -3520,6 +3688,19 @@ virtual call can run --, classes used):
   only when something can read it there (no initializer, a lazy class, a read through a method
   the initialization calls or by a qualified name ahead of the field).
 - The decision is made at the end of a pass and the next pass is lowered with it.
+- **Where it runs** (k63): what cannot throw -- the class objects, the constant fields, the
+  defaults a field holds ahead of its initializer, the lazy classes' flags -- is set by
+  top-level forms of its own ahead of the entry (`JavaLowering.settings`, after
+  `internings`); the eager classes' initializers, in their order, are the body of
+  `(defun %initialization ..)`, called by the entry ahead of `main`, so a run-time error
+  in one is still reported as what `main` left uncaught. In the entry form they were one
+  JVM method, never cut (a loop's exit in it), and a static block of 3,000 statements
+  stopped the compile ([jvm-method-size-limits.md](jvm-method-size-limits.md), "Bodies
+  bounded by construction"); a defun is cut as any. A program initializing no class
+  before `main` is byte for byte as before (a hello: wasm 17,179 B both ways); one that
+  does pays the function (`examples/java/shop` wasm 328,166 -> 328,188 B). Only a program
+  that runs: a session's buffer and a loaded library keep the initializers in their
+  top-level `progn`.
 - Classes that need no other run in the order of lowering, so one source compiles to the same bytes
   every time: the per-class and per-method records are insertion-ordered maps, never an
   identity-hashed one (2026-11-20; the same YAVI example compiled three times by one jar is
@@ -4608,8 +4789,8 @@ and the JVM keep host threads and the forms they had.
   sharing the loop's assigned local 1.67 s; the local copied in and out 1.57 s; a named
   function handed and answering it 1.55 s; and a plain lambda that never counts a turn --
   the bound -- 1.65 s. So what the resume body cost the loop was 0.9 s (110 ns a round: a
-  body a thread is resumed in keeps no number unboxed, and the `int` mask is four generic
-  operations), every plain shape reaches the bound, and the backend's way (keeping the
+  body a thread is resumed in keeps no number unboxed, and the `int` mask was four generic
+  operations then), every plain shape reaches the bound, and the backend's way (keeping the
   fusions between two suspend sites: every `ctx.asyncResume != null` in the expression
   compilers) could give this loop no more than the bound. Made: the simplest shape,
   `(let ((run (lambda () (block left (while test body.. (if (< (setq slice (- slice 1)) 0)
@@ -4769,15 +4950,16 @@ are not askable (`.todo/k18`).
 
 | Java | core forms |
 |---|---|
-| `a + b` (int) | `(- (logand (+ (+ a b) 2147483648) 4294967295) 2147483648)`; `/` is `truncate`, `%` `rem` |
+| `a + b` (int) | `(%mask-signed-field 32 (+ a b))`, a call or a field operand as `(the (signed-byte 32) ..)`; `/` is `truncate` asserted `(integer -2147483648 2147483648)`, `%` `rem` |
+| `int x = v;`, `int f(int p)` | `(let ((x v)) (declare (type (signed-byte 32) x)) ..)`; `(defun .. (p) (declare (type (signed-byte 32) p)) ..)` |
 | `a << n`, `a >>> n` | `(ash a n)` wrapped; `(ash (logand a mask) (- n))` wrapped; a variable count `(logand n 31)` |
 | `s + x` | `(%string-concat s' x')`, each operand by its type: `(or s "null")`, `(%decimal-piece i)`, `(%java-char-string c)`, `(if b "true" "false")`, `(%java-double-string d)`, `(%string o)` |
 | `a && b`, `a & b` (boolean) | `(and a b)`; both operands bound first unless the second runs nothing |
 | `x op= v`, `x++` | the place's operands bound once (`let*`) when more than a variable; the result cast to the place's type |
 | `a * b` (long), `a >>> 3` | `(%mask-signed-field 64 (* a b))`; `(logand (ash a -3) 2305843009213693951)` |
 | `f * g` (float), `x % y` (double) | `(%single-float (* f g))`; `(%java-double-rem x y)` |
-| `(int) d`, `(byte) i` | `(%java-double-to-int d)`: toward zero, the type's ends outside it; `(- (logand (+ i 128) 255) 128)` |
-| `new int[n]`, `{1, 2}`, `xs[i]` | `(make-array n :element-type '(unsigned-byte 32) :initial-element 0)` (each primitive its own, "Numbers"); `(vector ..)` / `:initial-contents`; `(- (logand (+ (aref xs i) 2147483648) 4294967295) 2147483648)` |
+| `(int) d`, `(byte) i` | `(%java-double-to-int d)`: toward zero, the type's ends outside it; `(%mask-signed-field 8 i)` |
+| `new int[n]`, `{1, 2}`, `xs[i]` | `(make-array n :element-type '(unsigned-byte 32) :initial-element 0)` (each primitive its own, "Numbers"); `(vector ..)` / `:initial-contents`; `(%mask-signed-field 32 (aref xs i))` |
 | `while`, `for`, `do` | `(while test body.. update..)`; `(block %break ..)` around it and `(block %continue ..)` around the body only when the body has that exit; `do` tests a flag set after the body |
 | `for (T x : xs)` | an array: a counter, the length taken once; an `Iterable`: `(let* ((it (iterator xs))) (while (hasNext it) (let ((x (next it))) ..)))`, each call direct or dispatched as any call |
 | `return v` | the value in tail position, else `(return-from %fn v)` and a `(block %fn ..)` |

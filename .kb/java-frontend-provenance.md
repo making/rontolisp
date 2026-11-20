@@ -395,6 +395,24 @@ algorithm came from, and the answer goes in the file's header.
   fraction is one of a run. The quarters' words and the names of the fields are CLDR's as
   a running JDK writes them, under the Unicode entry of `THIRD-PARTY-NOTICES.txt`. The
   answers are lines of `java-spec.yaml`, which the JDK leg asks again.
+- **A zone's name in words, the localized forms and a day's period (k57, 2026-11-20).**
+  `FormatStyle`, the localized forms, `appendZoneText`, `appendGenericZoneText`,
+  `appendDayPeriodText`, the pattern letters `z`, `v` and `B`, `ZoneId.getDisplayName` and
+  `localizedBy` were written from the API documentation (the letters and their counts, what
+  each member appends) and JDK 25's answers to probes (`Grid.java` of
+  `.todo/artefacts/k57-java-time-what-k52-left/`, 2,350 lines, and `JavaZoneRulesTest`'s
+  walk of every zone's names at each change of its offset and of every name a JDK reads).
+  Nobody opened OpenJDK's source, and the shape is its own: a localized form is its
+  pattern made into parts per kind of locale, a program carries tables of the names of the
+  regions it holds, a period of the day is minutes of the day two by two. What the
+  documentation does not state was read off the answers: which time's name a value is
+  written with (and the spans where a JDK writes the other one), that a name written as an
+  offset is the zone's offset now, that a JDK's names change once it has written
+  `ENGLISH`'s, which zone and which time a name is read as, how a period resolves with an
+  hour and the words of its conflict. The patterns, the names and the periods' words are
+  CLDR's as a running JDK writes them, under the Unicode entry of
+  `THIRD-PARTY-NOTICES.txt`. The answers are lines of `java-spec.yaml`, which the JDK leg
+  asks again.
 - **`java.util.Date` and `java.sql` (k37, 2026-11-20).** Written from the API
   documentation (which states `Date.hashCode`, `equals` and the text forms) and JDK 25's
   answers to probes (`Grid.java`, 2,095 lines; `Gap.java`, the wall times four zones skip

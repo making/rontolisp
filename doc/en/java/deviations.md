@@ -331,28 +331,32 @@ offset. `clone` and the members deprecated since JDK 1.1 (`getYear`, `getHours`)
 refused by name.
 
 **A formatter writes the words and the weeks of the locales `Locale` has.** The months,
-the days, the eras, the quarters and the halves of a day are those of the root locale,
-`ENGLISH`, `US`, `UK` and `CANADA`; a week starts on Monday and its first holds four days
-of the year in `UK`, on Sunday and one day in the others (`WeekFields.of`); `ofPattern`
-without a locale and the ISO forms take `US`, the default locale. A letter of a pattern
-for a period of the day (`B`) or the name of a zone in words (`z`, `v`) is an
-`UnsupportedOperationException` when the pattern is read. `ofLocalizedDate` and its kind,
-`DecimalStyle`, `toFormat`, `parseUnresolved`, a `parse` at a `ParsePosition` and
-`withResolverFields` are refused by name. A zone's name in a text is read among the zones
-the program has (above). In the text of a formatter, `parseDefaulting` shows as
-`Default(field,value)`, where a JDK shows the identity of an object. Where a JDK fails
-with an index error inside a full localized offset (`OOOO` reading `GMT+1`), the text is
-refused at its start; read leniently, a JDK takes `CE` for an era and places a day of the
-week in an aligned week of the year by a rule that is not followed here. The fields that
-are no `ChronoField` -- of weeks, quarters, Julian days or the program's own -- are
-resolved in the order they were read, where a JDK's order changes from run to run: it
-shows only where a text gives a day of the week twice (by its name and by its number in
-the locale's week), or two such fields make two dates or two times.
+the days, the eras, the quarters, the halves and the periods of a day, the localized forms
+(`ofLocalizedDate` and its kind) and the names of zones in words are those a JDK writes for
+the root locale, `ENGLISH`, `US`, `UK` and `CANADA`; a week starts on Monday and its first
+holds four days of the year in `UK`, on Sunday and one day in the others (`WeekFields.of`);
+`ofPattern` without a locale, the localized forms and the ISO forms take `US`, the default
+locale, and `localizedBy` takes its locale and the ISO calendar, as none of these locales
+names another calendar, a zone or other digits. A zone's name in words, like its id, is
+read among the zones the program has (above): a name a JDK reads as a region the program
+does not hold is read as the region it holds that writes the name, or not at all. A JDK
+that has written a zone's names for `ENGLISH` writes some of that zone's names for `UK`
+and `CANADA` as `ENGLISH` has them from then on (`Abidjan Daylight Time` where it wrote
+`Abidjan Daylight Saving Time` for `CANADA`); the names here are the ones it writes before
+that. `DecimalStyle`, `toFormat`, `parseUnresolved`, a `parse` at a `ParsePosition`,
+`withResolverFields` and `ofLocalizedPattern` are refused by name. In the text of a
+formatter, `parseDefaulting` shows as `Default(field,value)`, where a JDK shows the identity
+of an object. Where a JDK fails with an index error inside a full localized offset (`OOOO`
+reading `GMT+1`), the text is refused at its start; read leniently, a JDK takes `CE` for an
+era and places a day of the week in an aligned week of the year by a rule that is not
+followed here. The fields that are no `ChronoField` -- of weeks, quarters, Julian days or
+the program's own -- are resolved in the order they were read, where a JDK's order changes
+from run to run: it shows only where a text gives a day of the week twice (by its name and
+by its number in the locale's week), or two such fields make two dates or two times.
 
 **`java.time` has the ISO calendar alone.** `Chronology.of` knows no other calendar and
 `getAvailableChronologies()` holds ISO's alone; `IsoChronology.resolveDate`,
-`AbstractChronology`, `ZoneId.getDisplayName` and `Duration.dividedBy` are refused by
-name. The message of a text whose fields make no value lists them in one order
+`AbstractChronology` and `Duration.dividedBy` are refused by name. The message of a text whose fields make no value lists them in one order
 (`{Year=2020, MonthOfYear=13}`), and of several fields of a time with no hour out of range
 the same one is refused first; a JDK's order changes from run to run. A `ValueRange`, a
 `ZoneRules`, a `ZoneOffsetTransition`, a `ZoneOffsetTransitionRule` and a `Clock` have hash

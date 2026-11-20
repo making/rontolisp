@@ -5573,6 +5573,8 @@ public final class WasmLispCompiler implements LispCompiler {
 			// a declared site emits the single-arm accessor
 			// (.kb/declarations-type-checks.md).
 			funcCtx.declaredArrays = WasmArrayCompiler.functionBodyDeclaredKinds(defun.bodyExprs, funcCtx);
+			// and integer ranges, which a fused site takes with no bail
+			funcCtx.declaredIntegers = WasmIntFusionCompiler.functionBodyDeclaredIntegers(defun.bodyExprs, funcCtx);
 
 			// Determine which params are captured by nested lambdas, or assigned inside
 			// a landing-pad region (WasmLandingPad): either way they live in a cell.
@@ -5590,6 +5592,11 @@ public final class WasmLispCompiler implements LispCompiler {
 					}
 				}
 			}
+
+			// A parameter the body's head declares an integer range of is kept raw
+			// from the entry on, as a declared let binding is (WasmLetCompiler).
+			WasmIntFusionCompiler.unboxDeclaredParameters(defun.paramNames.subList(0, defun.required()),
+					defun.bodyExprs, funcCtx);
 
 			// --report-locations: a function read from a file notes where a condition
 			// leaving it happened (an injected runtime body is library code, never).
@@ -5843,6 +5850,8 @@ public final class WasmLispCompiler implements LispCompiler {
 			// (declare (type ...)) at the body head (a local function's sits inside its
 			// (block name ...) wrap): array kinds for the parameters.
 			lambdaCtx.declaredArrays = WasmArrayCompiler.functionBodyDeclaredKinds(lambda.bodyExprs, lambdaCtx);
+			lambdaCtx.declaredIntegers = WasmIntFusionCompiler.functionBodyDeclaredIntegers(lambda.bodyExprs,
+					lambdaCtx);
 
 			// Set up captures mapping (free vars accessed from env cons list)
 			Map<String, Integer> captures = new HashMap<>();
@@ -5867,6 +5876,11 @@ public final class WasmLispCompiler implements LispCompiler {
 					}
 				}
 			}
+
+			WasmIntFusionCompiler.unboxDeclaredParameters(
+					lambda.paramNames.subList(0,
+							lambda.paramNames.size() - (lambda.variadic ? 1 : 0) - lambda.optionals),
+					lambda.bodyExprs, lambdaCtx);
 
 			if (uncaughtLocations != null) {
 				lambdaCtx.ucWrittenIn = uncaughtLocations.lambdaWrittenIn.get(lambda.funcId());
@@ -12524,6 +12538,15 @@ public final class WasmLispCompiler implements LispCompiler {
 		 * names removed, restored on scope exit.
 		 */
 		Map<String, am.ik.rontolisp.compiler.DeclaredArrayTypes.Kind> declaredArrays = Map.of();
+
+		/**
+		 * Lexical variables in scope a declaration pins to an interval of i64
+		 * ({@link am.ik.rontolisp.compiler.DeclaredIntegerTypes}): a fused site takes
+		 * such a variable without the test that would send another value to its fallback,
+		 * and a {@code let} keeps it raw ({@link WasmLetCompiler}), checking what its
+		 * shape does not prove. Scoped exactly like {@link #declaredArrays}.
+		 */
+		Map<String, WasmIntFusionCompiler.Range> declaredIntegers = Map.of();
 
 		/**
 		 * Lexical variables in scope that provably hold an ARRAY -- the weaker fact

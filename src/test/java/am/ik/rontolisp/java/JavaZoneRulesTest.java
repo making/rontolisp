@@ -9,6 +9,12 @@ import java.time.Instant;
 import java.time.LocalDate;
 import java.time.YearMonth;
 import java.time.ZoneId;
+import java.time.ZonedDateTime;
+import java.time.format.DateTimeFormatter;
+import java.time.format.DateTimeParseException;
+import java.time.format.TextStyle;
+import java.time.temporal.TemporalAccessor;
+import java.time.temporal.TemporalQueries;
 import java.time.zone.ZoneOffsetTransition;
 import java.time.zone.ZoneOffsetTransitionRule;
 import java.time.zone.ZoneRules;
@@ -17,7 +23,9 @@ import java.util.ArrayList;
 import java.util.Comparator;
 import java.util.HashMap;
 import java.util.List;
+import java.util.Locale;
 import java.util.Map;
+import java.util.TimeZone;
 import java.util.TreeMap;
 import java.util.TreeSet;
 
@@ -335,26 +343,238 @@ class JavaZoneRulesTest {
 				+ String.join("\n", lines) + "\n";
 	}
 
-	private static String shipped() throws IOException {
-		try (InputStream in = JavaZones.class.getResourceAsStream("zone-rules.txt")) {
+	private static String shipped(String resource) throws IOException {
+		try (InputStream in = JavaZones.class.getResourceAsStream(resource)) {
 			assertThat(in).isNotNull();
 			return new String(in.readAllBytes(), StandardCharsets.UTF_8);
 		}
 	}
 
+	/** The kinds of locale the library's words tell apart, in its order (Texts.kind). */
+	private static final Locale[] KINDS = { Locale.ROOT, Locale.US, Locale.UK, Locale.CANADA };
+
+	/**
+	 * A zone's names in a locale, as a JDK writes them: standard time short and in full,
+	 * daylight time, and the zone as a whole (generic).
+	 */
+	private static String[] names(String id, Locale locale) {
+		TimeZone zone = TimeZone.getTimeZone(id);
+		return new String[] { zone.getDisplayName(false, TimeZone.SHORT, locale),
+				zone.getDisplayName(false, TimeZone.LONG, locale), zone.getDisplayName(true, TimeZone.SHORT, locale),
+				zone.getDisplayName(true, TimeZone.LONG, locale), ZoneId.of(id).getDisplayName(TextStyle.SHORT, locale),
+				ZoneId.of(id).getDisplayName(TextStyle.FULL, locale) };
+	}
+
+	/**
+	 * Whether a JDK writes the name of the other time than the rules say at a second (the
+	 * standard time's where they say daylight time, or the reverse), or {@code null}
+	 * where the two names are one.
+	 */
+	private static @Nullable Boolean flipped(ZoneId zone, long second) {
+		Instant instant = Instant.ofEpochSecond(second);
+		ZonedDateTime at = instant.atZone(zone);
+		String root = DateTimeFormatter.ofPattern("zzzz", Locale.ROOT).format(at);
+		Boolean daylight = root.endsWith(" (+1)") ? Boolean.TRUE : root.endsWith(" (+0)") ? Boolean.FALSE : null;
+		if (daylight == null) {
+			String[] us = names(zone.getId(), Locale.US);
+			if (us[1].equals(us[3])) {
+				return null;
+			}
+			String written = DateTimeFormatter.ofPattern("zzzz", Locale.US).format(at);
+			assertThat(written).as(zone + " at " + instant).isIn(us[1], us[3]);
+			daylight = written.equals(us[3]);
+		}
+		return daylight != zone.getRules().isDaylightSavings(instant);
+	}
+
+	/**
+	 * Where the time whose name a JDK writes departs from the rules: spans of seconds,
+	 * each from its first to the one after its last, {@code Long.MAX_VALUE} for a span
+	 * that does not end. The time is asked at each change of the zone's offsets and
+	 * halfway to the next one, which must agree.
+	 */
+	private static List<long[]> flips(String id) {
+		ZoneId zone = ZoneId.of(id);
+		ZoneRules rules = zone.getRules();
+		long from = LocalDate.of(1800, 1, 1).toEpochDay() * DAY;
+		long to = LocalDate.of(2100, 1, 1).toEpochDay() * DAY;
+		TreeSet<Long> changes = new TreeSet<>();
+		changes.add(from);
+		ask(rules).changes().forEach(change -> changes.add(change.at()));
+		for (ZoneOffsetTransition next = rules.nextTransition(Instant.ofEpochSecond(from)); next != null
+				&& next.toEpochSecond() < to; next = rules.nextTransition(next.getInstant())) {
+			changes.add(next.toEpochSecond());
+		}
+		List<long[]> flips = new ArrayList<>();
+		Long[] at = changes.toArray(new Long[0]);
+		for (int i = 0; i < at.length; i++) {
+			long start = at[i];
+			long end = i + 1 < at.length ? at[i + 1] : to;
+			Boolean first = flipped(zone, start);
+			Boolean middle = flipped(zone, start + (end - start) / 2);
+			assertThat(middle).as(id + " from " + Instant.ofEpochSecond(start)).isEqualTo(first);
+			if (Boolean.TRUE.equals(first)) {
+				long until = i + 1 < at.length ? end : Long.MAX_VALUE;
+				long[] last = flips.isEmpty() ? null : flips.get(flips.size() - 1);
+				if (last != null && last[1] == start) {
+					last[1] = until;
+				}
+				else {
+					flips.add(new long[] { start, until });
+				}
+			}
+		}
+		return flips;
+	}
+
+	/**
+	 * The names a JDK reads as a zone in each kind of locale and style (z and zzzz), with
+	 * the time each is a name of: 0 standard, 1 daylight, 2 generic.
+	 */
+	private static Map<String, List<String>> reads() {
+		Map<String, List<String>> reads = new TreeMap<>();
+		for (int kind = 0; kind < KINDS.length; kind++) {
+			Locale locale = KINDS[kind];
+			List<TreeSet<String>> candidates = List.of(new TreeSet<>(), new TreeSet<>());
+			for (String[] row : java.text.DateFormatSymbols.getInstance(locale).getZoneStrings()) {
+				for (int i = 1; i < row.length; i++) {
+					candidates.get(i % 2).add(row[i]);
+				}
+			}
+			for (String id : ZoneId.getAvailableZoneIds()) {
+				String[] names = names(id, locale);
+				for (int i = 0; i < names.length; i++) {
+					candidates.get(i % 2).add(names[i]);
+				}
+			}
+			for (int style = 0; style < 2; style++) {
+				DateTimeFormatter formatter = DateTimeFormatter.ofPattern(style == 0 ? "z" : "zzzz", locale);
+				for (String name : candidates.get(style)) {
+					TemporalAccessor read;
+					try {
+						read = formatter.parse(name);
+					}
+					catch (DateTimeParseException none) {
+						continue;
+					}
+					String text = read.toString();
+					String type = text.substring(text.lastIndexOf(',') + 1);
+					if (type.equals("-1")) {
+						// an id or an offset, which the library reads as such
+						continue;
+					}
+					assertThat(name).doesNotContain("|");
+					reads
+						.computeIfAbsent(String.valueOf(read.query(TemporalQueries.zoneId())),
+								zone -> new ArrayList<>())
+						.add(kind + "" + style + type + name);
+				}
+			}
+		}
+		return reads;
+	}
+
+	/**
+	 * The names of a zone the library computes, as the library's {@code ZoneNames} has
+	 * them: UTC's and GMT's, and those of a fixed zone of the tz database, which are its
+	 * offset after GMT.
+	 */
+	private static String[] fixed(String id, int kind) {
+		String name = id.startsWith("Etc/") ? id.substring(4) : id;
+		String full;
+		String brief;
+		if (List.of("UTC", "UCT", "Universal", "Zulu").contains(name)) {
+			brief = "UTC";
+			full = kind == 0 ? "GMT" : "Coordinated Universal Time";
+		}
+		else if (List.of("GMT", "GMT0", "Greenwich", "GMT+0", "GMT-0").contains(name)) {
+			brief = "GMT";
+			full = kind == 0 ? "GMT" : "Greenwich Mean Time";
+		}
+		else {
+			// Etc/GMT+5 is five hours behind
+			int hours = Integer.parseInt(name.substring(4));
+			brief = "GMT" + (name.charAt(3) == '+' ? "-" : "+") + (hours < 10 ? "0" : "") + hours + ":00";
+			full = brief;
+		}
+		return new String[] { brief, full, brief, full, brief, full };
+	}
+
+	/**
+	 * The names of the zones ({@code zone-names.txt}, {@link JavaZoneNames}): for each
+	 * region a line {@code w} of its names in the four kinds of locale and the spans
+	 * where the time written departs from its rules, and a line {@code r} of the names a
+	 * JDK reads as it. The names of UTC, GMT and the fixed zones of the tz database are
+	 * the library's rules, which this asserts. The names are a fresh JDK's: one that has
+	 * written a zone's names for {@code ENGLISH} answers some British and Canadian ones
+	 * differently after (measured 2026-11-20, 148 zones), so nothing asks ENGLISH first.
+	 */
+	static String names() {
+		List<String> lines = new ArrayList<>();
+		JavaZones regions = JavaZones.shipped();
+		for (String id : new TreeSet<>(ZoneId.getAvailableZoneIds())) {
+			String[] us = names(id, Locale.US);
+			if (!regions.has(id)) {
+				for (int kind = 0; kind < KINDS.length; kind++) {
+					assertThat(names(id, KINDS[kind])).as(id + " in " + KINDS[kind]).containsExactly(fixed(id, kind));
+				}
+				continue;
+			}
+			StringBuilder line = new StringBuilder("w ").append(id);
+			for (int kind = 0; kind < KINDS.length; kind++) {
+				String[] names = names(id, KINDS[kind]);
+				for (int i = 0; i < names.length; i++) {
+					assertThat(names[i]).doesNotContain("|").isNotEmpty();
+					line.append('|').append(kind > 1 && names[i].equals(us[i]) ? "" : names[i]);
+				}
+			}
+			StringBuilder spans = new StringBuilder();
+			for (long[] span : flips(id)) {
+				spans.append(spans.isEmpty() ? "" : ",")
+					.append(span[0])
+					.append(',')
+					.append(span[1] == Long.MAX_VALUE ? "" : Long.toString(span[1]));
+			}
+			lines.add(line.append('|').append(spans).toString());
+		}
+		reads().forEach((zone, names) -> {
+			if (regions.has(zone)) {
+				lines.add("r " + zone + "|" + String.join("|", names));
+			}
+			else {
+				// a name read as a zone the library computes: UTC's in words
+				assertThat(zone).isEqualTo("Etc/UTC");
+				assertThat(names).containsExactlyInAnyOrder("112Coordinated Universal Time",
+						"212Coordinated Universal Time", "312Coordinated Universal Time");
+			}
+		});
+		return "# The names of the regions of the tz database in words (java.time of the experimental Java\n"
+				+ "# subset): what a running JDK writes and reads for each in the four kinds of locale.\n"
+				+ "# Generated by JavaZoneRulesTest from its public TimeZone, ZoneId and DateTimeFormatter;\n"
+				+ "# regenerate it there, never by hand (.kb/java-frontend.md, \"java.time: the names\").\n"
+				+ "# Third-party: Unicode CLDR data (Unicode-3.0), as a running JDK writes it, Copyright (c)\n"
+				+ "# 1991-2026 Unicode, Inc.\n" + "# Notice: THIRD-PARTY-NOTICES.txt, \"Unicode\".\n"
+				+ String.join("\n", lines) + "\n";
+	}
+
 	@Test
 	void theShippedRegionsAreTheJdks() throws IOException {
-		String shipped = shipped();
+		String shipped = shipped("zone-rules.txt");
 		String held = JavaZones.parse(shipped).version();
 		if (version().compareTo(held) < 0) {
 			abort("this JDK's tz database is " + version() + ", older than the shipped " + held);
 		}
-		String generated = text();
-		if (!generated.equals(shipped)) {
-			Path out = Path.of("target", "zone-rules.txt");
-			Files.createDirectories(out.getParent());
-			Files.writeString(out, generated);
-			assertThat(shipped).as("copy " + out.toAbsolutePath() + " over " + SHIPPED).isEqualTo(generated);
+		Map<String, String> generated = Map.of("zone-rules.txt", text(), "zone-names.txt", names());
+		for (Map.Entry<String, String> file : new TreeMap<>(generated).entrySet()) {
+			String text = shipped(file.getKey());
+			if (!file.getValue().equals(text)) {
+				Path out = Path.of("target", file.getKey());
+				Files.createDirectories(out.getParent());
+				Files.writeString(out, file.getValue());
+				assertThat(text)
+					.as("copy " + out.toAbsolutePath() + " over " + SHIPPED.replace("zone-rules.txt", file.getKey()))
+					.isEqualTo(file.getValue());
+			}
 		}
 	}
 
@@ -406,6 +626,25 @@ class JavaZoneRulesTest {
 				"ZonedDateTime.parse(args[1])")) {
 			assertThat(lower(program.formatted(every))).as(every).anyMatch(form -> form.contains("Paris!"));
 		}
+		// The names in words a program carries are those of the regions it holds: what it
+		// writes for each, and what a JDK reads as each -- a name a JDK reads as a region
+		// the program does not hold read as the one it holds that writes it.
+		JavaZoneNames names = JavaZoneNames.shipped();
+		assertThat(names.written(List.of("Asia/Tokyo")))
+			.startsWith("Asia/Tokyo\u0001GMT+09:00\u0001\u0001GMT+10:00\u0001\u0001GMT+09:00\u0001Tokyo\u0001JST\u0001")
+			.contains("\u0001Japan Standard Time\u0001")
+			.endsWith("\u0002");
+		// (a name read alike in English, British and Canadian is one entry, N its kinds)
+		assertThat(names.read(List.of("Asia/Tokyo"))).contains("\u0001N10Japan Standard Time\u0001");
+		assertThat(names.read(List.of("Africa/Accra"))).startsWith("Africa/Accra\u0001")
+			.contains("\u0001N12Accra Time");
+		// (a JDK reads Accra's names as Abidjan's, and in British English as London's)
+		assertThat(names.read(List.of("Africa/Accra", "Africa/Abidjan", "Europe/London")))
+			.startsWith("Africa/Abidjan\u0001")
+			.contains("\u0001J12Accra Time")
+			.doesNotContain("Africa/Accra");
+		assertThat(names.written(null)).hasSizeLessThan(91_000);
+		assertThat(names.read(null)).hasSizeLessThan(27_000);
 		// A session goes on holding what a buffer named: the zone lives on in a variable.
 		JavaSession session = new JavaSession(JavaFiles.NONE);
 		session.read("var tokyo = java.time.ZoneId.of(\"Asia/Tokyo\");");

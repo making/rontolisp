@@ -57,6 +57,12 @@ final class Parsed implements TemporalAccessor {
 
     private ZoneId zone;
 
+    /** The time a zone's name in words was of: 0 standard, 1 daylight, 2 generic; -1 none. */
+    private final int zoneTime;
+
+    /** A period of the day read and not yet resolved: its first minute and the one after its last. */
+    private int[] period;
+
     private LocalDate date;
 
     private LocalTime time;
@@ -70,11 +76,19 @@ final class Parsed implements TemporalAccessor {
     /** Whether the program can ask for a calendar: answered by the compiler, as Iso's. */
     static native boolean calendars();
 
+    /** Whether the program makes the part that reads a day's period: answered by the compiler. */
+    static native boolean periods();
+
+    /** Whether the program makes the part that reads a zone's name in words: answered by the compiler. */
+    static native boolean zoneTexts();
+
     Parsed(Reading in) {
         this.fields = java.util.Arrays.copyOf(in.fields, in.count + 4);
         this.values = java.util.Arrays.copyOf(in.values, in.count + 4);
         this.count = in.count;
         this.zone = in.zone;
+        this.zoneTime = in.zoneTime;
+        this.period = in.period;
         this.leapSecond = in.leapSecond;
     }
 
@@ -392,6 +406,9 @@ final class Parsed implements TemporalAccessor {
             }
             put(ChronoField.HOUR_OF_AMPM, hour == 12 ? 0 : hour, ChronoField.CLOCK_HOUR_OF_AMPM);
         }
+        if (periods()) {
+            halfOfPeriod();
+        }
         if (has(ChronoField.AMPM_OF_DAY) && has(ChronoField.HOUR_OF_AMPM)) {
             long half = remove(ChronoField.AMPM_OF_DAY);
             long hour = remove(ChronoField.HOUR_OF_AMPM);
@@ -460,6 +477,9 @@ final class Parsed implements TemporalAccessor {
                 put(ChronoField.NANO_OF_SECOND, micros * 1000, ChronoField.MICRO_OF_SECOND);
             }
         }
+        if (periods()) {
+            middleOfPeriod();
+        }
         if (time == null && style != ResolverStyle.STRICT && has(ChronoField.AMPM_OF_DAY) && !has(ChronoField.HOUR_OF_DAY)
                 && !has(ChronoField.HOUR_OF_AMPM) && !has(ChronoField.MINUTE_OF_HOUR)
                 && !has(ChronoField.SECOND_OF_MINUTE) && !has(ChronoField.NANO_OF_SECOND)) {
@@ -479,7 +499,56 @@ final class Parsed implements TemporalAccessor {
     }
 
     /** A time of the hour, the minute, the second and the nanosecond, each where the one before is. */
+    /**
+     * A period of the day read with the hour of a half of the day and no half: the half
+     * in which the hour lies in the period; the first where it lies in neither.
+     */
+    private void halfOfPeriod() {
+        if (period != null && has(ChronoField.HOUR_OF_AMPM) && !has(ChronoField.AMPM_OF_DAY)) {
+            long minute = Math.floorMod(valueOf(ChronoField.HOUR_OF_AMPM), 12L) * 60 + 720
+                    + (has(ChronoField.MINUTE_OF_HOUR) ? valueOf(ChronoField.MINUTE_OF_HOUR) : 0);
+            append(ChronoField.AMPM_OF_DAY, Step.DayPeriod.contains(period[0], period[1], minute) ? 1 : 0);
+            period = null;
+        }
+    }
+
+    /** A period of the day read with no field of a time: its middle, but strictly no time. */
+    private void middleOfPeriod() {
+        if (period != null && time == null && !has(ChronoField.HOUR_OF_DAY) && !has(ChronoField.HOUR_OF_AMPM)
+                && !has(ChronoField.MINUTE_OF_HOUR) && !has(ChronoField.SECOND_OF_MINUTE)
+                && !has(ChronoField.NANO_OF_SECOND)) {
+            if (style != ResolverStyle.STRICT) {
+                int middle = (period[0] + period[1]) / 2;
+                put(ChronoField.HOUR_OF_DAY, middle / 60, null);
+                put(ChronoField.MINUTE_OF_HOUR, middle % 60, null);
+            }
+            period = null;
+        }
+    }
+
+    /**
+     * An hour read with the period of the day it must lie in, checked before the hour
+     * itself; leniently not.
+     */
+    private void hourInPeriod() {
+        if (period != null && has(ChronoField.HOUR_OF_DAY)) {
+            if (!lenient()) {
+                long hour = valueOf(ChronoField.HOUR_OF_DAY);
+                long minute = has(ChronoField.MINUTE_OF_HOUR) ? valueOf(ChronoField.MINUTE_OF_HOUR) : 0;
+                if (!Step.DayPeriod.contains(period[0], period[1], hour * 60 + minute)) {
+                    throw new DateTimeException("Conflict found: Resolved time " + (hour < 10 ? "0" : "") + hour
+                            + (minute < 10 ? ":0" : ":") + minute + " conflicts with "
+                            + Step.DayPeriod.shown(period[0], period[1]));
+                }
+            }
+            period = null;
+        }
+    }
+
     private void resolveTime() {
+        if (periods()) {
+            hourInPeriod();
+        }
         if (time == null && has(ChronoField.HOUR_OF_DAY)) {
             boolean minute = has(ChronoField.MINUTE_OF_HOUR);
             boolean second = has(ChronoField.SECOND_OF_MINUTE);
@@ -584,7 +653,15 @@ final class Parsed implements TemporalAccessor {
             put(ChronoField.INSTANT_SECONDS, date.atTime(time).toEpochSecond(offset), null);
         }
         else if (zone != null) {
-            put(ChronoField.INSTANT_SECONDS, date.atTime(time).atZone(zone).toEpochSecond(), null);
+            java.time.ZonedDateTime zoned = date.atTime(time).atZone(zone);
+            if (zoneTexts()) {
+                // in an overlap a name of standard time or of the zone as a whole is the
+                // later offset, any other the earlier
+                if (zoneTime == 0 || zoneTime == 2) {
+                    zoned = zoned.withLaterOffsetAtOverlap();
+                }
+            }
+            put(ChronoField.INSTANT_SECONDS, zoned.toEpochSecond(), null);
         }
     }
 
@@ -702,7 +779,7 @@ final class Parsed implements TemporalAccessor {
         }
         text.append("},ISO");
         if (zone != null) {
-            text.append(',').append(zone.getId()).append(",-1");
+            text.append(',').append(zone.getId()).append(',').append(zoneTime);
         }
         if (date != null || time != null) {
             text.append(" resolved to ");

@@ -6,6 +6,8 @@
 // value lacks makes the part write nothing; anywhere else it is the value's refusal.
 package java.time.format;
 
+import java.time.chrono.Chronology;
+import java.time.temporal.ChronoField;
 import java.time.temporal.TemporalAccessor;
 import java.time.temporal.TemporalField;
 
@@ -19,9 +21,22 @@ final class Writing {
 
     int optional;
 
-    Writing(TemporalAccessor temporal, int texts) {
+    /** The formatter's calendar, or null. */
+    final Chronology chronology;
+
+    Writing(TemporalAccessor temporal, int texts, Chronology chronology) {
         this.temporal = temporal;
         this.texts = texts;
+        this.chronology = chronology;
+    }
+
+    /**
+     * The value as a refusal shows it: a value with no date, written by a formatter of a
+     * calendar, with the calendar after it.
+     */
+    String shown() {
+        return chronology == null || temporal.isSupported(ChronoField.EPOCH_DAY) ? temporal.toString()
+                : temporal.toString() + " with chronology " + chronology.toString();
     }
 
     /** Whether a field can be written: false only inside an optional part. */

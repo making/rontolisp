@@ -29,7 +29,6 @@ checked exception, and a line that differs from a JDK by decision can be in no c
   `inferred type does not conform to upper bound(s)`, where javac applies the method by an
   unchecked conversion and answers its erasure. A program of raw collections meets it at
   `max`, `min`, `sort`.
-- A creation with `<>` holding an anonymous class in another's argument is `.todo/k61`.
 
 ## The collections
 

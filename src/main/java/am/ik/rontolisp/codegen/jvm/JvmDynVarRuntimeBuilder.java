@@ -78,14 +78,14 @@ final class JvmDynVarRuntimeBuilder {
 	 * @param dbind the {@code _dbind} helper ref
 	 * @param dset the {@code _dset} helper ref
 	 * @param methods the helper method bodies to register
-	 * @param clinitCode the {@code <clinit>} fragment creating every ThreadLocal
+	 * @param clinitSteps the {@code <clinit>} work creating every ThreadLocal
 	 * @param dbound the {@code _dbound} helper ref, or null when the program probes the
 	 * bound-ness of no bound special that starts as the UNBOUND marker, and guards the
 	 * {@code defvar} of none ({@code compiler.DefvarGuards})
 	 */
 	record DynVarRuntime(Map<String, FieldRefEntry> fields, List<Utf8Entry> fieldNameUtfs, Utf8Entry fieldDescUtf,
 			MethodRefEntry tlSet, MethodRefEntry dget, MethodRefEntry dbind, MethodRefEntry dset,
-			List<HelperMethod> methods, MethodCode clinitCode, Utf8Entry clinitName, Utf8Entry clinitDesc,
+			List<HelperMethod> methods, JvmClinitSteps clinitSteps, Utf8Entry clinitName, Utf8Entry clinitDesc,
 			@Nullable MethodRefEntry dbound) {
 	}
 
@@ -107,7 +107,7 @@ final class JvmDynVarRuntimeBuilder {
 	 * @param field the marker field
 	 * @param fieldName its name constant
 	 * @param fieldDesc its descriptor constant
-	 * @param clinitCode the {@code <clinit>} fragment creating the marker and seeding the
+	 * @param clinitSteps the {@code <clinit>} work creating the marker and seeding the
 	 * globals with it
 	 * @param clinitName the {@code <clinit>} name constant
 	 * @param clinitDesc the {@code <clinit>} descriptor constant
@@ -116,8 +116,8 @@ final class JvmDynVarRuntimeBuilder {
 	 * @param boundMethod its name, descriptor and body
 	 */
 	record UnboundMarker(SequencedSet<String> globals, SequencedSet<String> probed, SequencedSet<String> guardedDefvars,
-			FieldRefEntry field, Utf8Entry fieldName, Utf8Entry fieldDesc, MethodCode clinitCode, Utf8Entry clinitName,
-			Utf8Entry clinitDesc, MethodRefEntry bound, HelperMethod boundMethod) {
+			FieldRefEntry field, Utf8Entry fieldName, Utf8Entry fieldDesc, JvmClinitSteps clinitSteps,
+			Utf8Entry clinitName, Utf8Entry clinitDesc, MethodRefEntry bound, HelperMethod boundMethod) {
 	}
 
 	/** One helper method: its name/descriptor constants and body. */
@@ -150,20 +150,22 @@ final class JvmDynVarRuntimeBuilder {
 		Utf8Entry fieldName = cp.utf8Entry(UNBOUND_FIELD);
 		Utf8Entry fieldDesc = cp.utf8Entry("Ljava/lang/Object;");
 		FieldRefEntry field = cp.fieldRef(thisClass, fieldName, fieldDesc);
-		MethodCode clinitCode = new MethodCode();
-		clinitCode.new_(objectClass);
-		clinitCode.dup();
-		clinitCode.invokespecial(cp.methodRef(objectClass, "<init>", "()V"));
-		clinitCode.putstatic(field);
+		JvmClinitSteps clinitSteps = new JvmClinitSteps("_clinit$unbound");
+		MethodCode made = clinitSteps.step();
+		made.new_(objectClass);
+		made.dup();
+		made.invokespecial(cp.methodRef(objectClass, "<init>", "()V"));
+		made.putstatic(field);
 		for (String name : seeded) {
-			clinitCode.getstatic(field);
-			clinitCode.putstatic(Objects.requireNonNull(globalFields.get(name)));
+			MethodCode seed = clinitSteps.step();
+			seed.getstatic(field);
+			seed.putstatic(Objects.requireNonNull(globalFields.get(name)));
 		}
 		Utf8Entry boundName = cp.utf8Entry(BOUND_METHOD);
 		Utf8Entry boundDesc = cp.utf8Entry("(Ljava/lang/Object;Ljava/lang/String;)Ljava/lang/Object;");
 		return new UnboundMarker(Collections.unmodifiableSequencedSet(globals),
 				Collections.unmodifiableSequencedSet(probed), Collections.unmodifiableSequencedSet(guardedDefvars),
-				field, fieldName, fieldDesc, clinitCode, cp.utf8Entry("<clinit>"), cp.utf8Entry("()V"),
+				field, fieldName, fieldDesc, clinitSteps, cp.utf8Entry("<clinit>"), cp.utf8Entry("()V"),
 				cp.methodRef(thisClass, boundName, boundDesc),
 				new HelperMethod(boundName, boundDesc, boundCode(cp, field)));
 	}
@@ -224,16 +226,17 @@ final class JvmDynVarRuntimeBuilder {
 		Utf8Entry fieldDescUtf = cp.utf8Entry("Ljava/lang/ThreadLocal;");
 		Map<String, FieldRefEntry> fields = new LinkedHashMap<>();
 		List<Utf8Entry> fieldNameUtfs = new ArrayList<>();
-		MethodCode clinitCode = new MethodCode();
+		JvmClinitSteps clinitSteps = new JvmClinitSteps("_clinit$dynvar");
 		for (String name : boundSpecials) {
 			Utf8Entry nameUtf = cp.utf8Entry("_d$" + JvmLispCompiler.mangleMethodName(name));
 			fieldNameUtfs.add(nameUtf);
 			FieldRefEntry field = cp.fieldRef(thisClass, nameUtf, fieldDescUtf);
 			fields.put(name, field);
-			clinitCode.new_(threadLocalClass);
-			clinitCode.dup();
-			clinitCode.invokespecial(tlCtor);
-			clinitCode.putstatic(field);
+			MethodCode made = clinitSteps.step();
+			made.new_(threadLocalClass);
+			made.dup();
+			made.invokespecial(tlCtor);
+			made.putstatic(field);
 		}
 		String refDesc = "(Ljava/lang/ThreadLocal;Ljava/lang/Object;)Ljava/lang/Object;";
 		Utf8Entry dgetName = cp.utf8Entry("_dget");
@@ -256,7 +259,7 @@ final class JvmDynVarRuntimeBuilder {
 				.add(new HelperMethod(dboundName, refDescUtf, dboundCode(tlGet, unboundField, objectArrayClass, cp)));
 		}
 		return new DynVarRuntime(fields, fieldNameUtfs, fieldDescUtf, tlSet, dget, dbind, dset, List.copyOf(methods),
-				clinitCode, cp.utf8Entry("<clinit>"), cp.utf8Entry("()V"), dbound);
+				clinitSteps, cp.utf8Entry("<clinit>"), cp.utf8Entry("()V"), dbound);
 	}
 
 	/** The UNBOUND marker's field name (see the class note). */

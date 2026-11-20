@@ -440,6 +440,31 @@ class JavaSpecE2eTest {
 		}, Duration.ofSeconds(60))).as("the program ended; it printed%n%s", out).contains("ran\nran\nran\nran\n");
 	}
 
+	/**
+	 * A static initialization past what one method of a JVM class holds runs on the JVM:
+	 * the initializers that run before {@code main} are a function the backend cuts as it
+	 * cuts any. In the one form that runs the program, with the exit of a loop in it,
+	 * these 3,000 statements were one method of 422,144 bytes, which no class holds.
+	 */
+	@Test
+	void aStaticInitializationPastOneMethodOfAJvmClassRuns() throws Exception {
+		int statements = 3000;
+		StringBuilder source = new StringBuilder("public class Table {\n    static int[] t = new int[" + statements
+				+ "];\n    static int sum;\n    static {\n");
+		for (int i = 0; i < statements; i++) {
+			source.append("        t[").append(i).append("] = ").append(i).append(" * 3;\n");
+		}
+		source.append("""
+				        for (int v : t) sum += v;
+				    }
+				    public static void main(String[] args) {
+				        System.out.println(sum + " " + t[2999]);
+				    }
+				}
+				""");
+		assertThat(runOnJvm("Table-JVM", "Table.java", source.toString())).isEqualTo("13495500 8997\n");
+	}
+
 	/** What a process printed and how it ended. */
 	record Ended(String stdout, String stderr, int exit) {
 	}
@@ -693,8 +718,12 @@ class JavaSpecE2eTest {
 	}
 
 	private static String runOnJvm(String program) throws Exception {
+		return runOnJvm("JVM", PROGRAM + ".java", program);
+	}
+
+	private static String runOnJvm(String leg, String fileName, String program) throws Exception {
 		String name = "JavaSpecProgram";
-		Path file = write("JVM", PROGRAM + ".java", program);
+		Path file = write(leg, fileName, program);
 		JvmSourceCompiler.Result compiled = new JvmSourceCompiler(name).compile(program, file.toString());
 		// the corpus is past one class's constant pool: its parts travel beside the class
 		ClassLoader loader = new ClassLoader(JavaSpecE2eTest.class.getClassLoader()) {

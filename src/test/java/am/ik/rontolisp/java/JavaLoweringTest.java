@@ -124,50 +124,55 @@ class JavaLoweringTest {
 							+ "NIL)))",
 					"(DEFVAR |Base.count|)",
 					"(DEFUN |Base.<init>(String)| (|this| |label|) (PROGN (SETF (|Base.label| |this|) \"b\") (SETF "
-							+ "(|Base.label| |this|) |label|) (SETQ |Base.count| (- (LOGAND (+ (+ |Base.count| 1) 2147483648) "
-							+ "4294967295) 2147483648))))",
+							+ "(|Base.label| |this|) |label|) (SETQ |Base.count| (%MASK-SIGNED-FIELD 32 (+ (THE "
+							+ "(SIGNED-BYTE 32) |Base.count|) 1)))))",
 					"(DEFUN |Base.toString()| (|this|) (%STRING-CONCAT (OR (|Base.label| |this|) \"null\") (RONTOLISP::%JAVA-DOUBLE-STRING "
 							+ "(|Base.area()%v| |this|))))",
 					"(DEFUN |Circle.new(double)| (|r|) (LET ((|this| (|%make-Circle|))) (|Circle.<init>(double)| "
 							+ "|this| |r|) |this|))",
 					"(DEFUN |Circle.area()| (|this|) (* (* 3.0 (|Circle.r| |this|)) (|Circle.r| |this|)))",
 					"(DEFUN |Rect.new()| NIL (LET ((|this| (|%make-Rect|))) (|Rect.<init>()| |this|) |this|))",
-					"(DEFUN |L1.twice(int)| (|x|) (- (LOGAND (+ (* |x| 2) 2147483648) 4294967295) 2147483648))",
-					"(DEFUN |L1.wide(long,int)| (|x| |y|) (%MASK-SIGNED-FIELD 64 (ASH (%MASK-SIGNED-FIELD 64 "
-							+ "(+ |x| |y|)) 3)))",
-					"(DEFUN |L1.show(Shape,Object,char,boolean)| (|s| |o| |c| |b|) (%STRING-CONCAT (%STRING-CONCAT "
-							+ "(%STRING-CONCAT (%STRING-CONCAT (%STRING-CONCAT \"s=\" (|%string| |s|)) (|%string| |o|)) (RONTOLISP::%JAVA-CHAR-STRING "
-							+ "|c|)) (IF |b| \"true\" \"false\")) (RONTOLISP::%JAVA-DOUBLE-STRING (|Shape.area()%v| |s|))))",
-					"(DEFUN |L1.loop(int[])| (|xs|) (LET ((|sum| 0)) (LET* ((|i| 0)) (BLOCK |%break| (WHILE (< "
-							+ "|i| (LENGTH (OR |xs| (RONTOLISP::%JAVA-NPE)))) (BLOCK |%continue| (IF (< (- (LOGAND (+ (AREF "
-							+ "|xs| |i|) 2147483648) 4294967295) 2147483648) 0) (RETURN-FROM |%continue| NIL)) (IF (> (- "
-							+ "(LOGAND (+ (AREF |xs| |i|) 2147483648) 4294967295) 2147483648) 99) (RETURN-FROM |%break| "
-							+ "NIL)) (SETQ |sum| (- (LOGAND (+ (+ |sum| (- (LOGAND (+ (AREF |xs| |i|) 2147483648) 4294967295) "
-							+ "2147483648)) 2147483648) 4294967295) 2147483648))) (SETQ |i| (- (LOGAND (+ (+ |i| 1) 2147483648) "
-							+ "4294967295) 2147483648))))) |sum|))",
-					"(DEFUN |L1.guarded(Object,int)| (|o| |d|) (BLOCK |%fn| (UNWIND-PROTECT (HANDLER-CASE (LET "
-							+ "((|c| (LET ((|%t0| |o|)) (IF (OR (NULL |%t0|) (|Circle?| |%t0|)) |%t0| (RONTOLISP::%JAVA-THROW "
-							+ "(|ClassCastException.new(String)| (IF (FUNCTIONP |%t0|) NIL (%STRING-CONCAT (%STRING-CONCAT "
-							+ "\"class \" (|%class-name| |%t0|)) \" cannot be cast to class Circle\"))) #'|Throwable.toString()|))))) "
-							+ "(RETURN-FROM |%fn| "
-							+ "(- (LOGAND (+ (TRUNCATE (RONTOLISP::%JAVA-DOUBLE-TO-INT (|Circle.r| |c|)) |d|) 2147483648) "
-							+ "4294967295) 2147483648))) ((SATISFIES |%catch0|) (|%t1|) (LET ((|e| (OR "
-							+ "(RONTOLISP::%JAVA-THROWN |%t1|) (|%lisp-error| |%t1|)))) (RETURN-FROM |%fn| -1)))) "
-							+ "(SETQ |Base.count| 10))))",
+					"(DEFUN |L1.twice(int)| (|x|) (DECLARE (TYPE (SIGNED-BYTE 32) |x|)) (%MASK-SIGNED-FIELD 32 (* "
+							+ "|x| 2)))",
+					"(DEFUN |L1.wide(long,int)| (|x| |y|) (DECLARE (TYPE (SIGNED-BYTE 64) |x|) (TYPE (SIGNED-BYTE "
+							+ "32) |y|)) (%MASK-SIGNED-FIELD 64 (ASH (%MASK-SIGNED-FIELD 64 (+ |x| |y|)) 3)))",
+					"(DEFUN |L1.show(Shape,Object,char,boolean)| (|s| |o| |c| |b|) (DECLARE (TYPE (INTEGER 0 "
+							+ "1114111) |c|)) (%STRING-CONCAT (%STRING-CONCAT (%STRING-CONCAT (%STRING-CONCAT "
+							+ "(%STRING-CONCAT \"s=\" (|%string| |s|)) (|%string| |o|)) (RONTOLISP::%JAVA-CHAR-STRING "
+							+ "|c|)) (IF |b| \"true\" \"false\")) (RONTOLISP::%JAVA-DOUBLE-STRING (|Shape.area()%v| "
+							+ "|s|))))",
+					"(DEFUN |L1.loop(int[])| (|xs|) (LET ((|sum| 0)) (DECLARE (TYPE (SIGNED-BYTE 32) |sum|)) (LET "
+							+ "((|i| 0)) (DECLARE (TYPE (SIGNED-BYTE 32) |i|)) (BLOCK |%break| (WHILE (< |i| (THE "
+							+ "(SIGNED-BYTE 32) (LENGTH (OR |xs| (RONTOLISP::%JAVA-NPE))))) (BLOCK |%continue| (IF (< "
+							+ "(%MASK-SIGNED-FIELD 32 (AREF |xs| |i|)) 0) (RETURN-FROM |%continue| NIL)) (IF (> "
+							+ "(%MASK-SIGNED-FIELD 32 (AREF |xs| |i|)) 99) (RETURN-FROM |%break| NIL)) (SETQ |sum| "
+							+ "(%MASK-SIGNED-FIELD 32 (+ |sum| (%MASK-SIGNED-FIELD 32 (AREF |xs| |i|)))))) (SETQ |i| "
+							+ "(%MASK-SIGNED-FIELD 32 (+ |i| 1)))))) |sum|))",
+					"(DEFUN |L1.guarded(Object,int)| (|o| |d|) (DECLARE (TYPE (SIGNED-BYTE 32) |d|)) (BLOCK |%fn| "
+							+ "(UNWIND-PROTECT (HANDLER-CASE (LET ((|c| (LET ((|%t0| |o|)) (IF (OR (NULL |%t0|) "
+							+ "(|Circle?| |%t0|)) |%t0| (RONTOLISP::%JAVA-THROW (|ClassCastException.new(String)| (IF "
+							+ "(FUNCTIONP |%t0|) NIL (%STRING-CONCAT (%STRING-CONCAT \"class \" (|%class-name| |%t0|)) \" "
+							+ "cannot be cast to class Circle\"))) #'|Throwable.toString()|))))) (RETURN-FROM |%fn| "
+							+ "(%MASK-SIGNED-FIELD 32 (THE (INTEGER -2147483648 2147483648) (TRUNCATE (THE (SIGNED-BYTE "
+							+ "32) (RONTOLISP::%JAVA-DOUBLE-TO-INT (|Circle.r| |c|))) |d|))))) ((SATISFIES |%catch0|) "
+							+ "(|%t1|) (LET ((|e| (OR (RONTOLISP::%JAVA-THROWN |%t1|) (|%lisp-error| |%t1|)))) "
+							+ "(RETURN-FROM |%fn| -1)))) (SETQ |Base.count| 10))))",
 					// a catch clause's type is its test: a condition no clause takes goes
 					// on as it came, signalled by nothing
 					"(DEFUN |%catch0| (|%c|) (|ArithmeticException?| (OR (RONTOLISP::%JAVA-THROWN |%c|) "
 							+ "(|%lisp-error| |%c|))))",
-					"(DEFUN |L1.adder(int)| (|n|) (LAMBDA (|x|) (- (LOGAND (+ (+ |x| |n|) 2147483648) 4294967295) "
-							+ "2147483648)))",
+					"(DEFUN |L1.adder(int)| (|n|) (DECLARE (TYPE (SIGNED-BYTE 32) |n|)) (LAMBDA (|x|) (DECLARE "
+							+ "(TYPE (SIGNED-BYTE 32) |x|)) (%MASK-SIGNED-FIELD 32 (+ |x| |n|))))",
 					"(DEFUN |L1.main(String[])| (|args|) (LET ((|s| (|Circle.new(double)| 1.5))) (LET ((|boxed| "
-							+ "(|L1.twice(int)| 3))) (LET ((|flag| (IF (> (OR |boxed| (RONTOLISP::%JAVA-NULL-UNBOX)) 3) "
-							+ "T :FALSE))) (WRITE-LINE (%STRING-CONCAT (%STRING-CONCAT (%STRING-CONCAT (OR (|L1.show(Shape,Object,char,boolean)| "
-							+ "|s| |boxed| 99 (RONTOLISP::%JAVA-UNBOX-BOOLEAN |flag|)) \"null\") (%DECIMAL-PIECE (FUNCALL "
-							+ "(OR (|L1.adder(int)| 1) (RONTOLISP::%JAVA-NPE)) 2))) (IF (|Rect?| |s|) \"true\" \"false\")) "
-							+ "(IF (NOT (NULL |s|)) \"true\" \"false\"))) (IF (= (|L1.loop(int[])| (MAKE-ARRAY 2 :ELEMENT-TYPE "
-							+ "'(UNSIGNED-BYTE 32) :INITIAL-CONTENTS (LIST 1 2))) 3) (RONTOLISP::%JAVA-THROW (|IllegalStateException.new(String)| "
-							+ "\"x\") #'|Throwable.toString()|))))))",
+							+ "(|L1.twice(int)| 3))) (LET ((|flag| (IF (> (THE (SIGNED-BYTE 32) (OR |boxed| "
+							+ "(RONTOLISP::%JAVA-NULL-UNBOX))) 3) T :FALSE))) (WRITE-LINE (%STRING-CONCAT (%STRING-CONCAT "
+							+ "(%STRING-CONCAT (OR (|L1.show(Shape,Object,char,boolean)| |s| |boxed| 99 "
+							+ "(RONTOLISP::%JAVA-UNBOX-BOOLEAN |flag|)) \"null\") (%DECIMAL-PIECE (FUNCALL (OR "
+							+ "(|L1.adder(int)| 1) (RONTOLISP::%JAVA-NPE)) 2))) (IF (|Rect?| |s|) \"true\" \"false\")) "
+							+ "(IF (NOT (NULL |s|)) \"true\" \"false\"))) (IF (= (THE (SIGNED-BYTE 32) (|L1.loop(int[])| "
+							+ "(MAKE-ARRAY 2 :ELEMENT-TYPE '(UNSIGNED-BYTE 32) :INITIAL-CONTENTS (LIST 1 2)))) 3) "
+							+ "(RONTOLISP::%JAVA-THROW (|IllegalStateException.new(String)| \"x\") "
+							+ "#'|Throwable.toString()|))))))",
 					"(DEFUN |%class-name| (|%o|) (COND ((|ClassCastException?| |%o|) \"java.lang.ClassCastException\")"
 							+ " ((|ArithmeticException?| |%o|) \"java.lang.ArithmeticException\") ((|IllegalStateException?|"
 							+ " |%o|) \"java.lang.IllegalStateException\") ((|Circle?| |%o|) \"Circle\") ((|Rect?| |%o|)"
@@ -185,8 +190,8 @@ class JavaLoweringTest {
 							+ "(CAR |%e|) \"java.lang.ArithmeticException\") (|ArithmeticException.new(String)| (CDR |%e|))))))",
 					// what nothing caught is the pipeline's own report with the program's
 					// line in it: no handler holds the condition
-					"(%REPORTING-UNCAUGHT #'RONTOLISP::%JAVA-UNCAUGHT-THROWN-LINE (%HOST-EXIT 1) (SETQ |Base.count| 0) "
-							+ "(SETQ |Base.LIMIT| 10) (SETQ |Throwable.traces| 0) (|L1.main(String[])| (VECTOR)))");
+					"(%REPORTING-UNCAUGHT #'RONTOLISP::%JAVA-UNCAUGHT-THROWN-LINE (%HOST-EXIT 1) (|L1.main(String[])| "
+							+ "(VECTOR)))");
 		// every exception class the run time's table names is one the lowering can make
 		Matcher named = Pattern.compile("\"(java\\.(?:lang|util)\\.\\w+Exception)\"").matcher(runtimeLibrary());
 		while (named.find()) {
@@ -240,7 +245,8 @@ class JavaLoweringTest {
 		// is a variable of its statement, set where the test holds; a labeled loop's
 		// block has the label's name; a variable arity call makes the array; a class
 		// whose static initialization shows is initialized at its first use, any other
-		// before main.
+		// before main by a function of its own, after the settings that cannot throw,
+		// each a form of its own.
 		assertThat(
 				lower("""
 						sealed interface Shape permits Circle, Square { }
@@ -289,46 +295,49 @@ class JavaLoweringTest {
 					"(DEFUN |Circle.toString()| (|this|) (%STRING-CONCAT (%STRING-CONCAT \"Circle[r=\" (RONTOLISP::%JAVA-DOUBLE-STRING "
 							+ "(|Circle.r| |this|))) \"]\"))",
 					"(DEFUN |Circle.equals(Object)| (|this| |$o|) (LET ((|$that| NIL)) (AND (AND (|Circle?| |$o|) "
-							+ "(PROGN (SETQ |$that| |$o|) T)) (= (RONTOLISP::%JAVA-DOUBLE-COMPARE (|Circle.r| |this|) (|Circle.r| "
-							+ "|$that|)) 0))))",
-					"(DEFUN |Log.line()| NIL (PROGN (|Log.<clinit>|) (SETQ |Log.lines| (- (LOGAND (+ (+ |Log.lines| "
-							+ "1) 2147483648) 4294967295) 2147483648))))",
-					"(DEFUN |L2.name(int)| (|n|) (COND ((EQL |n| 1) \"one\") ((OR (EQL |n| 2) (EQL |n| 3)) \"few\") "
-							+ "(T \"many\")))",
-					"(DEFUN |L2.fall(int)| (|n|) (LET ((|acc| 0)) (BLOCK |%break| (LET ((|%t0| (COND ((EQL |n| "
-							+ "1) 0) ((EQL |n| 2) 1) (T 2)))) (IF (<= |%t0| 0) (SETQ |acc| (- (LOGAND (+ (+ |acc| 1) 2147483648) "
-							+ "4294967295) 2147483648))) (IF (<= |%t0| 1) (PROGN (SETQ |acc| (- (LOGAND (+ (+ |acc| 10) "
-							+ "2147483648) 4294967295) 2147483648)) (RETURN-FROM |%break| NIL))) (IF (<= |%t0| 2) (SETQ "
-							+ "|acc| -1)))) |acc|))",
-					"(DEFUN |L2.area(Shape)| (|s|) (LET ((|c| NIL) (|side| 0) (|q| NIL)) (COND ((NULL |s|) (RONTOLISP::%JAVA-NULL-SWITCH)) "
-							+ "((AND (|Circle?| |s|) (PROGN (SETQ |c| |s|) T)) (* (* 3.0 (|Circle.r()| (OR |c| (RONTOLISP::%JAVA-NPE)))) "
-							+ "(|Circle.r()| (OR |c| (RONTOLISP::%JAVA-NPE))))) ((AND (AND (|Square?| |s|) (PROGN (SETQ "
-							+ "|side| (|Square.side| |s|)) T)) (> |side| 1)) (FLOAT (- (LOGAND (+ (* |side| |side|) 2147483648) "
-							+ "4294967295) 2147483648) 1.0)) ((AND (|Square?| |s|) (PROGN (SETQ |q| |s|) T)) 1.0) (T (RONTOLISP::%JAVA-NO-MATCH)))))",
-					"(DEFUN |L2.rank(Level)| (|l|) (COND ((EQ |l| |Level.LOW|) 1) ((EQ |l| |Level.HIGH|) (LET "
-							+ "((|r| 2)) (- (LOGAND (+ (* |r| 2) 2147483648) 4294967295) 2147483648))) ((NULL |l|) (RONTOLISP::%JAVA-NULL-SWITCH)) "
-							+ "(T (RONTOLISP::%JAVA-NO-MATCH))))",
+							+ "(PROGN (SETQ |$that| |$o|) T)) (= (THE (SIGNED-BYTE 32) (RONTOLISP::%JAVA-DOUBLE-COMPARE "
+							+ "(|Circle.r| |this|) (|Circle.r| |$that|))) 0))))",
+					"(DEFUN |Log.line()| NIL (PROGN (|Log.<clinit>|) (SETQ |Log.lines| (%MASK-SIGNED-FIELD 32 (+ "
+							+ "(THE (SIGNED-BYTE 32) |Log.lines|) 1)))))",
+					"(DEFUN |L2.name(int)| (|n|) (DECLARE (TYPE (SIGNED-BYTE 32) |n|)) (COND ((EQL |n| 1) \"one\") "
+							+ "((OR (EQL |n| 2) (EQL |n| 3)) \"few\") (T \"many\")))",
+					"(DEFUN |L2.fall(int)| (|n|) (DECLARE (TYPE (SIGNED-BYTE 32) |n|)) (LET ((|acc| 0)) (DECLARE "
+							+ "(TYPE (SIGNED-BYTE 32) |acc|)) (BLOCK |%break| (LET ((|%t0| (COND ((EQL |n| 1) 0) ((EQL "
+							+ "|n| 2) 1) (T 2)))) (IF (<= |%t0| 0) (SETQ |acc| (%MASK-SIGNED-FIELD 32 (+ |acc| 1)))) (IF "
+							+ "(<= |%t0| 1) (PROGN (SETQ |acc| (%MASK-SIGNED-FIELD 32 (+ |acc| 10))) (RETURN-FROM "
+							+ "|%break| NIL))) (IF (<= |%t0| 2) (SETQ |acc| -1)))) |acc|))",
+					"(DEFUN |L2.area(Shape)| (|s|) (LET ((|c| NIL) (|side| 0) (|q| NIL)) (COND ((NULL |s|) "
+							+ "(RONTOLISP::%JAVA-NULL-SWITCH)) ((AND (|Circle?| |s|) (PROGN (SETQ |c| |s|) T)) (* (* 3.0 "
+							+ "(|Circle.r()| (OR |c| (RONTOLISP::%JAVA-NPE)))) (|Circle.r()| (OR |c| "
+							+ "(RONTOLISP::%JAVA-NPE))))) ((AND (AND (|Square?| |s|) (PROGN (SETQ |side| (|Square.side| "
+							+ "|s|)) T)) (> |side| 1)) (FLOAT (%MASK-SIGNED-FIELD 32 (* |side| |side|)) 1.0)) ((AND "
+							+ "(|Square?| |s|) (PROGN (SETQ |q| |s|) T)) 1.0) (T (RONTOLISP::%JAVA-NO-MATCH)))))",
+					"(DEFUN |L2.rank(Level)| (|l|) (COND ((EQ |l| |Level.LOW|) 1) ((EQ |l| |Level.HIGH|) (LET ((|r| "
+							+ "2)) (DECLARE (TYPE (SIGNED-BYTE 32) |r|)) (%MASK-SIGNED-FIELD 32 (* |r| 2)))) ((NULL |l|) "
+							+ "(RONTOLISP::%JAVA-NULL-SWITCH)) (T (RONTOLISP::%JAVA-NO-MATCH))))",
 					"(DEFUN |L2.size(Object)| (|o|) (LET ((|s| NIL)) (IF (NOT (AND (SIMPLE-STRING-P |o|) (PROGN "
 							+ "(SETQ |s| |o|) T))) -1 (LENGTH (OR |s| (RONTOLISP::%JAVA-NPE))))))",
-					"(DEFUN |L2.sum(int[])| (|xs|) (LET ((|t| 0)) (BLOCK |outer%break| (LET* ((|%t1| (OR |xs| "
-							+ "(RONTOLISP::%JAVA-NPE))) (|%t3| (LENGTH |%t1|)) (|%t2| 0)) (WHILE (< |%t2| |%t3|) (LET ((|x| "
-							+ "(- (LOGAND (+ (AREF |%t1| |%t2|) 2147483648) 4294967295) 2147483648))) (IF (< |x| 0) (RETURN-FROM "
-							+ "|outer%break| NIL)) (SETQ |t| (- (LOGAND (+ (+ |t| |x|) 2147483648) 4294967295) 2147483648))) "
-							+ "(SETQ |%t2| (+ |%t2| 1))))) |t|))",
+					"(DEFUN |L2.sum(int[])| (|xs|) (LET ((|t| 0)) (DECLARE (TYPE (SIGNED-BYTE 32) |t|)) (BLOCK "
+							+ "|outer%break| (LET* ((|%t1| (OR |xs| (RONTOLISP::%JAVA-NPE))) (|%t3| (LENGTH |%t1|)) "
+							+ "(|%t2| 0)) (WHILE (< |%t2| |%t3|) (LET ((|x| (%MASK-SIGNED-FIELD 32 (AREF |%t1| |%t2|)))) "
+							+ "(DECLARE (TYPE (SIGNED-BYTE 32) |x|)) (IF (< |x| 0) (RETURN-FROM |outer%break| NIL)) (SETQ "
+							+ "|t| (%MASK-SIGNED-FIELD 32 (+ |t| |x|)))) (SETQ |%t2| (+ |%t2| 1))))) |t|))",
 					"(DEFUN |L2$1.run()| (|this|) (PROGN (|Log.line()|) (WRITE-LINE (%DECIMAL-PIECE (|L2$1.val$step$0| "
 							+ "|this|)))))",
 					"(DEFUN |L2$1.new()| (|%c0|) (LET ((|this| (|%make-L2$1|))) (SETF (|L2$1.val$step$0| |this|) "
 							+ "|%c0|) |this|))",
-					"(DEFUN |L2.Inner.twice()| (|this|) (- (LOGAND (+ (* (|L2.base| (|L2.Inner.this$0| |this|)) "
-							+ "2) 2147483648) 4294967295) 2147483648))",
+					"(DEFUN |L2.Inner.twice()| (|this|) (%MASK-SIGNED-FIELD 32 (* (THE (SIGNED-BYTE 32) (|L2.base| "
+							+ "(|L2.Inner.this$0| |this|))) 2)))",
 					"(DEFUN |L2.Inner.new()| (|%outer|) (LET ((|this| (|%make-L2.Inner|))) (SETF (|L2.Inner.this$0| "
 							+ "|this|) |%outer|) |this|))",
 					"(DEFUN |Log.<clinit>| NIL (IF |Log.<clinit>%done| NIL (PROGN (SETQ |Log.<clinit>%done| T) "
 							+ "(WRITE-LINE \"log\"))))",
-					"(%REPORTING-UNCAUGHT #'RONTOLISP::%JAVA-UNCAUGHT-LINE (%HOST-EXIT 1) (SETQ |Level.$VALUES| NIL) (SETQ |Log.lines| 0) (SETQ |Level.LOW| (|Level.new(String,int)| "
-							+ "\"LOW\" 0)) (SETQ |Level.HIGH| (|Level.new(String,int)| \"HIGH\" 1)) (SETQ |Level.$VALUES| (VECTOR "
-							+ "|Level.LOW| |Level.HIGH|)) (SETQ |Level.ALL| (|Level.values()|)) (SETQ |Log.<clinit>%done| "
-							+ "NIL) (|L2.main(String[])| (VECTOR)))");
+					"(DEFUN |%initialization| NIL (PROGN (SETQ |Level.LOW| (|Level.new(String,int)| \"LOW\" 0)) (SETQ "
+							+ "|Level.HIGH| (|Level.new(String,int)| \"HIGH\" 1)) (SETQ |Level.$VALUES| (VECTOR |Level.LOW| "
+							+ "|Level.HIGH|)) (SETQ |Level.ALL| (|Level.values()|))))")
+			.containsSubsequence("(SETQ |Level.$VALUES| NIL)", "(SETQ |Log.lines| 0)", "(SETQ |Log.<clinit>%done| NIL)",
+					"(%REPORTING-UNCAUGHT #'RONTOLISP::%JAVA-UNCAUGHT-LINE (%HOST-EXIT 1) (|%initialization|) "
+							+ "(|L2.main(String[])| (VECTOR)))");
 	}
 
 	@Test
@@ -378,24 +387,27 @@ class JavaLoweringTest {
 			.contains(
 					"(DEFSTRUCT (|Named%lambda| (:CONSTRUCTOR |%make-Named%lambda| (|%f|)) (:PREDICATE |Named%lambda?|) "
 							+ "(:COPIER NIL)) |%f|)",
-					"(DEFUN |Box.above(Comparable)| (|this| |other|) (> (|Comparable.compareTo(Object)%v| (|Box.held| "
-							+ "|this|) |other|) 0))",
+					"(DEFUN |Box.above(Comparable)| (|this| |other|) (> (THE (SIGNED-BYTE 32) "
+							+ "(|Comparable.compareTo(Object)%v| (|Box.held| |this|) |other|)) 0))",
 					"(DEFUN |Box.with(java.util.function.Function)| (|this| |f|) (FUNCALL (OR |f| (RONTOLISP::%JAVA-NPE)) "
 							+ "(|Box.held| |this|)))",
 					"(DEFUN |L3.pick(Object,Object)| (|a| |b|) (IF (NOT (NULL |a|)) |a| |b|))",
-					"(DEFUN |L3.sum(Long,Integer)| (|a| |b|) (%MASK-SIGNED-FIELD 64 (+ (CAR (OR |a| (RONTOLISP::%JAVA-NULL-UNBOX))) "
-							+ "(OR |b| (RONTOLISP::%JAVA-NULL-UNBOX)))))",
+					"(DEFUN |L3.sum(Long,Integer)| (|a| |b|) (%MASK-SIGNED-FIELD 64 (+ (THE (SIGNED-BYTE 64) (CAR "
+							+ "(OR |a| (RONTOLISP::%JAVA-NULL-UNBOX)))) (THE (SIGNED-BYTE 64) (OR |b| "
+							+ "(RONTOLISP::%JAVA-NULL-UNBOX))))))",
 					"(DEFUN |L3.main(String[])| (|args|) (LET ((|v| (|Box.new(Comparable)| (|Version.new(int)| "
-							+ "2)))) (LET ((|s| (|Box.new(Comparable)| \"b\"))) (LET ((|named| (|%make-Named%lambda| (LAMBDA "
-							+ "NIL \"n\")))) (LET ((|task| (LAMBDA NIL NIL))) (LET ((|o| |named|)) (LET ((|big| (CONS 5 :LONG))) "
-							+ "(LET ((|len| (OR (|Box.with(java.util.function.Function)| (OR |s| (RONTOLISP::%JAVA-NPE)) "
-							+ "(LAMBDA (|%t0|) (LENGTH (OR |%t0| (RONTOLISP::%JAVA-NPE))))) (RONTOLISP::%JAVA-NULL-UNBOX)))) "
-							+ "(LET ((|n| NIL)) (WRITE-LINE (%STRING-CONCAT (%STRING-CONCAT (%STRING-CONCAT (%STRING-CONCAT "
-							+ "(%STRING-CONCAT (IF (|Box.above(Comparable)| (OR |v| (RONTOLISP::%JAVA-NPE)) (|Version.new(int)| "
-							+ "1)) \"true\" \"false\") \" \") (IF (|Box.above(Comparable)| (OR |s| (RONTOLISP::%JAVA-NPE)) \"a\") "
-							+ "\"true\" \"false\")) (OR (IF (|Named%is| |o|) (PROGN (SETQ |n| |o|) (|Named.greet()%v| "
-							+ "|n|)) \"\") \"null\")) (%DECIMAL-PIECE (|L3.sum(Long,Integer)| |big| |len|))) (RONTOLISP::%JAVA-TO-STRING "
-							+ "(|L3.pick(Object,Object)| 1 2))))) (FUNCALL (OR |task| (RONTOLISP::%JAVA-NPE)))))))))))",
+							+ "2)))) (LET ((|s| (|Box.new(Comparable)| \"b\"))) (LET ((|named| (|%make-Named%lambda| "
+							+ "(LAMBDA NIL \"n\")))) (LET ((|task| (LAMBDA NIL NIL))) (LET ((|o| |named|)) (LET ((|big| "
+							+ "(CONS 5 :LONG))) (LET ((|len| (OR (|Box.with(java.util.function.Function)| (OR |s| "
+							+ "(RONTOLISP::%JAVA-NPE)) (LAMBDA (|%t0|) (LENGTH (OR |%t0| (RONTOLISP::%JAVA-NPE))))) "
+							+ "(RONTOLISP::%JAVA-NULL-UNBOX)))) (DECLARE (TYPE (SIGNED-BYTE 32) |len|)) (LET ((|n| NIL)) "
+							+ "(WRITE-LINE (%STRING-CONCAT (%STRING-CONCAT (%STRING-CONCAT (%STRING-CONCAT "
+							+ "(%STRING-CONCAT (IF (|Box.above(Comparable)| (OR |v| (RONTOLISP::%JAVA-NPE)) "
+							+ "(|Version.new(int)| 1)) \"true\" \"false\") \" \") (IF (|Box.above(Comparable)| (OR |s| "
+							+ "(RONTOLISP::%JAVA-NPE)) \"a\") \"true\" \"false\")) (OR (IF (|Named%is| |o|) (PROGN (SETQ "
+							+ "|n| |o|) (|Named.greet()%v| |n|)) \"\") \"null\")) (%DECIMAL-PIECE (|L3.sum(Long,Integer)| "
+							+ "|big| |len|))) (RONTOLISP::%JAVA-TO-STRING (|L3.pick(Object,Object)| 1 2))))) (FUNCALL (OR "
+							+ "|task| (RONTOLISP::%JAVA-NPE)))))))))))",
 					"(DEFUN |Named.name()%v| (|%o|) (COND ((|Named%lambda?| |%o|) (FUNCALL (|Named%lambda-%f| "
 							+ "|%o|))) (T (RONTOLISP::%JAVA-NO-RECEIVER |%o| \"name()\"))))",
 					"(DEFUN |Comparable.compareTo(Object)%v| (|%o| |%a0|) (COND ((|Version?| |%o|) (IF (OR (NULL |%a0|) "
@@ -444,14 +456,16 @@ class JavaLoweringTest {
 						+ "NIL)) (|items| NIL) (|count| 0) (|changes| 0))",
 				"(DEFUN |Bag.iterator()| (|this|) (|java.util.ArrayList.iterator()| (OR (|Bag.items| |this|) "
 						+ "(RONTOLISP::%JAVA-NPE))))",
-				"(DEFUN |L4.main(String[])| (|args|) (LET ((|bag| (|Bag.new()|))) (|java.util.ArrayList.add(Object)| "
-						+ "(OR (|Bag.items| |bag|) (RONTOLISP::%JAVA-NPE)) |%string0|) (LET ((|first| |%string0|)) "
-						+ "(LET* ((|%t0| (|Bag.iterator()| (OR |bag| (RONTOLISP::%JAVA-NPE))))) (WHILE (|java.util.ArrayList.Each.hasNext()| "
-						+ "|%t0|) (LET ((|item| (|java.util.ArrayList.Each.next()| |%t0|))) (WRITE-LINE (IF (EQ |item| "
-						+ "|first|) \"true\" \"false\"))))) (LET ((|ns| (MAKE-ARRAY 2 :ELEMENT-TYPE '(UNSIGNED-BYTE 32) "
-						+ ":INITIAL-CONTENTS (LIST 2 1)))) (|java.util.Arrays.sort(int[])| |ns|) (WRITE-LINE (RONTOLISP::%JAVA-DOUBLE-STRING "
-						+ "(+ (FLOAT (|rontolisp.internal.Support.parseInt(String,int)| |%string1| 10) 1.0) (%STRICT-MATH "
-						+ ":SQRT (FLOAT (- (LOGAND (+ (AREF |ns| 0) 2147483648) 4294967295) 2147483648) 1.0)))))))))",
+				"(DEFUN |L4.main(String[])| (|args|) (LET ((|bag| (|Bag.new()|))) "
+						+ "(|java.util.ArrayList.add(Object)| (OR (|Bag.items| |bag|) (RONTOLISP::%JAVA-NPE)) "
+						+ "|%string0|) (LET ((|first| |%string0|)) (LET* ((|%t0| (|Bag.iterator()| (OR |bag| "
+						+ "(RONTOLISP::%JAVA-NPE))))) (WHILE (|java.util.ArrayList.Each.hasNext()| |%t0|) (LET "
+						+ "((|item| (|java.util.ArrayList.Each.next()| |%t0|))) (WRITE-LINE (IF (EQ |item| |first|) "
+						+ "\"true\" \"false\"))))) (LET ((|ns| (MAKE-ARRAY 2 :ELEMENT-TYPE '(UNSIGNED-BYTE 32) "
+						+ ":INITIAL-CONTENTS (LIST 2 1)))) (|java.util.Arrays.sort(int[])| |ns|) (WRITE-LINE "
+						+ "(RONTOLISP::%JAVA-DOUBLE-STRING (+ (FLOAT "
+						+ "(|rontolisp.internal.Support.parseInt(String,int)| |%string1| 10) 1.0) (%STRICT-MATH :SQRT "
+						+ "(FLOAT (%MASK-SIGNED-FIELD 32 (AREF |ns| 0)) 1.0)))))))))",
 				"(DEFUN |java.util.Arrays.sort(int[])| (|a|) (RONTOLISP::%JAVA-SORT-INTS |a| 0 (LENGTH (OR "
 						+ "|a| (RONTOLISP::%JAVA-NPE)))))");
 		// System.out as the receiver of a print is the host's stream, so the program
@@ -550,11 +564,14 @@ class JavaLoweringTest {
 					&& form.contains("TemporalQueries.localDate()"));
 		assertThat(lower(formatted.formatted(""), "L14.java"))
 			.noneMatch(form -> form.contains("TemporalQueries") || form.contains("java.time.format."));
-		// The letters of weeks, quarters and the modified Julian day make their parts
-		// only in a program whose patterns can name them -- a constant pattern names the
-		// letters outside its quotes, a computed one all of them --; a field that is no
-		// ChronoField is resolved only in a program that makes one, and a value is asked
-		// its calendar only in a program that reaches the question.
+		// The letters of weeks, quarters, the modified Julian day, a zone's name in words
+		// and a day's period make their parts only in a program whose patterns can name
+		// them -- a constant pattern names the letters outside its quotes, a computed one
+		// all of them, a localized form the zone's name where its time can be full or
+		// long
+		// --; a field that is no ChronoField is resolved only in a program that makes
+		// one,
+		// and a value is asked its calendar only in a program that reaches the question.
 		String patterned = """
 				import java.time.format.DateTimeFormatter;
 				import java.time.temporal.TemporalQueries;
@@ -564,14 +581,32 @@ class JavaLoweringTest {
 				    }
 				}
 				""";
-		assertThat(lower(patterned.formatted("\"uuuu'Y'\"", ""), "L15.java")).noneMatch(
-				form -> form.contains("WeekFields") || form.contains("IsoFields") || form.contains("JulianFields")
-						|| form.contains("Parsed.resolveOthers") || form.contains("IsoChronology"));
+		assertThat(lower(patterned.formatted("\"uuuu'Y'\"", ""), "L15.java"))
+			.noneMatch(form -> form.contains("WeekFields") || form.contains("IsoFields")
+					|| form.contains("JulianFields") || form.contains("Parsed.resolveOthers")
+					|| form.contains("IsoChronology") || form.contains("ZoneNames") || form.contains("Step.DayPeriod")
+					|| form.contains("OfPeriod()|"));
 		assertThat(lower(patterned.formatted("args[0]", ".query(TemporalQueries.chronology())"), "L15.java"))
 			.anyMatch(form -> form.startsWith("(DEFUN |java.time.temporal.WeekFields.of(java.time.DayOfWeek,int)| "))
 			.anyMatch(form -> form.startsWith("(DEFUN |java.time.format.Parsed.resolveOthers()| "))
 			.anyMatch(form -> form.startsWith("(DEFUN |java.time.format.Parsed.query(")
-					&& form.contains("java.time.chrono.IsoChronology.INSTANCE"));
+					&& form.contains("java.time.chrono.IsoChronology.INSTANCE"))
+			.anyMatch(form -> form.startsWith("(DEFUN |java.time.format.ZoneNames.read(java.time.format.Reading,"))
+			.anyMatch(form -> form.startsWith("(DEFUN |java.time.format.Parsed.middleOfPeriod()| "));
+		String localized = """
+				import java.time.LocalTime;
+				import java.time.format.*;
+				class L16 {
+				    public static void main(String[] args) {
+				        System.out.println(DateTimeFormatter.ofLocalizedTime(FormatStyle.%s).format(LocalTime.NOON));
+				    }
+				}
+				""";
+		assertThat(lower(localized.formatted("MEDIUM"), "L16.java"))
+			.anyMatch(form -> form.startsWith("(DEFUN |java.time.format.Step.Styled.parts(int)| "))
+			.noneMatch(form -> form.contains("ZoneNames"));
+		assertThat(lower(localized.formatted("LONG"), "L16.java"))
+			.anyMatch(form -> form.startsWith("(DEFUN |java.time.format.ZoneNames.name("));
 		assertThat(lower(pool.formatted("{ protected void afterExecute(Runnable r, Throwable t) { } }"), "L7.java"))
 			.anyMatch(form -> form.contains("(DEFUN |java.util.concurrent.ThreadPoolExecutor.hooked()| NIL "
 					+ "(|java.util.concurrent.ThreadPoolExecutor.Hooked.new()|))"));
@@ -713,7 +748,7 @@ class JavaLoweringTest {
 				"(DEFUN |Number.intValue()%v| (|%o|) (COND ((|L10.Half?| |%o|) (|L10.Half.intValue()| |%o|)) "
 						+ "(T (RONTOLISP::%JAVA-NUMBER-INT |%o|))))",
 				"(DEFUN |Number.shortValue()%v| (|%o|) (COND ((|L10.Half?| |%o|) (|L10.Half.shortValue()| |%o|)) "
-						+ "(T (- (LOGAND (+ (|Number.intValue()%v| |%o|) 32768) 65535) 32768))))",
+						+ "(T (%MASK-SIGNED-FIELD 16 (|Number.intValue()%v| |%o|)))))",
 				"(DEFUN |Number%is| (|%o|) (OR (|L10.Half?| |%o|) (RONTOLISP::%JAVA-NUMBER-P |%o|)))");
 		// newUpdater of a field updater is lowered where it is called, of a class
 		// literal and a constant name: the updater made holds the field's name -- its
@@ -767,11 +802,11 @@ class JavaLoweringTest {
 						+ "|kept|))) (WRITE-LINE (%STRING-CONCAT (%STRING-CONCAT (OR (|L12.above(Class)| |held|) \"null\") "
 						+ "(IF (EQ |held| |Kept%class|) \"true\" \"false\")) (IF (EQUAL (|%class-name| |kept|) \"Kept\") "
 						+ "\"true\" \"false\"))))))")
-			.anyMatch(form -> form
-				.startsWith("(%REPORTING-UNCAUGHT #'RONTOLISP::%JAVA-UNCAUGHT-LINE (%HOST-EXIT 1) (SETQ "
-						+ "|Object%class| " + made
-						+ "\"java.lang.Object\" \"Object\" NIL 0 NIL NIL NIL NIL NIL)) (SETQ |Kept%class| " + made
-						+ "\"Kept\" \"Kept\" NIL 0 |Object%class| NIL NIL NIL NIL)) (|L12.main(String[])| "));
+			.containsSubsequence(
+					"(SETQ |Object%class| " + made + "\"java.lang.Object\" \"Object\" NIL 0 NIL NIL NIL NIL NIL))",
+					"(SETQ |Kept%class| " + made + "\"Kept\" \"Kept\" NIL 0 |Object%class| NIL NIL NIL NIL))",
+					"(%REPORTING-UNCAUGHT #'RONTOLISP::%JAVA-UNCAUGHT-LINE (%HOST-EXIT 1) (|L12.main(String[])| "
+							+ "(VECTOR)))");
 		assertThat(lower("""
 				class L13 {
 				    public static void main(String[] args) {
@@ -976,16 +1011,18 @@ class JavaLoweringTest {
 				""", "demo/app/Main.java")).contains(
 				"(DEFSTRUCT (|demo.app.T| (:CONC-NAME |demo.app.T.|) (:CONSTRUCTOR |%make-demo.app.T| NIL) "
 						+ "(:PREDICATE |demo.app.T?|) (:COPIER NIL)) (|j%CAR| 0))",
-				"(DEFUN |demo.app.T.CDR(int)| (|this| |j%LIST|) (- (LOGAND (+ (+ (- (LOGAND (+ (+ |j%LIST| "
-						+ "(|demo.app.T.j%CAR| |this|)) 2147483648) 4294967295) 2147483648) 16) 2147483648) 4294967295) "
-						+ "2147483648))",
-				"(DEFUN |demo.app.Main.main(String[])| (|args|) (LET ((|j%T| (|demo.app.T.new()|))) (LET "
-						+ "((|c| 98)) (LET ((|big| 2147483648)) (WRITE-LINE (%STRING-CONCAT (%STRING-CONCAT (%STRING-CONCAT "
+				"(DEFUN |demo.app.T.CDR(int)| (|this| |j%LIST|) (DECLARE (TYPE (SIGNED-BYTE 32) |j%LIST|)) "
+						+ "(%MASK-SIGNED-FIELD 32 (+ (%MASK-SIGNED-FIELD 32 (+ |j%LIST| (THE (SIGNED-BYTE 32) "
+						+ "(|demo.app.T.j%CAR| |this|)))) 16)))",
+				"(DEFUN |demo.app.Main.main(String[])| (|args|) (LET ((|j%T| (|demo.app.T.new()|))) (LET ((|c| "
+						+ "98)) (DECLARE (TYPE (INTEGER 0 1114111) |c|)) (LET ((|big| 2147483648)) (DECLARE (TYPE "
+						+ "(SIGNED-BYTE 64) |big|)) (WRITE-LINE (%STRING-CONCAT (%STRING-CONCAT (%STRING-CONCAT "
 						+ "(%STRING-CONCAT (%STRING-CONCAT (%STRING-CONCAT (%DECIMAL-PIECE (|demo.app.T.CDR(int)| (OR "
-						+ "|j%T| (RONTOLISP::%JAVA-NPE)) 2)) \"n=16y\") (RONTOLISP::%JAVA-CHAR-STRING |c|)) (%DECIMAL-PIECE "
-						+ "|big|)) \"2147483647\") \"-0.0\") \"4.5\"))))))",
-				"(%REPORTING-UNCAUGHT #'RONTOLISP::%JAVA-UNCAUGHT-LINE (%HOST-EXIT 1) (SETQ |demo.app.T.NIL| 16) "
-						+ "(SETQ |demo.app.T.TEXT| \"n=16y\") (|demo.app.Main.main(String[])| (VECTOR)))");
+						+ "|j%T| (RONTOLISP::%JAVA-NPE)) 2)) \"n=16y\") (RONTOLISP::%JAVA-CHAR-STRING |c|)) "
+						+ "(%DECIMAL-PIECE |big|)) \"2147483647\") \"-0.0\") \"4.5\"))))))",
+				"(SETQ |demo.app.T.NIL| 16)", "(SETQ |demo.app.T.TEXT| \"n=16y\")",
+				"(%REPORTING-UNCAUGHT #'RONTOLISP::%JAVA-UNCAUGHT-LINE (%HOST-EXIT 1) (|demo.app.Main.main(String[])| "
+						+ "(VECTOR)))");
 	}
 
 	@Test
@@ -1071,20 +1108,21 @@ class JavaLoweringTest {
 				""";
 		assertThat(lower(threads, "T1.java")).contains(
 				"(DEFUN |Cell.add(Cell)| (|this| |other|) (LET ((|%t1| (RONTOLISP::%JAVA-MONITOR-ENTER |this|))) "
-						+ "(UNWIND-PROTECT (PROGN (SETF (|Cell.held| |this|) (- (LOGAND (+ (+ (|Cell.held| |this|) 1) "
-						+ "2147483648) 4294967295) 2147483648)) (LET* ((|%t0| (RONTOLISP:WITH-MUTEX "
+						+ "(UNWIND-PROTECT (PROGN (SETF (|Cell.held| |this|) (%MASK-SIGNED-FIELD 32 (+ (THE "
+						+ "(SIGNED-BYTE 32) (|Cell.held| |this|)) 1))) (LET* ((|%t0| (RONTOLISP:WITH-MUTEX "
 						+ "((RONTOLISP::%JAVA-VOLATILE)) (|Cell.next| |other|)))) (RONTOLISP:WITH-MUTEX "
 						+ "((RONTOLISP::%JAVA-VOLATILE)) (SETF (|Cell.next| |this|) |%t0|)))) "
 						+ "(RONTOLISP::%JAVA-MONITOR-EXIT |%t1|))))",
-				"(DEFUN |Cell.bump()| NIL (LET ((|%t3| (RONTOLISP::%JAVA-MONITOR-ENTER '|Cell|))) (UNWIND-PROTECT "
-						+ "(PROG1 (RONTOLISP:WITH-MUTEX ((RONTOLISP::%JAVA-VOLATILE)) |Cell.hits|) (LET* ((|%t2| (- "
-						+ "(LOGAND (+ (+ (RONTOLISP:WITH-MUTEX ((RONTOLISP::%JAVA-VOLATILE)) |Cell.hits|) 1) "
-						+ "2147483648) 4294967295) 2147483648))) (RONTOLISP:WITH-MUTEX ((RONTOLISP::%JAVA-VOLATILE)) "
-						+ "(SETQ |Cell.hits| |%t2|)))) (RONTOLISP::%JAVA-MONITOR-EXIT |%t3|))))",
-				"(DEFUN |Cell.twice(Object)| (|this| |lock|) (LET ((|%t5| (RONTOLISP::%JAVA-MONITOR-ENTER |lock|))) "
-						+ "(UNWIND-PROTECT (PROGN (LET ((|%t4| (RONTOLISP::%JAVA-MONITOR-ENTER '|Cell|))) "
-						+ "(UNWIND-PROTECT (SETF (|Cell.held| |this|) (- (LOGAND (+ (+ (|Cell.held| |this|) 2) "
-						+ "2147483648) 4294967295) 2147483648)) (RONTOLISP::%JAVA-MONITOR-EXIT |%t4|))) "
+				"(DEFUN |Cell.bump()| NIL (LET ((|%t3| (RONTOLISP::%JAVA-MONITOR-ENTER '|Cell|))) "
+						+ "(UNWIND-PROTECT (PROG1 (THE (SIGNED-BYTE 32) (RONTOLISP:WITH-MUTEX "
+						+ "((RONTOLISP::%JAVA-VOLATILE)) |Cell.hits|)) (LET* ((|%t2| (%MASK-SIGNED-FIELD 32 (+ (THE "
+						+ "(SIGNED-BYTE 32) (RONTOLISP:WITH-MUTEX ((RONTOLISP::%JAVA-VOLATILE)) |Cell.hits|)) 1)))) "
+						+ "(RONTOLISP:WITH-MUTEX ((RONTOLISP::%JAVA-VOLATILE)) (SETQ |Cell.hits| |%t2|)))) "
+						+ "(RONTOLISP::%JAVA-MONITOR-EXIT |%t3|))))",
+				"(DEFUN |Cell.twice(Object)| (|this| |lock|) (LET ((|%t5| (RONTOLISP::%JAVA-MONITOR-ENTER "
+						+ "|lock|))) (UNWIND-PROTECT (PROGN (LET ((|%t4| (RONTOLISP::%JAVA-MONITOR-ENTER '|Cell|))) "
+						+ "(UNWIND-PROTECT (SETF (|Cell.held| |this|) (%MASK-SIGNED-FIELD 32 (+ (THE (SIGNED-BYTE 32) "
+						+ "(|Cell.held| |this|)) 2))) (RONTOLISP::%JAVA-MONITOR-EXIT |%t4|))) "
 						+ "(|Thread.await(Object,long)| (OR |lock| (RONTOLISP::%JAVA-NPE)) 0) "
 						+ "(|Thread.signal(Object,boolean)| (OR |lock| (RONTOLISP::%JAVA-NPE)) T)) "
 						+ "(RONTOLISP::%JAVA-MONITOR-EXIT |%t5|))))",
@@ -1106,54 +1144,52 @@ class JavaLoweringTest {
 						+ ":ENDED) (RONTOLISP::%JAVA-INIT-LEAVE T))))))))))",
 				"(DEFUN |Late.<clinit>| NIL (IF (EQ |Late.<clinit>%done| :ENDED) NIL (LET ((|%t20| "
 						+ "(RONTOLISP::%JAVA-SELF))) (IF (EQ |Late.<clinit>%done| |%t20|) NIL (PROGN "
-						+ "(RONTOLISP::%JAVA-INIT-ENTER) (WHILE (RONTOLISP::%JAVA-INIT-BUSY |Late.<clinit>%done|)) "
-						+ "(IF |Late.<clinit>%done| (PROGN (RONTOLISP::%JAVA-INIT-LEAVE NIL) (IF (STRINGP "
+						+ "(RONTOLISP::%JAVA-INIT-ENTER) (WHILE (RONTOLISP::%JAVA-INIT-BUSY |Late.<clinit>%done|)) (IF "
+						+ "|Late.<clinit>%done| (PROGN (RONTOLISP::%JAVA-INIT-LEAVE NIL) (IF (STRINGP "
 						+ "|Late.<clinit>%done|) (RONTOLISP::%JAVA-THROW "
 						+ "(|NoClassDefFoundError.unusable(String,String)| \"Late\" |Late.<clinit>%done|) "
 						+ "#'|Throwable.toString()|) NIL)) (LET ((|%t21| NIL)) (SETQ |Late.<clinit>%done| |%t20|) "
-						+ "(RONTOLISP::%JAVA-INIT-LEAVE NIL) (UNWIND-PROTECT (HANDLER-CASE (IF (> |Late.made| 0) "
-						+ "(RONTOLISP::%JAVA-THROW (|IllegalStateException.new(String)| \"late\") "
+						+ "(RONTOLISP::%JAVA-INIT-LEAVE NIL) (UNWIND-PROTECT (HANDLER-CASE (IF (> (THE (SIGNED-BYTE "
+						+ "32) |Late.made|) 0) (RONTOLISP::%JAVA-THROW (|IllegalStateException.new(String)| \"late\") "
 						+ "#'|Throwable.toString()|)) ((SATISFIES RONTOLISP::%JAVA-THROWN) (|%t18|) (LET ((|%t19| "
 						+ "(RONTOLISP::%JAVA-THROWN |%t18|))) (SETQ |%t21| "
 						+ "(|ExceptionInInitializerError.record(Throwable,String)| |%t19| (|Thread.currentName()|))) "
 						+ "(RONTOLISP::%JAVA-THROW (|ExceptionInInitializerError.of(Throwable)| |%t19|) "
 						+ "#'|Throwable.toString()|)))) (PROGN (RONTOLISP::%JAVA-INIT-ENTER) (SETQ "
 						+ "|Late.<clinit>%done| (IF |%t21| |%t21| :ENDED)) (RONTOLISP::%JAVA-INIT-LEAVE T))))))))))",
-				"(RONTOLISP::%JAVA-THREAD-MAIN (LAMBDA NIL (PROGN (SETQ |Cell.hits| 0) (SETQ |Lazy.made| 0) (SETQ "
-						+ "|Late.made| 0) (SETQ |Throwable.traces| 0) (SETQ |Thread.defaultHandler| NIL) (SETQ "
-						+ "|Thread.guarding| NIL) (SETQ |Thread.MIN_PRIORITY| 1) (SETQ |Thread.NORM_PRIORITY| 5) "
-						+ "(SETQ |Thread.MAX_PRIORITY| 10) (SETQ |Thread.unnamed| 0) (SETQ |Thread.identifiers| 1) (SETQ "
-						+ "|Lazy.<clinit>%done| NIL) (SETQ |Late.<clinit>%done| NIL) (|T1.main(String[])| (VECTOR)))) (LAMBDA (|%t|) "
-						+ "(|Thread.finish(Thread)| |%t|)) (LAMBDA (|%o|) (|Throwable.trace(Throwable)| |%o|)))");
+				"(RONTOLISP::%JAVA-THREAD-MAIN (LAMBDA NIL (PROGN (|%initialization|) (|T1.main(String[])| (VECTOR)))) "
+						+ "(LAMBDA (|%t|) (|Thread.finish(Thread)| |%t|)) (LAMBDA (|%o|) (|Throwable.trace(Throwable)| "
+						+ "|%o|)))");
 		// where the target has one stack a thread is a body suspended and resumed:
 		// the functions a thread can wait in are async-defuns and a call of one an
 		// await; a function that only ends with such a call answers its future; a
 		// monitor no suspended thread can hold is entered as anywhere, and a function
 		// that never waits is the function it was
 		assertThat(Java.read(threads, "T1.java", JavaFiles.NONE, null, true).stream().map(LispVal::print).toList())
-			.contains("(DEFUN |Cell.add(Cell)| (|this| |other|) (LET ((|%t1| (RONTOLISP::%JAVA-MONITOR-ENTER |this|))) "
-					+ "(UNWIND-PROTECT (PROGN (SETF (|Cell.held| |this|) (- (LOGAND (+ (+ (|Cell.held| |this|) 1) "
-					+ "2147483648) 4294967295) 2147483648)) (LET* ((|%t0| (RONTOLISP:WITH-MUTEX "
+			.contains("(DEFUN |Cell.add(Cell)| (|this| |other|) (LET ((|%t1| (RONTOLISP::%JAVA-MONITOR-ENTER "
+					+ "|this|))) (UNWIND-PROTECT (PROGN (SETF (|Cell.held| |this|) (%MASK-SIGNED-FIELD 32 (+ (THE "
+					+ "(SIGNED-BYTE 32) (|Cell.held| |this|)) 1))) (LET* ((|%t0| (RONTOLISP:WITH-MUTEX "
 					+ "((RONTOLISP::%JAVA-VOLATILE)) (|Cell.next| |other|)))) (RONTOLISP:WITH-MUTEX "
 					+ "((RONTOLISP::%JAVA-VOLATILE)) (SETF (|Cell.next| |this|) |%t0|)))) "
 					+ "(RONTOLISP::%JAVA-MONITOR-EXIT |%t1|))))",
 					"(RONTOLISP:ASYNC-DEFUN |Cell.twice(Object)| (|this| |lock|) (LET ((|%t5| "
 							+ "(RONTOLISP::%JAVA-MONITOR-ENTER |lock|))) (UNWIND-PROTECT (PROGN (LET ((|%t4| "
-							+ "(RONTOLISP::%JAVA-MONITOR-ENTER '|Cell|))) (UNWIND-PROTECT (SETF (|Cell.held| |this|) (- "
-							+ "(LOGAND (+ (+ (|Cell.held| |this|) 2) 2147483648) 4294967295) 2147483648)) "
+							+ "(RONTOLISP::%JAVA-MONITOR-ENTER '|Cell|))) (UNWIND-PROTECT (SETF (|Cell.held| |this|) "
+							+ "(%MASK-SIGNED-FIELD 32 (+ (THE (SIGNED-BYTE 32) (|Cell.held| |this|)) 2))) "
 							+ "(RONTOLISP::%JAVA-MONITOR-EXIT |%t4|))) (RONTOLISP:AWAIT (|Thread.await(Object,long)| (OR "
 							+ "|lock| (RONTOLISP::%JAVA-NPE)) 0)) (|Thread.signal(Object,boolean)| (OR |lock| "
 							+ "(RONTOLISP::%JAVA-NPE)) T)) (RONTOLISP::%JAVA-MONITOR-EXIT |%t5|))))",
 					"(DEFUN |Thread.join()| (|this|) (|Thread.join(long)| |this| 0))",
-					"(RONTOLISP:ASYNC-DEFUN |T1.main(String[])| (|args|) (LET ((|cell| (|Cell.new()|))) (LET ((|worker| "
-							+ "(|Thread.new(Runnable)| (LAMBDA NIL (|Cell.add(Cell)| (OR |cell| (RONTOLISP::%JAVA-NPE)) "
-							+ "|cell|))))) (|Thread.start()| (OR |worker| (RONTOLISP::%JAVA-NPE))) (RONTOLISP:AWAIT "
-							+ "(|Thread.join()| (OR |worker| (RONTOLISP::%JAVA-NPE)))) (RONTOLISP:AWAIT "
-							+ "(|Cell.twice(Object)| (OR |cell| (RONTOLISP::%JAVA-NPE)) |cell|)) (WRITE-LINE "
-							+ "(%DECIMAL-PIECE (- (LOGAND (+ (+ (- (LOGAND (+ (+ (- (LOGAND (+ (+ (|Cell.bump()|) "
-							+ "(|Cell.held| |cell|)) 2147483648) 4294967295) 2147483648) (PROGN (|Lazy.<clinit>|) "
-							+ "|Lazy.made|)) 2147483648) 4294967295) 2147483648) (PROGN (|Late.<clinit>|) |Late.made|)) "
-							+ "2147483648) 4294967295) 2147483648))))))");
+					"(RONTOLISP:ASYNC-DEFUN |T1.main(String[])| (|args|) (LET ((|cell| (|Cell.new()|))) (LET "
+							+ "((|worker| (|Thread.new(Runnable)| (LAMBDA NIL (|Cell.add(Cell)| (OR |cell| "
+							+ "(RONTOLISP::%JAVA-NPE)) |cell|))))) (|Thread.start()| (OR |worker| "
+							+ "(RONTOLISP::%JAVA-NPE))) (RONTOLISP:AWAIT (|Thread.join()| (OR |worker| "
+							+ "(RONTOLISP::%JAVA-NPE)))) (RONTOLISP:AWAIT (|Cell.twice(Object)| (OR |cell| "
+							+ "(RONTOLISP::%JAVA-NPE)) |cell|)) (WRITE-LINE (%DECIMAL-PIECE (%MASK-SIGNED-FIELD 32 (+ "
+							+ "(%MASK-SIGNED-FIELD 32 (+ (%MASK-SIGNED-FIELD 32 (+ (THE (SIGNED-BYTE 32) (|Cell.bump()|)) "
+							+ "(THE (SIGNED-BYTE 32) (|Cell.held| |cell|)))) (THE (SIGNED-BYTE 32) (PROGN "
+							+ "(|Lazy.<clinit>|) |Lazy.made|)))) (THE (SIGNED-BYTE 32) (PROGN (|Late.<clinit>|) "
+							+ "|Late.made|)))))))))");
 		// a loop whose one suspension is its turn is a function of its own, called until
 		// it says it ended, so no body a thread is resumed in holds the loop; an exit of
 		// a block around the loop is taken once the function has returned
@@ -1226,29 +1262,29 @@ class JavaLoweringTest {
 				    static int n() { return 1; }
 				}
 				""", "T2.java")).contains(
-				"(DEFUN |T2.add(Object,T2)| (|this| |lock| |other|) (PROGN (PROGN (OR |lock| (RONTOLISP::%JAVA-NPE)) "
-						+ "(SETF (|T2.n| |this|) (- (LOGAND (+ (+ (|T2.n| |this|) 1) 2147483648) 4294967295) "
-						+ "2147483648))) (SETF (|T2.n| |this|) (- (LOGAND (+ (+ (|T2.n| |this|) 1) 2147483648) "
-						+ "4294967295) 2147483648)) (PROGN (OR (|T2.self()| (OR |other| (RONTOLISP::%JAVA-NPE))) "
-						+ "(RONTOLISP::%JAVA-NPE)) (SETF (|T2.n| |this|) (- (LOGAND (+ (+ (|T2.n| |this|) 1) "
-						+ "2147483648) 4294967295) 2147483648)))))",
+				"(DEFUN |T2.add(Object,T2)| (|this| |lock| |other|) (PROGN (PROGN (OR |lock| "
+						+ "(RONTOLISP::%JAVA-NPE)) (SETF (|T2.n| |this|) (%MASK-SIGNED-FIELD 32 (+ (THE (SIGNED-BYTE "
+						+ "32) (|T2.n| |this|)) 1)))) (SETF (|T2.n| |this|) (%MASK-SIGNED-FIELD 32 (+ (THE "
+						+ "(SIGNED-BYTE 32) (|T2.n| |this|)) 1))) (PROGN (OR (|T2.self()| (OR |other| "
+						+ "(RONTOLISP::%JAVA-NPE))) (RONTOLISP::%JAVA-NPE)) (SETF (|T2.n| |this|) (%MASK-SIGNED-FIELD "
+						+ "32 (+ (THE (SIGNED-BYTE 32) (|T2.n| |this|)) 1))))))",
 				"(DEFUN |Lazy.<clinit>| NIL (IF |Lazy.<clinit>%done| NIL (PROGN (SETQ |Lazy.<clinit>%done| T) "
 						+ "(WRITE-LINE \"made\"))))",
 				"(DEFUN |Late.<clinit>| NIL (IF (EQ |Late.<clinit>%done| T) NIL (IF |Late.<clinit>%done| "
 						+ "(RONTOLISP::%JAVA-THROW (|NoClassDefFoundError.unusable(String,String)| \"Late\" "
 						+ "|Late.<clinit>%done|) #'|Throwable.toString()|) (PROGN (SETQ |Late.<clinit>%done| T) "
-						+ "(HANDLER-CASE (IF (> |Late.made| 0) (RONTOLISP::%JAVA-THROW "
+						+ "(HANDLER-CASE (IF (> (THE (SIGNED-BYTE 32) |Late.made|) 0) (RONTOLISP::%JAVA-THROW "
 						+ "(|IllegalStateException.new(String)| \"late\") #'|Throwable.toString()|)) ((SATISFIES "
 						+ "RONTOLISP::%JAVA-THROWN) (|%t3|) (LET ((|%t4| (RONTOLISP::%JAVA-THROWN |%t3|))) (SETQ "
 						+ "|Late.<clinit>%done| (|ExceptionInInitializerError.record(Throwable,String)| |%t4| "
 						+ "\"main\")) (RONTOLISP::%JAVA-THROW (|ExceptionInInitializerError.of(Throwable)| |%t4|) "
 						+ "#'|Throwable.toString()|))))))))",
-				"(DEFUN |T2.main()| NIL (LET ((|text| \"late\")) (WRITE-LINE (%DECIMAL-PIECE (- (LOGAND (+ (+ (- "
-						+ "(LOGAND (+ (+ (PROGN (|Lazy.<clinit>|) |Lazy.made|) (PROGN (|Late.<clinit>|) |Late.made|)) "
-						+ "2147483648) 4294967295) 2147483648) (LET* ((|%t0| (OR |text| (RONTOLISP::%JAVA-NPE))) "
-						+ "(|%t1| (|T2.n()|)) (|%t2| (%STRING-CODE |%t0| |%t1|))) (IF (< |%t2| 0) "
-						+ "(RONTOLISP::%JAVA-STRING-INDEX |%t1| |%t0|) |%t2|))) 2147483648) 4294967295) "
-						+ "2147483648))) (|T2.add(Object,T2)| (OR (|T2.new()|) (RONTOLISP::%JAVA-NPE)) \"x\" "
+				"(DEFUN |T2.main()| NIL (LET ((|text| \"late\")) (WRITE-LINE (%DECIMAL-PIECE (%MASK-SIGNED-FIELD "
+						+ "32 (+ (%MASK-SIGNED-FIELD 32 (+ (THE (SIGNED-BYTE 32) (PROGN (|Lazy.<clinit>|) "
+						+ "|Lazy.made|)) (THE (SIGNED-BYTE 32) (PROGN (|Late.<clinit>|) |Late.made|)))) (THE "
+						+ "(SIGNED-BYTE 32) (LET* ((|%t0| (OR |text| (RONTOLISP::%JAVA-NPE))) (|%t1| (|T2.n()|)) "
+						+ "(|%t2| (%STRING-CODE |%t0| |%t1|))) (IF (< |%t2| 0) (RONTOLISP::%JAVA-STRING-INDEX |%t1| "
+						+ "|%t0|) |%t2|))))))) (|T2.add(Object,T2)| (OR (|T2.new()|) (RONTOLISP::%JAVA-NPE)) \"x\" "
 						+ "(|T2.new()|))))",
 				"(DEFUN |%class-name| (|%o|) (COND ((|IllegalStateException?| |%o|) "
 						+ "\"java.lang.IllegalStateException\") ((|ExceptionInInitializerError?| |%o|) "
@@ -1258,9 +1294,7 @@ class JavaLoweringTest {
 						+ "\"getClass()\"))))",
 				"(DEFUN |%uncaught| (|%c| |%text|) (RONTOLISP::%JAVA-UNCAUGHT-THROWN-LINE |%c| (LET ((|%o| "
 						+ "(RONTOLISP::%JAVA-THROWN |%c|))) (IF |%o| (|Throwable.trace(Throwable)| |%o|) |%text|))))",
-				"(%REPORTING-UNCAUGHT #'|%uncaught| (%HOST-EXIT 1) (SETQ |Lazy.made| 0) (SETQ |Late.made| 0) "
-						+ "(SETQ |Throwable.traces| 0) (SETQ |Lazy.<clinit>%done| NIL) (SETQ |Late.<clinit>%done| NIL) "
-						+ "(|T2.main()|))");
+				"(%REPORTING-UNCAUGHT #'|%uncaught| (%HOST-EXIT 1) (|T2.main()|))");
 	}
 
 	@Test
@@ -1516,8 +1550,9 @@ class JavaLoweringTest {
 				public class Main { public static void main(String[] a) {
 				    IO.println(Lists.twice(4) + Lists.describe(null, null)); } }
 				""", "app/Main.java", files).stream().map(LispVal::print).toList();
-		assertThat(forms).contains(
-				"(DEFUN |lib.Lists.twice(int)| (|x|) (- (LOGAND (+ (* 2 |x|) 2147483648) 4294967295) 2147483648))");
+		assertThat(forms)
+			.contains("(DEFUN |lib.Lists.twice(int)| (|x|) (DECLARE (TYPE (SIGNED-BYTE 32) |x|)) (%MASK-SIGNED-FIELD "
+					+ "32 (* 2 |x|)))");
 		assertThat(String.join("\n", forms)).doesNotContain("lib.Lists.unused", "lib.Hidden", "lib.Lists.today");
 		String[][] errors = {
 				// a body that is reached refuses what it names, where it names it, and
@@ -1605,9 +1640,9 @@ class JavaLoweringTest {
 				package app;
 				import static p.U.*;
 				public class Main { public static void main(String[] a) { IO.println(Helper.twice(yes() + F)); } }
-				""", "app/Main.java", files).stream().map(LispVal::print).toList()).contains(
-				"(DEFUN |app.Helper.twice(int)| (|x|) (- (LOGAND (+ (* 2 |x|) 2147483648) 4294967295) 2147483648))",
-				"(DEFUN |p.U.yes()| NIL 1)");
+				""", "app/Main.java", files).stream().map(LispVal::print).toList())
+			.contains("(DEFUN |app.Helper.twice(int)| (|x|) (DECLARE (TYPE (SIGNED-BYTE 32) |x|)) (%MASK-SIGNED-FIELD "
+					+ "32 (* 2 |x|)))", "(DEFUN |p.U.yes()| NIL 1)");
 		String[][] errors = {
 				{ "x/Main.java", "package app; class Main { }",
 						"x/Main.java:1:1: end of path to source file does not match its package name app" },

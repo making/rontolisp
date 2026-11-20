@@ -225,6 +225,53 @@ cases:
       3.0
       4.0
 
+  # A declared integer range is taken raw on wasm-GC, with no fallback for the values a
+  # declaration rules out (.kb/declarations-type-checks.md): through a deftype, on
+  # parameters, lets, a let* and a captured variable, beside fixnum, which proves no
+  # bound. Java's int and long arithmetic, the shape the Java front end lowers to.
+  - name: declared-integer-ranges-answer-what-undeclared-code-answers
+    source: |
+      (deftype dcli-int32 () '(signed-byte 32))
+      (defun dcli-step (h c)
+        (declare (type dcli-int32 h c))
+        (%mask-signed-field 32 (+ (* 31 h) c)))
+      (defun dcli-hash (s)
+        (let ((h 0) (i 0))
+          (declare (type (signed-byte 32) h i))
+          (loop while (< i (length s))
+                do (setq h (dcli-step h (char-code (char s i))))
+                   (setq i (1+ i)))
+          h))
+      (defun dcli-lanes (x k)
+        (declare (type (signed-byte 64) x) (type (integer 0 63) k))
+        (let ((y (%mask-signed-field 64 (* x 6364136223846793005))))
+          (declare (type (signed-byte 64) y))
+          (list y (ash y (- k)) (%mask-signed-field 64 (ash y k)) (< y x))))
+      (defun dcli-capture (n)
+        (declare (type (signed-byte 32) n))
+        (let ((s n))
+          (declare (type (signed-byte 32) s))
+          (let ((fn (lambda () (+ s 1))))
+            (setq s (%mask-signed-field 32 (* s 3)))
+            (funcall fn))))
+      (print (dcli-hash "the quick brown fox jumps over the lazy dog"))
+      (print (dcli-lanes 9223372036854775807 3))
+      (print (dcli-lanes -9223372036854775808 63))
+      (print (dcli-capture 1000000000))
+      (let* ((dcli-a 2147483647) (dcli-b (the (signed-byte 32) (- dcli-a 1))))
+        (declare (type (signed-byte 32) dcli-a dcli-b))
+        (print (list (%mask-signed-field 32 (+ dcli-a dcli-b)) (* dcli-a dcli-b))))
+      (let ((dcli-n (expt 2 70)))
+        (declare (type fixnum dcli-n))
+        (print (+ dcli-n dcli-n)))
+    expected: |
+      -2082818701
+      (2859235813007982803 357404476625997850 4427142430354310808 T)
+      (-9223372036854775808 -1 0 NIL)
+      -1294967295
+      (-3 4611686011984936962)
+      2361183241434822606848
+
   - name: fused-integer-expression-trees
     source: |
       (print (logand (+ 3 4) 5))

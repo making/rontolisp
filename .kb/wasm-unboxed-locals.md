@@ -45,7 +45,10 @@ shadow, INCLUDING nil". Sentinel: a private `TYPE_CELL` in an immutable module g
   heuristic; precision affects performance only, since `compileRawStore` boxes what does not
   classify.
 - Scoping mirrors `ctx.locals`. A name in `rawLocals` is never in `ctx.locals`
-  (`WasmDefvarCompiler` checks both).
+  (`WasmDefvarCompiler` checks both). **Every binder removes the names it binds from `rawLocals`
+  and the other name-keyed facts** (`WasmShadowedNames`: an inline lambda, a `handler-case`
+  clause, a counted `dotimes`; `WasmLetCompiler` inline), since a reader asks `rawLocals` first:
+  a `handler-case` variable read the outer raw local of its name until 2026-11-20.
 
 ## The exact flavour (`RawLocal.exact`, 2026-11-09)
 
@@ -72,6 +75,13 @@ shadow, no `_ub_read`) and the fused sites over it read its range (`.kb/wasm-int
   ([wasm-int-fusion.md](wasm-int-fusion.md), "A leaf compiled twice").
   ironclad's SHA-256 round variables qualify (inits read the declared registers, assignments are
   `mod32+`).
+- **A declared binding is one too** (2026-11-20, `RawLocal.declared`): a `let` binding or a
+  required parameter a declaration gives an integer range within i64, where no proof is as
+  narrow, nothing captures it, only `setq`/`setf` assign it and it is read mostly raw
+  (`WasmIntFusionCompiler.readMostlyRaw`); a parameter is unboxed once at the entry
+  (`unboxDeclaredParameters`, for a defun and a lambda), checked against its range. Its
+  stores check what the stored value's range does not prove
+  ([declarations-type-checks.md](declarations-type-checks.md), "Declared integer ranges").
 - **Stores** (`compileRawStore`): the fast path writes the slot; a bail's or an unfusable value's
   boxed result unboxes into it (`emitUnboxExact`: an i31 or a `TYPE_BIGNUM`, the two tiers an
   integer inside i64 takes, `.kb/wasm-bignum.md`). Anything else traps there -- only a false array
