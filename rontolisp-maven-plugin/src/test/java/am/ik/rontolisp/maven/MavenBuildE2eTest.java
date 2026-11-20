@@ -173,11 +173,12 @@ class MavenBuildE2eTest {
 
 	/**
 	 * The {@code wasm} goal: {@code src/main/java} -- two packages, a record, a thread, a
-	 * record checked with YAVI -- builds with javac as ever and, at {@code package}, to a
-	 * Preview 1 module and a component, each printing what {@code java} prints from
-	 * javac's classes. YAVI is read from the sources jar of the project's dependency. A
-	 * dependency with no sources jar is a warning, and a class of it the program names is
-	 * refused by name at its position.
+	 * record checked with YAVI, a filtered resource of {@code src/main/resources} --
+	 * builds with javac as ever and, at {@code package}, to a Preview 1 module and a
+	 * component, each printing what {@code java} prints from javac's classes. YAVI is
+	 * read from the sources jar of the project's dependency. A changed resource rebuilds.
+	 * A dependency with no sources jar is a warning, and a class of it the program names
+	 * is refused by name at its position.
 	 */
 	@Test
 	void aJavaProgramBuildsToWasmThatPrintsWhatTheJdkPrints() throws Exception {
@@ -193,11 +194,17 @@ class MavenBuildE2eTest {
 		String expected = run(this.project, List.of(javaExecutable().toString(), "-cp",
 				this.project.resolve("target/classes") + File.pathSeparator + jarOf(Validator.class), "app.Main"));
 		assertThat(expected).contains("total 1850")
+			.contains("shop v1.0.0")
 			.contains("The size of \"item\" must be less than or equal to 5. The given size is 9");
 		assertThat(run(this.project, List.of(wasmtime, "run", "target/javaapp-1.0.0.wasm"))).isEqualTo(expected);
 		assertThat(run(this.project, List.of(wasmtime, "run", "target/javaapp-component.wasm"))).isEqualTo(expected);
 		assertThat(run(this.project, ready.maven("-o", "package"))).contains("target/javaapp-1.0.0.wasm is up to date")
 			.contains("target/javaapp-component.wasm is up to date");
+
+		Files.writeString(this.project.resolve("src/main/resources/app.properties"),
+				"name=shop v${project.version}!\n");
+		run(this.project, ready.maven("-o", "-q", "package"));
+		assertThat(run(this.project, List.of(wasmtime, "run", "target/javaapp-1.0.0.wasm"))).contains("shop v1.0.0!");
 
 		Files.writeString(this.project.resolve("src/main/java/app/Main.java"), """
 				package app;
@@ -226,6 +233,8 @@ class MavenBuildE2eTest {
 				import am.ik.yavi.builder.ValidatorBuilder;
 				import am.ik.yavi.core.Validator;
 				import app.model.Order;
+				import java.io.IOException;
+				import java.nio.charset.StandardCharsets;
 				import java.util.List;
 
 				public class Main {
@@ -233,7 +242,9 @@ class MavenBuildE2eTest {
 				        .constraint(Order::item, "item", c -> c.notBlank().lessThanOrEqual(5))
 				        .build();
 
-				    public static void main(String[] args) throws InterruptedException {
+				    public static void main(String[] args) throws InterruptedException, IOException {
+				        System.out.print(new String(Main.class.getResourceAsStream("/app.properties").readAllBytes(),
+				            StandardCharsets.UTF_8));
 				        List<Order> orders = List.of(new Order("tea", 3, 250), new Order("cake", 2, 400),
 				            new Order("chocolate", 1, 300));
 				        int[] total = new int[1];
@@ -252,6 +263,9 @@ class MavenBuildE2eTest {
 				    }
 				}
 				""");
+		Path properties = this.project.resolve("src/main/resources/app.properties");
+		Files.createDirectories(properties.getParent());
+		Files.writeString(properties, "name=shop v${project.version}\n");
 		Path order = this.project.resolve("src/main/java/app/model/Order.java");
 		Files.createDirectories(order.getParent());
 		Files.writeString(order, """
@@ -293,6 +307,12 @@ class MavenBuildE2eTest {
 						    </dependency>
 						  </dependencies>
 						  <build>
+						    <resources>
+						      <resource>
+						        <directory>src/main/resources</directory>
+						        <filtering>true</filtering>
+						      </resource>
+						    </resources>
 						    <plugins>
 						      <plugin>
 						        <groupId>org.apache.maven.plugins</groupId>

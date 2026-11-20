@@ -387,11 +387,21 @@ the subset's classes declare (a `String` is a `Comparable` and a `CharSequence`)
 the `static synchronized` methods of the class hold, which is not the monitor of the class
 object held in a variable.
 
-**A resource is found when the program is compiled.** Its name must be a constant, and the
-bytes the program reads are those of the file at the compile. A directory is no resource:
-`getResourceAsStream` of one answers `null`, where the launcher answers a stream. The
-stream is a `ByteArrayInputStream`. A JDK class finds no resource, not even the JDK's own.
-`getResource`, `getResources`, `ResourceBundle` and `ServiceLoader` are refused by name.
+**A resource is found when the program is compiled.** The bytes the program reads are
+those of the file at the compile. A name computed when the program runs finds no source
+file (`.java`), no class file and no file or directory whose name starts with a dot, where
+the launcher finds them, and in the playground none of the uploads, which cannot be listed;
+a program whose loaders may find more than it carries is refused when it is compiled
+([Resources](index.md#resources)). A directory is no resource: `getResourceAsStream` of
+one answers `null`, where the launcher answers a stream. The stream is a
+`ByteArrayInputStream`. A JDK class finds no resource, not even the JDK's own.
+`getResource`, `getResources` and `ClassLoader.getParent` are refused by name.
+`ServiceLoader.load` of a `Class` whose type does not name the service (a `Class<?>`) is
+refused by name. A bundle class `ResourceBundle.getBundle` finds by a constant base name is a
+class of its own file; by a base name computed when the program runs, one the program
+reaches otherwise. `ResourceBundle.Control`, `Properties.loadFromXML` and `storeToXML` are
+refused by name. The line of the date `Properties.store` writes is a `java.util.Date`'s text
+(above).
 
 **A stream runs in order on the thread that asks for its result.** `parallel()` and
 `parallelStream()` are kept (`isParallel()` answers `true`) and change nothing else: the

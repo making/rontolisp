@@ -88,6 +88,7 @@ imports: |
   import java.util.OptionalInt;
   import java.util.OptionalLong;
   import java.util.PrimitiveIterator;
+  import java.util.Properties;
   import java.util.Queue;
   import java.util.Random;
   import java.util.RandomAccess;
@@ -5997,6 +5998,11 @@ cases:
                   }
               }
               later();
+              try {
+                  properties();
+              } catch (IOException ex) {
+                  throw new UncheckedIOException(ex);
+              }
           }
 
           // what Objects supplies, what Collections rotates, replaces and finds, an array filled
@@ -6056,6 +6062,111 @@ cases:
                   System.out.println(ex);
               }
           }
+
+          // the lines load reads and store writes, the orders of a table and its defaults a
+          // program sees, a value that is no text; a text's characters outside the printable
+          // ones of ASCII shown as <code point>
+          static String shown(String text) {
+              StringBuilder shown = new StringBuilder();
+              text.codePoints().forEach(c -> shown.append(c < 0x20 || c > 0x7e ? "<" + Integer.toHexString(c) + ">" : Character.toString(c)));
+              return shown.toString();
+          }
+
+          static String stored(String written) {
+              List<String> lines = new ArrayList<>();
+              for (String line : written.split("\n")) {
+                  if (!(line.startsWith("#") && line.length() > 20 && line.charAt(4) == ' ' && line.charAt(8) == ' ')) {
+                      lines.add(shown(line));
+                  }
+              }
+              return String.join(" / ", lines);
+          }
+
+          static void properties() throws IOException {
+              String[] texts = {"a=b", "a = b ", "  a:b", "a b c", "a\tb", "a\fb", "a=", "a", "=b", ":b", " ", "a==b", "a=:b", "a :=b", "a  =  = b", "a\\ b=c", "a\\=b=c", "a\\:b:c", "a\\tb=c\\n", "a=\\t\\r\\n\\f\\b\\q\\\\", "a=\\u0041\\u00e9", "a=\\u004", "a=\\u00G1", "a=\\U0041", "a=\\u\uff10\uff10\uff14\uff11", "# c\na=b", "! c\na=b", "  # c\na=b", "a=b # no comment", "a=b\\\n  c", "a=b\\\n  c\\\n\td", "a=b\\\r\n  c", "a=b\\\r  c", "a=b\\", "a=b\\\\", "a=b\\\\\\\nc", "a\\\n b=c", "# c \\\na=b", "a=1\na=2", "a=1\r\nb=2\rc=3\n\nd=4", "a=b\\\n\n c=d", "a=b\\\n# x\nc=d", "\\#a=b", "\\!a=b", "a\\ =b", "a=\\ b", "a=\u00e9\u2211", "\\u0061=\\u0062", "a=\\\n", "a\\", "a\\u0020b=c", "\u0000a=b", "a=\\u", "k=\\ud83d\\ude00"};
+              StringBuilder read = new StringBuilder();
+              for (int i = 0; i < texts.length; i++) {
+                  Properties loaded = new Properties();
+                  read.append(shown(texts[i])).append(" ->");
+                  try {
+                      loaded.load(new StringReader(texts[i]));
+                      for (String key : new TreeSet<>(loaded.stringPropertyNames())) {
+                          read.append(" [").append(shown(key)).append("]=[").append(shown(loaded.getProperty(key))).append(']');
+                      }
+                  } catch (IllegalArgumentException ex) {
+                      read.append(' ').append(ex.getMessage());
+                  }
+                  read.append(i % 6 == 5 ? "\n" : " | ");
+              }
+              System.out.println(read.toString().strip());
+              Properties octets = new Properties();
+              octets.load(new ByteArrayInputStream("k=\u00e9\\u00e9\nu=\u00e9".getBytes(StandardCharsets.UTF_8)));
+              Properties written = new Properties();
+              written.setProperty("plain", "value");
+              written.setProperty("with space", " lead and trail ");
+              written.setProperty("eq=colon:hash#bang!", "eq=colon:hash#bang!");
+              written.setProperty("#start", "!start");
+              written.setProperty("ctl\t\n\r\f", "ctl\t\n\r\f\b");
+              written.setProperty("uni\u00e9\u2211", "uni\u00e9\u2211\ud83d\ude00\u20ac\u00ff");
+              written.setProperty("back\\slash", "back\\slash");
+              written.setProperty("", "");
+              written.setProperty("tilde~del\u007f", "\u007f~");
+              StringWriter text = new StringWriter();
+              written.store(text, "comment line\nsecond\r\nthird\rfourth # \u00e9\u2211\u20ac\u0007\t x\n#already\n!bang\n");
+              ByteArrayOutputStream bytes = new ByteArrayOutputStream();
+              written.store(bytes, "c\u00e9\u2211");
+              StringWriter none = new StringWriter();
+              written.store(none, null);
+              Properties back = new Properties();
+              back.load(new StringReader(text.toString()));
+              Properties backBytes = new Properties();
+              backBytes.load(new ByteArrayInputStream(bytes.toByteArray()));
+              System.out.println(shown(octets.getProperty("k")) + " " + shown(octets.getProperty("u")) + " " + back.equals(written) + " " + backBytes.equals(written) + " " + written.hashCode());
+              System.out.println(stored(text.toString()));
+              System.out.println(stored(new String(bytes.toByteArray(), StandardCharsets.ISO_8859_1)));
+              System.out.println(stored(none.toString()));
+              Properties deeper = new Properties();
+              for (int i = 0; i < 9; i++) {
+                  deeper.setProperty("x" + i * 3, "xv" + i);
+              }
+              deeper.setProperty("Aa", "deep Aa");
+              Properties defaults = new Properties(deeper);
+              for (int i = 0; i < 12; i++) {
+                  defaults.setProperty("d" + i * 7, "dv" + i);
+              }
+              defaults.setProperty("BB", "def BB");
+              defaults.setProperty("k3", "shadowed");
+              Properties own = new Properties(defaults);
+              for (int i = 0; i < 15; i++) {
+                  own.setProperty("k" + i, "v" + i);
+              }
+              own.setProperty("long", "0123456789012345678901234567890123456789");
+              own.setProperty("longer", "01234567890123456789012345678901234567890");
+              System.out.println(own.keySet() + " " + own);
+              System.out.println(Collections.list(own.propertyNames()) + " " + own.stringPropertyNames());
+              ByteArrayOutputStream listed = new ByteArrayOutputStream();
+              own.list(new PrintStream(listed));
+              StringWriter listedText = new StringWriter();
+              own.list(new PrintWriter(listedText));
+              System.out.println(listed.toString().replace("\n", " / ") + listedText.toString().length());
+              Properties mixed = new Properties(defaults);
+              mixed.put("d7", 7);
+              mixed.put(8, "eight");
+              StringBuilder refused = new StringBuilder();
+              Runnable[] attempts = {() -> mixed.propertyNames(), () -> { try { mixed.store(new StringWriter(), null); } catch (IOException ex) { throw new UncheckedIOException(ex); } }, () -> own.stringPropertyNames().add("x"), () -> mixed.setProperty(null, "x"), () -> new Properties(-1), () -> { try { mixed.load((Reader) null); } catch (IOException ex) { throw new UncheckedIOException(ex); } }, () -> { try { mixed.load((InputStream) null); } catch (IOException ex) { throw new UncheckedIOException(ex); } }};
+              for (Runnable attempt : attempts) {
+                  try {
+                      attempt.run();
+                  } catch (RuntimeException ex) {
+                      refused.append(ex.getClass().getSimpleName()).append(ex instanceof ClassCastException || ex.getMessage() == null ? "" : " " + ex.getMessage()).append(", ");
+                  }
+              }
+              System.out.println(own.getProperty("k3") + " " + own.getProperty("d7") + " " + own.getProperty("x6") + " " + own.getProperty("none") + " " + own.getProperty("none", "fallback") + " " + own.get("d7") + " " + own.containsKey("d7") + " " + own.size() + " " + mixed.getProperty("d7") + " " + mixed.stringPropertyNames().size() + " " + mixed.size() + " " + refused);
+              Properties map = new Properties(4);
+              map.load(new StringReader("b=2\na=1\nc=3"));
+              Map<Object, Object> hash = new HashMap<>(map);
+              System.out.println(map + " " + map.equals(hash) + " " + hash.equals(map) + " " + map.setProperty("a", "one") + " " + map.remove("b") + " " + map.putIfAbsent("c", "x") + " " + map.getOrDefault("z", "zz") + " " + map.merge("c", "5", (x, y) -> x + "+" + y) + " " + Collections.list(map.keys()) + " " + Collections.list(map.elements()) + " " + map.values() + " " + map.entrySet() + " " + map.contains("one") + " " + map.containsValue("3+5"));
+          }
       }
     expected: |
       [18, 16, 14, 12, 10, 8, 6, 4, 2, 0, 1, 3, 5, 7, 9, 11, 13, 15, 17, 19] 18 19 16 122 true true 17 ba[a] null
@@ -6089,6 +6200,24 @@ cases:
       [1.0, -1.0][1.0, 2.5][1.0, NaN][2.0, 0.25][2.0, 0.5] -1.0 1 null fallback /: UTF-8 true true
       OptionalLong[42] OptionalLong.empty truefalsetrue 42 7 8 42 truefalse 420 42+none null
       java.util.NoSuchElementException: No value present
+      a=b -> [a]=[b] | a = b  -> [a]=[b ] |   a:b -> [a]=[b] | a b c -> [a]=[b c] | a<9>b -> [a]=[b] | a<c>b -> [a]=[b]
+      a= -> [a]=[] | a -> [a]=[] | =b -> []=[b] | :b -> []=[b] |   -> | a==b -> [a]=[=b]
+      a=:b -> [a]=[:b] | a :=b -> [a]=[=b] | a  =  = b -> [a]=[= b] | a\ b=c -> [a b]=[c] | a\=b=c -> [a=b]=[c] | a\:b:c -> [a:b]=[c]
+      a\tb=c\n -> [a<9>b]=[c<a>] | a=\t\r\n\f\b\q\\ -> [a]=[<9><d><a><c>bq\] | a=\u0041\u00e9 -> [a]=[A<e9>] | a=\u004 -> Malformed \uxxxx encoding. | a=\u00G1 -> Malformed \uxxxx encoding. | a=\U0041 -> [a]=[U0041]
+      a=\u<ff10><ff10><ff14><ff11> -> Malformed \uxxxx encoding. | # c<a>a=b -> [a]=[b] | ! c<a>a=b -> [a]=[b] |   # c<a>a=b -> [a]=[b] | a=b # no comment -> [a]=[b # no comment] | a=b\<a>  c -> [a]=[bc]
+      a=b\<a>  c\<a><9>d -> [a]=[bcd] | a=b\<d><a>  c -> [a]=[bc] | a=b\<d>  c -> [a]=[bc] | a=b\ -> [a]=[b] | a=b\\ -> [a]=[b\] | a=b\\\<a>c -> [a]=[b\c]
+      a\<a> b=c -> [ab]=[c] | # c \<a>a=b -> [a]=[b] | a=1<a>a=2 -> [a]=[2] | a=1<d><a>b=2<d>c=3<a><a>d=4 -> [a]=[1] [b]=[2] [c]=[3] [d]=[4] | a=b\<a><a> c=d -> [a]=[b] [c]=[d] | a=b\<a># x<a>c=d -> [a]=[b# x] [c]=[d]
+      \#a=b -> [#a]=[b] | \!a=b -> [!a]=[b] | a\ =b -> [a ]=[b] | a=\ b -> [a]=[ b] | a=<e9><2211> -> [a]=[<e9><2211>] | \u0061=\u0062 -> [a]=[b]
+      a=\<a> -> [a]=[] | a\ -> [a]=[] | a\u0020b=c -> [a b]=[c] | <0>a=b -> [<0>a]=[b] | a=\u -> Malformed \uxxxx encoding. | k=\ud83d\ude00 -> [k]=[<1f600>]
+      <c3><a9><e9> <c3><a9> true true 398908437
+      #comment line / #second / #third / #fourth # <e9>\u2211\u20AC<7><9> x / #already / !bang / # / = / \#start=\!start / back\\slash=back\\slash / ctl\t\n\r\f=ctl\t\n\r\f<8> / eq\=colon\:hash\#bang\!=eq\=colon\:hash\#bang\! / plain=value / tilde~del<7f>=<7f>~ / uni<e9><2211>=uni<e9><2211><1f600><20ac><ff> / with\ space=\ lead and trail 
+      #c<e9>\u2211 / = / \#start=\!start / back\\slash=back\\slash / ctl\t\n\r\f=ctl\t\n\r\f\u0008 / eq\=colon\:hash\#bang\!=eq\=colon\:hash\#bang\! / plain=value / tilde~del\u007F=\u007F~ / uni\u00E9\u2211=uni\u00E9\u2211\uD83D\uDE00\u20AC\u00FF / with\ space=\ lead and trail 
+      = / \#start=\!start / back\\slash=back\\slash / ctl\t\n\r\f=ctl\t\n\r\f<8> / eq\=colon\:hash\#bang\!=eq\=colon\:hash\#bang\! / plain=value / tilde~del<7f>=<7f>~ / uni<e9><2211>=uni<e9><2211><1f600><20ac><ff> / with\ space=\ lead and trail 
+      [k0, k1, k2, k3, k4, k5, k11, k6, k10, k7, k13, k8, k12, k9, long, k14, longer] {k0=v0, k1=v1, k2=v2, k3=v3, k4=v4, k5=v5, k11=v11, k6=v6, k10=v10, k7=v7, k13=v13, k8=v8, k12=v12, k9=v9, long=0123456789012345678901234567890123456789, k14=v14, longer=01234567890123456789012345678901234567890}
+      [k14, k13, k12, k11, k10, d35, x9, x24, d63, x6, x21, x3, x0, longer, k9, k8, long, k7, k6, d28, x18, k5, k4, k3, x15, k2, d56, k1, k0, x12, d21, BB, Aa, d7, d49, d0, d14, d77, d42, d70] [Aa, BB, x9, d56, d77, d14, d35, k11, k10, d0, k13, k12, long, k14, d7, x12, x15, x18, d63, d21, d42, k0, k1, k2, d49, k3, k4, k5, d28, k6, k7, k8, k9, longer, x21, x0, x3, x24, d70, x6]
+      -- listing properties -- / Aa=deep Aa / BB=def BB / x9=xv3 / d56=dv8 / d77=dv11 / d14=dv2 / d35=dv5 / k11=v11 / k10=v10 / d0=dv0 / k13=v13 / k12=v12 / long=0123456789012345678901234567890123456789 / k14=v14 / d7=dv1 / x12=xv4 / x15=xv5 / x18=xv6 / d63=dv9 / d21=dv3 / d42=dv6 / k0=v0 / k1=v1 / k2=v2 / d49=dv7 / k3=v3 / k4=v4 / k5=v5 / d28=dv4 / k6=v6 / k7=v7 / k8=v8 / k9=v9 / longer=0123456789012345678901234567890123456... / x21=xv7 / x0=xv0 / x3=xv1 / x24=xv8 / d70=dv10 / x6=xv2 / 404
+      v3 dv1 xv2 null fallback null false 17 dv1 24 2 ClassCastException, ClassCastException, UnsupportedOperationException, NullPointerException, IllegalArgumentException, NullPointerException reader parameter is null, NullPointerException inStream parameter is null, 
+      {a=1, b=2, c=3} true true 1 2 3 zz 3+5 [a, c] [one, 3+5] [one, 3+5] [a=one, c=3+5] true true
   # A stream hands its elements on one at a time: each goes through every stage before
   # the next is taken, a stage that ends the stream takes no element more, a sort takes
   # all of them first. count() runs no stage where the source and the stages tell how
@@ -16241,8 +16370,16 @@ standalone:
       import java.io.InputStream;
       import java.nio.charset.StandardCharsets;
       import java.util.Arrays;
+      import java.util.Collections;
+      import java.util.Iterator;
+      import java.util.Locale;
+      import java.util.MissingResourceException;
+      import java.util.ResourceBundle;
+      import java.util.ServiceConfigurationError;
+      import java.util.ServiceLoader;
 
       import geo.Circle;
+      import geo.Greeter;
       import geo.Group;
       import geo.Label;
       import geo.Notes;
@@ -16258,6 +16395,48 @@ standalone:
           }
 
           static class Noted extends Notes {
+          }
+
+          // the providers of geo.Greeter the source tree's services file names
+          public static class Mine implements Greeter {
+              public Mine() {
+                  System.out.println("made Mine");
+              }
+
+              public String greet(String name) {
+                  return "mine " + name;
+              }
+          }
+
+          public abstract static class Partial implements Greeter {
+          }
+
+          public static class NoMaker implements Greeter {
+              public NoMaker(int x) {
+              }
+
+              public String greet(String name) {
+                  return name;
+              }
+          }
+
+          public static class Broken implements Greeter {
+              public Broken() {
+                  throw new IllegalStateException("broken");
+              }
+
+              public String greet(String name) {
+                  return name;
+              }
+          }
+
+          static class Hidden implements Greeter {
+              public Hidden() {
+              }
+
+              public String greet(String name) {
+                  return name;
+              }
           }
 
           static String area(Shape shape) {
@@ -16313,6 +16492,104 @@ standalone:
               System.out.println(twice.read() + " " + read(Main.class.getResourceAsStream(DATA)) + " " + twice.available());
           }
 
+          // names computed where the program runs: the program carries the files its
+          // loaders may find, beside the class asked or as they are
+          static void computed() throws IOException {
+              String[] names = { DATA, "/top.txt", "../top.txt", "sub/deep.txt", "missing.txt", "//top.txt",
+                      "/geo/note.txt", "note.txt", "tables/data.txt", "geo/note.txt" };
+              for (String name : names) {
+                  System.out.println(name + ": " + read(Main.class.getResourceAsStream(name)) + " "
+                          + read(Main.class.getClassLoader().getResourceAsStream(name)) + " "
+                          + read(ClassLoader.getSystemResourceAsStream(name)) + " "
+                          + read(Notes.class.getResourceAsStream(name)) + " " + new Notes().noted(name) + " "
+                          + new Noted().noted(name));
+              }
+              try {
+                  Main.class.getResourceAsStream(names.length > 99 ? DATA : null);
+              }
+              catch (NullPointerException ex) {
+                  System.out.println("NullPointerException");
+              }
+          }
+
+          // the bundles of a base name: a class of the name or a .properties file, from the
+          // most specific candidate locale on, the default locale's where only the base
+          // bundle is found; the loader of the class calling getBundle, or the one given
+          static void bundles() {
+              for (Locale locale : new Locale[] { Locale.UK, Locale.US, Locale.ROOT, Locale.ENGLISH, Locale.CANADA }) {
+                  ResourceBundle messages = ResourceBundle.getBundle("tables.msgs", locale);
+                  System.out.println(locale + ": [" + messages.getLocale() + "] " + messages.getBaseBundleName() + " "
+                          + messages.getString("a") + " " + messages.getString("b") + " " + messages.getString("c")
+                          + " " + Collections.list(messages.getKeys()) + " " + messages.keySet() + " "
+                          + messages.containsKey("c") + messages.containsKey("z"));
+              }
+              ResourceBundle fallback = ResourceBundle.getBundle("tables.fallback", Locale.UK);
+              ResourceBundle texts = ResourceBundle.getBundle("tables.Texts", Locale.UK);
+              ResourceBundle computed = ResourceBundle.getBundle(DATA.substring(0, 0) + "tables.msgs", Locale.UK);
+              System.out.println(ResourceBundle.getBundle("tables.words").getString("w") + " " + fallback.getLocale() + " "
+                      + fallback.getString("a") + " " + texts.getClass().getName() + " [" + texts.getLocale() + "] "
+                      + texts.getString("a") + " " + texts.getString("b") + " " + texts.getString("c") + " "
+                      + Collections.list(texts.getKeys()) + " " + texts.getObject("n") + " "
+                      + (computed == ResourceBundle.getBundle("tables.msgs", Locale.UK)) + " " + Notes.bundle());
+              try {
+                  texts.getString("z");
+              }
+              catch (MissingResourceException ex) {
+                  System.out.println(ex.getMessage() + " | " + ex.getClassName() + " | " + ex.getKey());
+              }
+              try {
+                  ResourceBundle.getBundle("tables.none", Locale.UK);
+              }
+              catch (MissingResourceException ex) {
+                  System.out.println(ex.getMessage() + " | " + ex.getClassName() + " | [" + ex.getKey() + "]");
+              }
+          }
+
+          // the providers the services files name, the source tree's then the library's: an
+          // iterator makes each in its next, a stream's provider in its get; each keeps what
+          // it found
+          static void services() {
+              ServiceLoader<Greeter> loader = ServiceLoader.load(Greeter.class);
+              for (int round = 0; round < 2; round++) {
+                  StringBuilder seen = new StringBuilder(loader.toString());
+                  Iterator<Greeter> each = loader.iterator();
+                  for (boolean more = true; more;) {
+                      try {
+                          more = each.hasNext();
+                          seen.append(more ? " | " + each.next().greet("it") : " | end");
+                      }
+                      catch (ServiceConfigurationError ex) {
+                          seen.append(" | ").append(ex.getMessage())
+                              .append(ex.getCause() == null ? "" : " / " + ex.getCause().getClass().getSimpleName());
+                      }
+                  }
+                  System.out.println(seen);
+              }
+              for (int round = 0; round < 2; round++) {
+                  StringBuilder seen = new StringBuilder();
+                  try {
+                      loader.stream().forEach(provider -> {
+                          seen.append(provider.type().getSimpleName()).append(' ');
+                          try {
+                              Greeter made = provider.get();
+                              seen.append(made.greet("one")).append(made == provider.get()).append(' ');
+                          }
+                          catch (ServiceConfigurationError ex) {
+                              seen.append(ex.getMessage()).append(' ');
+                          }
+                      });
+                  }
+                  catch (ServiceConfigurationError ex) {
+                      seen.append("stream: ").append(ex.getMessage());
+                  }
+                  System.out.println(seen);
+              }
+              loader.reload();
+              System.out.println(loader.findFirst().map(Greeter::getClass).map(Class::getName) + " "
+                      + ServiceLoader.load(Greeter.class, null).stream().map(p -> p.type().getSimpleName()).toList()
+                      + " " + ServiceLoader.loadInstalled(Greeter.class).findFirst() + " " + Notes.greeters());
+          }
+
           @Label("where the program starts")
           public static void main(String[] args) throws IOException {
               Table<Shape> table = new Table<Shape>().column("name", Shape::name)
@@ -16336,6 +16613,9 @@ standalone:
                   System.out.println(ex.getMessage());
               }
               resources();
+              computed();
+              bundles();
+              services();
               System.out.println(table.row(null));
           }
       }
@@ -16352,9 +16632,84 @@ standalone:
         é ∑ 😀
       geo/note.txt: |
         tree-note
+      tables/msgs.properties: |
+        a=root a
+        b=root b
+        c=root c
+      tables/msgs_en.properties: |
+        a=en a
+        b=en b
+      tables/msgs_en_GB.properties: |
+        a=en_GB a
+      tables/words.properties: |
+        w=root word
+      tables/words_en.properties: |
+        w=en word
+      tables/fallback.properties: |
+        a=fallback base
+      tables/fallback_en_US.properties: |
+        a=fallback en_US
+      tables/Texts.java: |
+        package tables;
+
+        import java.util.ListResourceBundle;
+
+        public class Texts extends ListResourceBundle {
+            protected Object[][] getContents() {
+                return new Object[][] { { "a", "texts a" }, { "c", "texts c" }, { "n", 42 } };
+            }
+        }
+      tables/Texts_en.java: |
+        package tables;
+
+        import java.util.ListResourceBundle;
+
+        public class Texts_en extends ListResourceBundle {
+            protected Object[][] getContents() {
+                return new Object[][] { { "b", "texts en b" } };
+            }
+        }
+      tables/Texts_en.properties: |
+        b=a class wins over a file
+      tables/Texts_en_GB.properties: |
+        a=texts en_GB a
+      geo/texts_en_GB.properties: |
+        a=tree en_GB
+      META-INF/services/geo.Greeter: |
+        # the program's providers, then the library's
+        tables.Main$Mine  # a comment after the name
+
+          geo.Hello
+        tables.Missing
+        tables.Main
+        tables.Main$Partial
+        tables.Main$NoMaker
+        tables.Main$Broken
+        tables.Main$Hidden
+        tables.Main$Mine
     library:
       geo/note.txt: |
         library-note
+      geo/texts.properties: |
+        a=library root
+      geo/texts_en.properties: |
+        a=library en
+      META-INF/services/geo.Greeter: |
+        geo.Hello
+      geo/Greeter.java: |
+        package geo;
+
+        public interface Greeter {
+            String greet(String name);
+        }
+      geo/Hello.java: |
+        package geo;
+
+        public class Hello implements Greeter {
+            public String greet(String name) {
+                return "hello " + name;
+            }
+        }
       geo/Notes.java: |
         package geo;
 
@@ -16372,6 +16727,29 @@ standalone:
 
             public static String fixed() {
                 return read(Notes.class.getResourceAsStream("note.txt"));
+            }
+
+            // beside the class this object is, a name computed where the program runs
+            public String noted(String name) {
+                return read(getClass().getResourceAsStream(name));
+            }
+
+            // the library's loader, then the one the thread holds
+            public static String bundle() {
+                java.util.ResourceBundle own = java.util.ResourceBundle.getBundle("geo.texts", java.util.Locale.UK);
+                java.util.ResourceBundle context = java.util.ResourceBundle.getBundle("geo.texts", java.util.Locale.UK,
+                        Thread.currentThread().getContextClassLoader());
+                return own.getString("a") + "/" + own.getLocale() + "/" + context.getString("a") + "/"
+                        + context.getLocale();
+            }
+
+            // the providers the library's loader finds
+            public static String greeters() {
+                StringBuilder found = new StringBuilder();
+                for (Greeter greeter : java.util.ServiceLoader.load(Greeter.class, ClassLoader.getSystemClassLoader())) {
+                    found.append(greeter.greet("lib"));
+                }
+                return found.toString();
             }
 
             private static String read(InputStream in) {
@@ -16597,6 +16975,36 @@ standalone:
       data none library-note tree-note none true null null true false
       12 [-61, -87, 32, -30, -120, -111, 32, -16, -97, -104, -128, 10] é ∑ 😀
       100 data 4
+      data.txt: data none none none none data
+      /top.txt: top none none none none top
+      ../top.txt: none none none none none none
+      sub/deep.txt: deep none none none none deep
+      missing.txt: none none none none none none
+      //top.txt: none none none none none none
+      /geo/note.txt: tree-note none none library-note library-note tree-note
+      note.txt: program-note none none library-note library-note program-note
+      tables/data.txt: none data none none none none
+      geo/note.txt: none tree-note library-note none none none
+      NullPointerException
+      en_GB: [en_GB] tables.msgs en_GB a en b root c [a, b, c] [a, b, c] truefalse
+      en_US: [en] tables.msgs en a en b root c [a, b, c] [a, b, c] truefalse
+      : [] tables.msgs root a root b root c [a, b, c] [a, b, c] truefalse
+      en: [en] tables.msgs en a en b root c [a, b, c] [a, b, c] truefalse
+      en_CA: [en] tables.msgs en a en b root c [a, b, c] [a, b, c] truefalse
+      en word en_US fallback en_US java.util.PropertyResourceBundle [en_GB] texts en_GB a texts en b texts c [a, b, n, c] 42 true library en/en/tree en_GB/en_GB
+      Can't find resource for bundle tables.Texts, key z | tables.Texts | z
+      Can't find bundle for base name tables.none, locale en_GB | tables.none_en_GB | []
+      made Mine
+      java.util.ServiceLoader[geo.Greeter] | mine it | hello it | geo.Greeter: Provider tables.Missing not found | geo.Greeter: tables.Main not a subtype | geo.Greeter: Provider tables.Main$Partial could not be instantiated / InstantiationException | geo.Greeter: tables.Main$NoMaker Unable to get public no-arg constructor / NoSuchMethodException | geo.Greeter: Provider tables.Main$Broken could not be instantiated / IllegalStateException | geo.Greeter: Provider tables.Main$Hidden could not be instantiated / IllegalAccessException | end
+      java.util.ServiceLoader[geo.Greeter] | mine it | hello it | end
+      made Mine
+      made Mine
+      Mine mine onefalse Hello hello onefalse stream: geo.Greeter: Provider tables.Missing not found
+      made Mine
+      made Mine
+      Mine mine onefalse Hello hello onefalse stream: geo.Greeter: tables.Main not a subtype
+      made Mine
+      Optional[tables.Main$Mine] [Hello] Optional.empty hello lib
     error: "java.lang.IllegalArgumentException: no value for name | corners | area"
     at: "library-sources.jar!/geo/Table.java:52 in geo.Table.row(Object)"
   # java.math: a BigInteger is the host's integer held in a field, a BigDecimal one of

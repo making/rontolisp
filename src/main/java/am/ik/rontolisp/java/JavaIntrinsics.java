@@ -2112,6 +2112,18 @@ final class JavaIntrinsics {
 				(lowering, call) -> lowering.loaderResource(call));
 		natives.put("java.lang.ClassLoader.getSystemResourceAsStream(String)",
 				(lowering, call) -> lowering.loaderResource(call));
+		natives.put("rontolisp.internal.ResourceTable.table0()", (lowering, call) -> lowering.resourceTable());
+		JavaEmitter bundle = (lowering, call) -> lowering.bundle(call);
+		natives.put("java.util.ResourceBundle.getBundle(String)", bundle);
+		natives.put("java.util.ResourceBundle.getBundle(String,java.util.Locale)", bundle);
+		natives.put("java.util.ResourceBundle.getBundle(String,java.util.Locale,ClassLoader)", bundle);
+		natives.put("java.util.ResourceBundle.searchesTree(ClassLoader)",
+				library("java.lang.ClassLoader", "searchesTree"));
+		natives.put("java.util.ResourceBundle.classBundle(String,boolean)",
+				(lowering, call) -> lowering.classBundle(call));
+		natives.put("java.util.ServiceLoader.load(Class)", (lowering, call) -> lowering.services(call, 0));
+		natives.put("java.util.ServiceLoader.load(Class,ClassLoader)", (lowering, call) -> lowering.services(call, 1));
+		natives.put("java.util.ServiceLoader.loadInstalled(Class)", (lowering, call) -> lowering.services(call, 2));
 		// java.util.Date and java.sql: the host's offset at any instant, as above
 		natives.put("rontolisp.internal.Dates.local0(long)", host("%local-time-offset"));
 		return Map.copyOf(natives);

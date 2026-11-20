@@ -57,7 +57,9 @@ Maven plugin's `wasm` goal reading a project's
 dependencies from their sources jars, a session reading the source path: k32 (2026-11-20);
 a library's class in the file of another, the playground's uploads as a program's source
 tree, a sources jar's resources measured: k44 (2026-11-20); the resources a program and its
-libraries read: k53 (2026-11-20; "Resources" below); `LinkedHashMap`, `LinkedHashSet`, `LinkedList`: k27 (2026-11-19);
+libraries read: k53 (2026-11-20; "Resources" below); a resource name computed where the program runs,
+`Properties`, `ResourceBundle` and `ServiceLoader`: k58 (2026-11-20; "Resources" below;
+`.todo/k69` is what it left); `LinkedHashMap`, `LinkedHashSet`, `LinkedList`: k27 (2026-11-19);
 `java.text.MessageFormat`: k28 (2026-11-19); `java.text.Normalizer` over the normalization
 forms the front ends share: k29 (2026-11-19); a `Class` as a value, a type variable in
 scope kept apart from the one a call finds, `Name.this` as the instance of `Name`
@@ -440,11 +442,12 @@ is refused by name where it is reached, never where a class is read.** Asked for
   `library:` is zipped to a sources jar for the four legs and compiled by javac for the
   JDK leg, `provided:` is what javac alone reads).
 
-## Resources (2026-11-20, k53)
+## Resources (2026-11-20, k53; a computed name, bundles, services: k58)
 
 **Invariant: a resource is found while the program is lowered, by the loader a source
-launcher would give the class, and its octets travel in the output; its name is a
-constant, and a computed one is refused by name.** Measured against JDK 25.0.5's
+launcher would give the class, and its octets travel in the output: a constant name's one
+file where the call is, and for a name computed where the program runs every file its
+loader may find, in one table the program carries (`JavaResourceTable`).** Measured against JDK 25.0.5's
 `java -cp libcls app/Main.java` (the class path holding the library's classes and
 resources, NOT the tree: with no `-cp` the default `.` is often the tree's top, and its
 directory rule then answers for the launcher -- `../top.txt` found -- which misled the
@@ -479,7 +482,10 @@ first measurement).
   `Class.located` (the binary name at run time), anything else `nil` -- so a library's
   `getClass().getResourceAsStream("note.txt")` reads the SUBCLASS's package, as a JDK
   does. A loader's `getResourceAsStream` is `(if (ClassLoader.searchesTree l) tree
-  roots)` where the tree has another answer, `getSystemResourceAsStream` the roots'.
+  roots)` where the tree has another answer, `getSystemResourceAsStream` the roots'. A
+  computed name (k58) takes the same roads with `ResourceTable.beside(tree, directory,
+  name)` / `find(tree, name)` as the answer, the receiver then the name read once
+  (`classResource`'s `let*`), a `null` name the NPE every class gives.
 - **The octets** travel as a text of one character an octet (`Resources.stream`, a new
   `ByteArrayInputStream` every read). Not their UTF-8 text: one road for every file,
   binary or not. Measured (wasm): a program printing 5 octets 41,606 B (its
@@ -491,17 +497,122 @@ first measurement).
 - **Roots.** The tree is the entry's (`JavaFiles.findResource`), the playground's uploads
   (`treeResource`; an upload's octets are its text's UTF-8), none for `-e`; the roots are
   `--java-source-path` / `--java-source-dep` (`libraryResource`). The Maven plugin's `wasm`
-  goal passes no resource directory of the project (`.todo/k59`).
-- **Left** (`.todo/k58`): a name computed at run time, `getResource` (no `java.net.URL`),
-  `getResources`, `ResourceBundle`, `ServiceLoader`.
+  goal (k59) passes `${project.build.outputDirectory}` (`classesDirectory`) as the FIRST root,
+  ahead of `<javaSourcePath>` and the dependencies' sources jars: javac's class path order,
+  and it holds the resources as the resources plugin left them (filtering, includes, excludes,
+  `targetPath`), which `src/main/resources` read in place would not. It is left out when it
+  does not exist (`mvn rontolisp:wasm` before `compile`). Staleness (`WasmProgram`) covers
+  every file of the tree and of a directory root, not only `.java` (a changed resource
+  rebuilds); pinned in `MavenBuildE2eTest` (a filtered `app.properties`, changed, rebuilt).
+- **A computed name (k58): carried, not read where the program runs.** Measured first:
+  every call naming a resource in the class files of the 753 libraries of the local
+  repository (the k58 artefacts' `Scan.java`, the class-file API following each argument
+  back to what pushed it; 198 of them call one): of 278 `Class.getResource*` calls, 129
+  name a constant, 69 a concatenation, 55 a parameter, 16 a call's result, 9 a field; of
+  396 loader lookups 86 a constant and 147 a parameter; `ResourceBundle.getBundle` 61 of
+  114, `ServiceLoader.load` 68 of 110 (31 a parameter). A name a library computes mostly comes from elsewhere (a parameter, a
+  field: YAVI's `ResourceBundleMessageFormatter` keeps its base name in a field and asks
+  the thread's loader), so no shape of the call bounds what it finds. Two answers were
+  open: the roots read where the program runs (the Clojure front end's: a jar reader in
+  `clojure.lisp`, a `--dir` preopen on wasm) or the files carried. Taken: carried, as k53
+  carries a constant's -- a `.wasm` with no file system, a component a host serves, a
+  `.class` moved off the machine that compiled it all find them, which reading the
+  compile machine's `~/.m2` and tree at run time would not. The Clojure front end keeps
+  its reader (a Ring `:root` serves any request path).
+  - **What is carried** (`JavaClasses.carry` / `carryBundle`, `JavaResourceTable`):
+    selections, each made once and noted with `changed()`, so a pass lowered before the
+    first lookup is lowered again: a computed name selects every file of every root, and
+    of the tree where the program's loader may be asked (a program class, any loader
+    receiver, `getBundle` with a loader); `getBundle` of a constant base name its
+    `.properties` files in one directory. Left out: `.java` and `.class` (a source jar's
+    sources, the classes of `target/classes`, which k59 makes the first root; a constant
+    still finds a `.java` file, k53), names starting with a dot (a repository's `.git`),
+    directories. A directory's entries in name order, so the table does not depend on the
+    host. Bounds: 10,000 files, 16 MiB, 100,000 entries looked at, refused at the lookup
+    (`unsupported`: `a resource named where the program runs while the source tree holds
+    more than 10000 files to carry`) -- a tree whose top is a home directory. The
+    playground's uploads list as no directory (its `SourceLoader` has no
+    `listDirectory`), so a computed name finds none of them (`.todo/k69`).
+  - **The table** (`ResourceTable.table0()`, a native answered by
+    `JavaClasses.carriedTable()`): one text, the tree first then the roots in order, each
+    place a letter (`T`, `D`, `J`), its count and `;`, each file its name's length, `;`,
+    the name, its octets' count, `;`, the octets one character each. `ResourceTable.find`
+    walks the text where it is asked, the tree by the name as written, a `D` root by the
+    name `below` resolves, a `J` root by the name as it is. First drafted as maps parsed
+    in a static initializer: a program computing one name was 194,314 B of wasm against
+    43,195 B for the same read by a constant (`HashMap`, `ArrayList`,
+    `Integer.parseInt`); walking the text it is 50,285 B. A program computing no name has
+    no `ResourceTable`: `examples/java/shop` (328,166 B) and a constant read (43,195 B) are
+    byte-identical before and after.
+- **`ResourceBundle` (k58)**: `getBundle(base)` and `getBundle(base, locale)` are natives
+  (`JavaLowering.bundle`) naming the loader of the class calling them (a library's: the
+  system's, which misses the tree: probed), `getBundle(base, locale, loader)` the one
+  given. The documented lookup: candidate locales `lang_COUNTRY`, `lang`, root (the
+  locales `Locale` has); at each a public class of the bundle's name under
+  `ResourceBundle` (`classBundle`, a native answered with a `cond` over the classes
+  `bundleClassNames` lists beside a constant base name -- `Texts.java`, `Texts_*.java` in
+  its package's directory -- and, once a base name is computed, every bundle class in the
+  table), else `<name>.properties` read as UTF-8 or, where it is not well formed, ISO
+  8859-1; the first found the result, the next its parent. A base bundle alone, or none,
+  sends a locale other than the default to the default locale's candidates (probed under
+  four `-Duser.language/-Duser.country`: the root asked finds the base and stops, a
+  locale finding only the base takes the default's). One bundle per loader, name and
+  locale (`MADE`): `getBundle(US)` and `getBundle(CANADA)` answer one object. A
+  session's `getBundle` carries every file, a constant base name too: `ResourceTable`'s
+  text is read once, and a later buffer may name any bundle. Orders read
+  off the answers: a `PropertyResourceBundle`'s own keys are a `HashMap` copied from the
+  `Properties` it read, a `ListResourceBundle`'s a `HashMap` of `contents.length` (3 keys
+  in 4 buckets, probed against 16), `getKeys` its own then its parents' it lacks,
+  `keySet` a `HashSet`; `getObject` asks the parent's `getObject`, so a missing key is
+  refused with the LAST class's name. The words: `Can't find bundle for base name B,
+  locale L` (class name `B_L`, key `""`), `Can't find resource for bundle C, key K`.
+- **`Properties` (k58)**: a `Hashtable` whose mappings are a `ConcurrentHashMap` (of the
+  capacity given): a JDK's orders its keys as that map does (probed: 40 keys under six
+  capacities, 300 under none). `propertyNames()` is a
+  `Hashtable` and `stringPropertyNames()` / `list` a `HashMap`, each filled from the
+  deepest defaults up (probed by simulating each candidate over 40 keys); a key or value
+  that is no `String` is a `ClassCastException` in `propertyNames`, `list` and `store`.
+  `load` is the documented grammar (natural and logical lines, `\uxxxx`, a continuation's
+  leading blanks; 53 lines probed, the corpus's); `store` writes the comments (a line end
+  then `#` unless `#` or `!` follows, a character above `0xff` as `\uXXXX`), the date
+  line (`java.util.Date`'s text here), the own entries by sorted key (JDK 18 on), a key's
+  spaces and a value's leading ones escaped, and in the `OutputStream` form every
+  character outside `0x20`..`0x7e` as `\uXXXX` of its UTF-16 units (a string's element
+  here is a code point: `load` joins an escaped pair back into one).
+- **`ServiceLoader` (k58)**: `load` of a `Class<S>` of an exact `S` is a native
+  (`JavaLowering.services`) that reads `META-INF/services/<binary name>` of the tree
+  (the program's loader) and the roots in order, a name once, `#` to the line's end a
+  comment, and resolves each provider (`JavaClasses.binaryNamed`, `$` for a member
+  class) to an outcome: not found (or a tree class for the system loader), not a
+  subtype, no public constructor of no parameters (an inner class, an interface), not
+  instantiable, not public, made. The loader is built by `ServiceLoader.with` calls, a
+  maker `(lambda () (|C.new()|))` and the class object's for `Provider.type`. Read off
+  the answers: an iterator fails in `next` for every outcome (its `hasNext` answers
+  true); a stream fails at its advance for the first three and in `get` for the rest; a
+  `get` makes a new instance each time; the iterator's instances and the stream's
+  providers are cached apart, each going on from where its lookup stopped;
+  `load(S.class, null)` is the system's, `loadInstalled` finds none. Any other `Class`
+  is refused by name (`ServiceLoader.load of a service named by no class literal`).
+- **The JDK leg's default locale is `en_US`** (k58): `JavaSpecE2eTest.runOnJdk` passes
+  `-Duser.language=en -Duser.country=US`, the subset's `Locale.getDefault()`, so a line
+  that reaches the default locale (a bundle's fallback) is not the host's.
+- **Left** (`.todo/k69`): `getResource` / `getResources` (no `java.net.URL`),
+  `ClassLoader.getParent`, `ServiceLoader` of a computed class, a member class as a
+  bundle, the playground's uploads for a computed name, `ResourceBundle.Control`,
+  `Properties`' XML.
 - **Beside it** (k53): a qualified name of a JDK package naming no class the subset has,
   read as a value (`java.util.ResourceBundle.getBundle("m")`), is `the class
   java.util.ResourceBundle` and no longer `cannot find symbol: variable java`
   (`JavaClasses.namesPlatformClass`: a JDK package's name no prefix of which is a class).
 - Pinned by java-spec `a-program-uses-a-library-read-as-source-from-its-source-path`
   (`resources()`: the JDK leg's library classes carry the `library:` entries that are no
-  `.java` beside them), `JavaLoweringTest#aConstructTheSubsetDoesNotHaveIsRefusedByNameAtItsPosition`
-  (a computed name, the qualified JDK classes),
+  `.java` beside them; k58's `computed()`, `bundles()` and `services()` with the tree's and
+  the library's `.properties`, bundle classes and services files),
+  `a-deque-an-optional-the-utilities-and-the-older-classes` (`properties()`),
+  `JavaLoweringTest#aConstructTheSubsetDoesNotHaveIsRefusedByNameAtItsPosition`
+  (a service named by no class literal, the qualified JDK classes),
+  `JavaLoweringTest#aProgramOfSeveralFilesIsReadFromItsSourceTree` (a tree of more files
+  than a program carries),
   `PlaygroundReplTest#theJavaPickKeepsItsDeclarationsAcrossBuffersAndRunsAProgram` (an
   upload read as a resource).
 

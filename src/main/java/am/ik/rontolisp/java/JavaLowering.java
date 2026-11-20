@@ -7124,17 +7124,244 @@ final class JavaLowering implements JavaEmitter.Context {
 
 	private static final String RESOURCES = "rontolisp.internal.Resources";
 
+	private static final String RESOURCE_TABLE = "rontolisp.internal.ResourceTable";
+
 	private static final String CLASS_LOADER = "java.lang.ClassLoader";
 
 	/**
-	 * The name a resource is asked for by: a constant, since the resource is found while
-	 * the program is lowered and its octets travel with the program.
+	 * Notes a resource looked up by a name computed where the program runs: the files its
+	 * loader may find are carried ({@link JavaClasses#carry}), and too many are refused
+	 * at the lookup.
+	 * @param tree whether the lookup searches the program's source tree
 	 */
-	private String resourceName(Typed name, int pos) {
-		if (!(name.constant() instanceof String text)) {
-			throw unsupported(pos, "getResourceAsStream of a resource named by no constant");
+	private void carries(boolean tree, int pos) {
+		try {
+			this.classes.carry(tree);
 		}
-		return text;
+		catch (JavaResourceTable.Bounded ex) {
+			throw unsupported(pos, "a resource named where the program runs while " + ex.getMessage());
+		}
+	}
+
+	/**
+	 * What a class's {@code getResourceAsStream} of a name computed where the program
+	 * runs answers: the lookup of the files carried, beside the class; {@code null} for a
+	 * class whose loader finds none.
+	 * @param name the name, which is not {@code null}
+	 */
+	private @Nullable Answer computedBeside(@Nullable JavaClass declaration, LispVal name, int pos) {
+		Boolean program = loader(declaration);
+		if (program == null) {
+			return null;
+		}
+		carries(program, pos);
+		String packageName = this.classes.packageOf(Objects.requireNonNull(declaration));
+		String directory = packageName == null || packageName.isEmpty() ? "" : packageName.replace('.', '/') + "/";
+		return new Answer((program ? "program " : "system ") + directory,
+				library(RESOURCE_TABLE, "beside", List.of(program ? T : NIL, string(directory), name)));
+	}
+
+	@Override
+	public LispVal resourceTable() {
+		return string(this.classes.carriedTable());
+	}
+
+	private static final String SERVICE_LOADER = "java.util.ServiceLoader";
+
+	/** What {@code ServiceLoader} is told of a provider: its constants of these names. */
+	private static final int PROVIDER_FOUND = 0;
+
+	private static final int PROVIDER_NOT_FOUND = 1;
+
+	private static final int PROVIDER_NOT_SUBTYPE = 2;
+
+	private static final int PROVIDER_NO_CONSTRUCTOR = 3;
+
+	private static final int PROVIDER_ABSTRACT = 4;
+
+	private static final int PROVIDER_INACCESSIBLE = 5;
+
+	/**
+	 * {@code ServiceLoader.load} of a class literal ({@code Class<S>} of an exact
+	 * {@code S}): the providers the service's files name are found while the program is
+	 * lowered, for the program's loader ({@code load(S.class)}: the thread's context
+	 * loader) or, for a loader given, for the program's and the system's, chosen where
+	 * the program runs. {@code loadInstalled} finds none: the platform's loader has no
+	 * class of the program's world.
+	 * @param kind 0 {@code load(Class)}, 1 {@code load(Class, ClassLoader)}, 2
+	 * {@code loadInstalled(Class)}
+	 */
+	@Override
+	public LispVal services(Invocation call, int kind) {
+		Typed service = call.arguments().get(0);
+		JavaType argument = service.type() instanceof ClassType type && type.arguments().size() == 1
+				? type.arguments().get(0) : null;
+		JavaClass named = argument == null || argument instanceof Wildcard || argument instanceof Variable ? null
+				: locatedClass(argument);
+		if (named == null) {
+			throw unsupported(call.pos(), "ServiceLoader." + (kind == 2 ? "loadInstalled" : "load")
+					+ " of a service named by no class literal");
+		}
+		LispSymbol held = temporary();
+		LispVal made = library(SERVICE_LOADER, "made", List.of(held));
+		if (kind == 2) {
+			return JavaForms.let(held, service.form(), List.of(made));
+		}
+		LispVal program = providers(made, named, true, call.pos());
+		if (kind == 0) {
+			return JavaForms.let(held, service.form(), List.of(program));
+		}
+		LispSymbol loader = temporary();
+		LispVal system = providers(made, named, false, call.pos());
+		return list(cl("let*"), list(list(held, service.form()), list(loader, call.argument(1))),
+				program.equals(system) ? program : call("if",
+						call("and", loader, library(CLASS_LOADER, "searchesTree", List.of(loader))), program, system));
+	}
+
+	/** A loader made with each provider the service's files name for a loader. */
+	private LispVal providers(LispVal made, JavaClass service, boolean tree, int pos) {
+		LispVal chain = made;
+		for (String name : this.classes.serviceProviders(service.binaryName, tree)) {
+			JavaClass found = this.classes.binaryNamed(name);
+			chain = library(SERVICE_LOADER, "with",
+					found == null || (!tree && Boolean.TRUE.equals(loader(found)))
+							? List.of(chain, string(name), integer(PROVIDER_NOT_FOUND), NIL, NIL)
+							: provider(chain, name, found, service, pos));
+		}
+		return chain;
+	}
+
+	/**
+	 * What {@code ServiceLoader} is told of a provider whose class there is: whether it
+	 * is of the service's type, has a public constructor of no parameters and can be
+	 * made, the function making one and the one answering its class object.
+	 */
+	private List<LispVal> provider(LispVal chain, String name, JavaClass found, JavaClass service, int pos) {
+		if (!found.isSubclassOf(service)) {
+			return List.of(chain, string(name), integer(PROVIDER_NOT_SUBTYPE), NIL, NIL);
+		}
+		Method constructor = publicConstructor(found);
+		if (constructor == null) {
+			return List.of(chain, string(name), integer(PROVIDER_NO_CONSTRUCTOR), NIL, NIL);
+		}
+		LispVal type = list(cl("lambda"), NIL, classValue(raw(found)));
+		if (found.isAbstract || !isPublic(found)) {
+			return List.of(chain, string(name), integer(found.isAbstract ? PROVIDER_ABSTRACT : PROVIDER_INACCESSIBLE),
+					NIL, type);
+		}
+		return List.of(chain, string(name), integer(PROVIDER_FOUND),
+				list(cl("lambda"), NIL, made(found, constructor, pos)), type);
+	}
+
+	private static boolean isPublic(JavaClass declaration) {
+		return declaration.declaration != null && declaration.declaration.modifiers().contains("public");
+	}
+
+	/**
+	 * A class's public constructor of no parameters, which a class found by its name is
+	 * made with, or {@code null}: an interface and an inner class have none.
+	 */
+	private @Nullable Method publicConstructor(JavaClass declaration) {
+		if (declaration.isInterface || declaration.hasOuterInstance()) {
+			return null;
+		}
+		for (Method candidate : constructors(declaration)) {
+			JavaSyntax.Method written = candidate.declaration;
+			if (candidate.parameters.size() == candidate.hidden
+					&& (written == null ? isPublic(declaration) : written.modifiers().contains("public"))) {
+				return candidate;
+			}
+		}
+		return null;
+	}
+
+	/** An instance of a class found by its name, made with its constructor. */
+	private LispVal made(JavaClass declaration, Method constructor, int pos) {
+		called(constructor);
+		uses(declaration);
+		makes(declaration);
+		return located(form(JavaNames.creator(constructor), instanceArguments(declaration, null, List.of(), pos)), pos);
+	}
+
+	/**
+	 * Whether {@code ResourceBundle.getBundle} makes a class its bundle: a public class
+	 * under {@code ResourceBundle} that can be made, with a public constructor of no
+	 * parameters.
+	 */
+	private boolean isBundleClass(@Nullable JavaClass declaration) {
+		return declaration != null && !declaration.isAbstract && isPublic(declaration)
+				&& declaration.isSubclassOf(this.classes.library(RESOURCE_BUNDLE)) && loader(declaration) != null
+				&& publicConstructor(declaration) != null;
+	}
+
+	/**
+	 * The classes {@code ResourceBundle.getBundle} makes by their names: those of the
+	 * constant base names some pass met, or, where a base name is computed where the
+	 * program runs, every bundle class of the program and its libraries. A class of the
+	 * program's source tree is found by the program's loader alone.
+	 */
+	@Override
+	public LispVal classBundle(Invocation call) {
+		Map<String, JavaClass> bundles = new LinkedHashMap<>(this.classes.classBundles);
+		if (this.classes.everyClassBundle) {
+			for (JavaClass declaration : List.copyOf(this.classes.all())) {
+				if (isBundleClass(declaration)) {
+					bundles.putIfAbsent(declaration.binaryName, declaration);
+				}
+			}
+		}
+		LispSymbol name = temporary();
+		LispSymbol tree = temporary();
+		List<LispVal> arms = new ArrayList<>();
+		arms.add(cl("cond"));
+		bundles.forEach((binaryName, declaration) -> {
+			LispVal named = call("equal", name, string(binaryName));
+			arms.add(list(Boolean.TRUE.equals(loader(declaration)) ? call("and", tree, named) : named,
+					made(declaration, Objects.requireNonNull(publicConstructor(declaration)), call.pos())));
+		});
+		arms.add(list(T, NIL));
+		return list(cl("let*"), list(list(name, call.argument(0)), list(tree, call.argument(1))), list(arms));
+	}
+
+	private static final String RESOURCE_BUNDLE = "java.util.ResourceBundle";
+
+	/**
+	 * {@code getBundle(base)} and {@code getBundle(base, locale)} ask the loader of the
+	 * class calling them, {@code getBundle(base, locale, loader)} the one given, which
+	 * may be the program's. A constant base name carries the {@code .properties} files of
+	 * its bundles, one computed where the program runs every file, as a session's call
+	 * does: a later buffer may name any bundle of the table its first lookup read.
+	 */
+	@Override
+	public LispVal bundle(Invocation call) {
+		Typed base = call.arguments().get(0);
+		int given = call.arguments().size();
+		boolean tree = given == 3 || Boolean.TRUE.equals(loader(this.currentClass));
+		if (base.constant() instanceof String name && !this.classes.session) {
+			try {
+				this.classes.carryBundle(tree, name.replace('.', '/'));
+			}
+			catch (JavaResourceTable.Bounded ex) {
+				throw unsupported(call.pos(), "a resource bundle while " + ex.getMessage());
+			}
+			for (String binaryName : this.classes.bundleClassNames(name, tree)) {
+				JavaClass found = this.classes.binaryNamed(binaryName);
+				if (isBundleClass(found)
+						&& this.classes.classBundles.putIfAbsent(binaryName, Objects.requireNonNull(found)) == null) {
+					this.classes.changed();
+				}
+			}
+		}
+		else {
+			carries(tree, call.pos());
+			if (!this.classes.everyClassBundle) {
+				this.classes.everyClassBundle = true;
+				this.classes.changed();
+			}
+		}
+		LispVal locale = given == 1 ? library("java.util.Locale", "getDefault", List.of()) : call.argument(1);
+		return given == 3 ? library(RESOURCE_BUNDLE, "given", List.of(base.form(), locale, call.argument(2)))
+				: library(RESOURCE_BUNDLE, "called", List.of(base.form(), locale, tree ? T : NIL));
 	}
 
 	/**
@@ -7274,8 +7501,18 @@ final class JavaLowering implements JavaEmitter.Context {
 
 	@Override
 	public LispVal classResource(Invocation call) {
-		String name = resourceName(call.arguments().get(0), call.pos());
-		return byClass(Objects.requireNonNull(call.receiver()), declaration -> resourceBeside(declaration, name));
+		Typed receiver = Objects.requireNonNull(call.receiver());
+		Typed argument = call.arguments().get(0);
+		if (argument.constant() instanceof String name) {
+			return byClass(receiver, declaration -> resourceBeside(declaration, name));
+		}
+		// the class object, then the name, each read once
+		LispSymbol held = temporary();
+		LispSymbol name = temporary();
+		this.nonNull.add(held);
+		LispVal chosen = byClass(new Typed(held, receiver.type()),
+				declaration -> computedBeside(declaration, name, call.pos()));
+		return list(cl("let*"), list(list(held, receiver.form()), list(name, dereferenced(argument.form()))), chosen);
 	}
 
 	@Override
@@ -7290,7 +7527,14 @@ final class JavaLowering implements JavaEmitter.Context {
 	 */
 	@Override
 	public LispVal loaderResource(Invocation call) {
-		String name = resourceName(call.arguments().get(0), call.pos());
+		Typed argument = call.arguments().get(0);
+		if (!(argument.constant() instanceof String name)) {
+			LispVal named = dereferenced(argument.form());
+			carries(call.receiver() != null, call.pos());
+			return library(RESOURCE_TABLE, "find",
+					List.of(call.receiver() == null ? NIL : library(CLASS_LOADER, "searchesTree", List.of(call.self())),
+							named));
+		}
 		LispVal system = resourceStream(name, false);
 		if (call.receiver() == null) {
 			return system;
@@ -7312,9 +7556,15 @@ final class JavaLowering implements JavaEmitter.Context {
 				throw error(call.arguments().get(0).pos(),
 						"incompatible types: " + argument.type() + " cannot be converted to String");
 			}
-			Answer found = resourceBeside(locatedClass(literalType(literal)), resourceName(argument, call.pos()));
-			return new Typed(found == null ? NIL : found.form(),
-					new ClassType(this.classes.library("java.io.InputStream"), List.of()));
+			JavaClass located = locatedClass(literalType(literal));
+			ClassType stream = new ClassType(this.classes.library("java.io.InputStream"), List.of());
+			if (!(argument.constant() instanceof String name)) {
+				LispVal named = dereferenced(argument.form());
+				Answer found = computedBeside(located, named, call.pos());
+				return new Typed(found == null ? call("progn", named, NIL) : found.form(), stream);
+			}
+			Answer found = resourceBeside(located, name);
+			return new Typed(found == null ? NIL : found.form(), stream);
 		}
 		if (call.name().equals("getClassLoader") && call.arguments().isEmpty()) {
 			Answer found = loaderOf(locatedClass(literalType(literal)));

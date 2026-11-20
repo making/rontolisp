@@ -471,4 +471,27 @@ public final class Collections {
         }
         return (T a, T b) -> order.compare(b, a);
     }
+
+    // the elements an enumeration answers, in its order
+    public static <T> ArrayList<T> list(Enumeration<T> e) {
+        ArrayList<T> listed = new ArrayList<>();
+        while (e.hasMoreElements()) {
+            listed.add(e.nextElement());
+        }
+        return listed;
+    }
+
+    // the elements of a collection, in its iterator's order
+    public static <T> Enumeration<T> enumeration(Collection<T> c) {
+        Iterator<T> elements = c.iterator();
+        return new Enumeration<T>() {
+            public boolean hasMoreElements() {
+                return elements.hasNext();
+            }
+
+            public T nextElement() {
+                return elements.next();
+            }
+        };
+    }
 }

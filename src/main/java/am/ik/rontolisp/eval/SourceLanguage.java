@@ -515,6 +515,61 @@ public enum SourceLanguage {
 			}
 
 			@Override
+			public @Nullable List<String> findListing(String from, String path) {
+				return loader.listDirectory(SourceLoader.resolve(SourceLoader.parentDir(from), path));
+			}
+
+			@Override
+			public @Nullable List<String> treeListing(String path) {
+				return sourceTree == null ? null : loader.listDirectory(SourceLoader.resolve(sourceTree, path));
+			}
+
+			@Override
+			public int libraryRoots() {
+				return sourcePath.size();
+			}
+
+			@Override
+			public boolean libraryArchive(int root) {
+				return !loader.isDirectory(sourcePath.get(root));
+			}
+
+			@Override
+			public @Nullable List<String> libraryListing(int root, String path) {
+				String top = sourcePath.get(root);
+				if (loader.isDirectory(top)) {
+					return loader.listDirectory(SourceLoader.resolve(top, path));
+				}
+				// a jar's entries one level below the directory, a directory's once
+				java.util.Set<String> names = new java.util.LinkedHashSet<>();
+				for (String entry : entries.apply(top)) {
+					if (entry.length() > path.length() && entry.startsWith(path)) {
+						int slash = entry.indexOf('/', path.length());
+						names.add(entry.substring(path.length(), slash < 0 ? entry.length() : slash + 1));
+					}
+				}
+				return names.isEmpty() && !path.isEmpty() ? null : List.copyOf(names);
+			}
+
+			@Override
+			public byte @Nullable [] libraryResource(int root, String path) {
+				String top = sourcePath.get(root);
+				if (loader.isDirectory(top)) {
+					return bytes(loader, SourceLoader.resolve(top, path));
+				}
+				if (path.endsWith("/") || !entries.apply(top).contains(path)) {
+					return null;
+				}
+				try {
+					return loader.loadArchiveEntryBytes(top, path);
+				}
+				catch (IOException ex) {
+					// an entry that cannot be read is no resource of the root
+					return null;
+				}
+			}
+
+			@Override
 			public byte @Nullable [] libraryResource(String name) {
 				for (String root : sourcePath) {
 					if (loader.isDirectory(root)) {
