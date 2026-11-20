@@ -141,6 +141,9 @@ public final class ZoneOffset extends ZoneId implements TemporalAccessor, Tempor
         if (temporal instanceof ZonedDateTime dateTime) {
             return dateTime.getOffset();
         }
+        if (temporal instanceof OffsetTime time) {
+            return time.getOffset();
+        }
         if (Iso.foreign()) {
             ZoneOffset offset = temporal.query(TemporalQueries.offset());
             if (offset != null) {

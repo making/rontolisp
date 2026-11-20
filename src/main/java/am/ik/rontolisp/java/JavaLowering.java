@@ -957,6 +957,12 @@ final class JavaLowering implements JavaEmitter.Context {
 				this.classes.reachedFrom.put(method, this.reaching);
 			}
 			use(method.owner);
+			if (!this.classes.calendars && method.owner.name.equals(TEMPORAL_QUERIES)
+					&& method.name.equals("chronology")) {
+				// the classes of java.time answer the question of a calendar again
+				this.classes.calendars = true;
+				this.classes.changed();
+			}
 			if (!this.classes.monitors && (method.owner.name.equals(THREAD) || isServer(method.owner))) {
 				// what was lowered holding no monitor is lowered again holding one: a
 				// thread of the program's, or the threads a server's handlers run on
@@ -1962,6 +1968,12 @@ final class JavaLowering implements JavaEmitter.Context {
 	private static final String THREAD = "java.lang.Thread";
 
 	private static final String TEMPORAL_ACCESSOR = "java.time.temporal.TemporalAccessor";
+
+	private static final String TEMPORAL_QUERIES = "java.time.temporal.TemporalQueries";
+
+	private static final String TEMPORAL_FIELD = "java.time.temporal.TemporalField";
+
+	private static final String CHRONO_FIELD = "java.time.temporal.ChronoField";
 
 	/**
 	 * Whether the program can start a thread: some call reaches {@code Thread.start()}.
@@ -3494,6 +3506,78 @@ final class JavaLowering implements JavaEmitter.Context {
 			String name = candidate.name;
 			boolean ours = name.startsWith("java.time.") && name.indexOf('.', "java.time.".length()) < 0;
 			if (!ours && isMade(candidate) && candidate.isSubclassOf(accessor)) {
+				return true;
+			}
+		}
+		return false;
+	}
+
+	@Override
+	public boolean asksCalendars() {
+		return this.classes.session || this.classes.calendars;
+	}
+
+	@Override
+	public void namesPattern(@Nullable String pattern) {
+		if (this.unit.source().library() || this.classes.everyLetter) {
+			// the library's own calls pass on a pattern a call of the program's named
+			return;
+		}
+		boolean named = false;
+		if (pattern == null) {
+			this.classes.everyLetter = true;
+			named = true;
+		}
+		else {
+			boolean quoted = false;
+			for (int i = 0; i < pattern.length(); i++) {
+				char c = pattern.charAt(i);
+				if (c == '\'') {
+					quoted = !quoted;
+				}
+				else if (!quoted && ((c >= 'A' && c <= 'Z') || (c >= 'a' && c <= 'z'))) {
+					named |= this.classes.patternLetters.add(c);
+				}
+			}
+		}
+		if (named) {
+			// what was lowered for patterns naming none of these letters is lowered again
+			this.classes.changed();
+		}
+	}
+
+	@Override
+	public boolean namesLetter(String letters) {
+		if (this.classes.session || this.classes.everyLetter) {
+			return true;
+		}
+		for (int i = 0; i < letters.length(); i++) {
+			if (this.classes.patternLetters.contains(letters.charAt(i))) {
+				return true;
+			}
+		}
+		return false;
+	}
+
+	@Override
+	public boolean makesClass(String name) {
+		for (JavaClass candidate : this.classes.all()) {
+			if (candidate.name.equals(name) && isMade(candidate)) {
+				return true;
+			}
+		}
+		return false;
+	}
+
+	@Override
+	public boolean makesOtherFields() {
+		if (this.classes.session) {
+			// a later buffer may make one
+			return true;
+		}
+		JavaClass field = this.classes.library(TEMPORAL_FIELD);
+		for (JavaClass candidate : this.classes.all()) {
+			if (!candidate.name.equals(CHRONO_FIELD) && isMade(candidate) && candidate.isSubclassOf(field)) {
 				return true;
 			}
 		}

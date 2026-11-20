@@ -1,9 +1,14 @@
 // Written for rontolisp's experimental Java subset from the API specification's names
 // and behaviour; nothing here is copied or translated from a JDK
 // (.kb/java-frontend-provenance.md). Lowered with every program that names it.
+// Third-party: the names of fields are Unicode CLDR data (Unicode-3.0), as a running JDK
+// writes them, Copyright (c) 1991-2026 Unicode, Inc.
+// Notice: THIRD-PARTY-NOTICES.txt, "Unicode".
 package java.time.temporal;
 
 import java.time.DateTimeException;
+import java.util.Locale;
+import java.util.Objects;
 
 // The fields of the ISO calendar and of a day's time, each with the values it takes.
 public enum ChronoField implements TemporalField {
@@ -99,6 +104,45 @@ public enum ChronoField implements TemporalField {
     @SuppressWarnings("unchecked")
     public <R extends Temporal> R adjustInto(R temporal, long newValue) {
         return (R) temporal.with(this, newValue);
+    }
+
+    /**
+     * The field's name in a locale: CLDR's for the fields that have one, as a JDK writes
+     * it for each locale the library has (the root's capitalized), else its text.
+     */
+    public String getDisplayName(Locale locale) {
+        Objects.requireNonNull(locale, "locale");
+        boolean root = locale.getLanguage().isEmpty();
+        String word;
+        switch (this) {
+            case SECOND_OF_MINUTE:
+                word = "second";
+                break;
+            case MINUTE_OF_HOUR:
+                word = "minute";
+                break;
+            case HOUR_OF_DAY:
+                word = "hour";
+                break;
+            case DAY_OF_WEEK:
+                return root ? "Day of the Week" : "day of the week";
+            case MONTH_OF_YEAR:
+                word = "month";
+                break;
+            case YEAR:
+                word = "year";
+                break;
+            case ERA:
+                word = "era";
+                break;
+            case AMPM_OF_DAY: {
+                String country = locale.getCountry();
+                return root ? "Dayperiod" : country.equals("GB") ? "am/pm" : country.equals("CA") ? "a.m./p.m." : "AM/PM";
+            }
+            default:
+                return name;
+        }
+        return root ? Character.toUpperCase(word.charAt(0)) + word.substring(1) : word;
     }
 
     public String toString() {

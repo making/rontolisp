@@ -1751,11 +1751,9 @@ documentation; what it leaves open is a JDK 25's answers to a grid. `java.time.c
   of the eight classes with the temporal constraints (`after`, `between`, `past` of a
   fixed clock, a field's predicate), texts, values already of the type and numbers for
   the year -- prints a JDK's 77 lines on the four: wasm 1,256,341 B.
-- Not there (`.todo/k52`): `MonthDay`, `OffsetTime`, `InstantSource`,
-  `TemporalAdjusters`, `IsoFields` / `WeekFields`, the calendars and eras,
-  `getDisplayName`, `datesUntil`; each refused by name. `Duration.dividedBy` stays
-  `.todo/k55`'s. The formatter and the queries came with k43 ("java.time: the formatter"
-  below).
+- The classes k35 left came with k52 ("java.time: what the formatter left" below).
+  `Duration.dividedBy` stays `.todo/k55`'s. The formatter and the queries came with k43
+  ("java.time: the formatter" below).
 - Pins: java-spec `dates-times-and-instants-are-read-from-their-texts-and-computed-with`
   (146 lines of the grid's kinds); a class the subset lacks is `java.util.Currency` and
   `java.util.EventListener` in `JavaLoweringTest#aLibraryOfTheSourcePathIsLoweredAsFarAsTheProgramReaches`
@@ -1976,9 +1974,11 @@ fields only in a program that can hold one.** Provenance:
     numbers after it, which read their width exactly and take no sign; the first reads
     at least its least width and at most 19 digits, one fewer where 19 pass a long.
     Strictly a sign is the style's (`EXCEEDS_PAD`: a `+` only past the pad width, none
-    without one past it; no `-0`); leniently any sign unless the width is fixed, and any
-    count of digits. A reduced number read in its width is the value nearest after the
-    base; in another width, or signed, it is the number itself.
+    without one past it; no `-0`); leniently any sign unless the width is fixed. A
+    reduced number read in its width is the value nearest after the base; in another
+    width, or signed, it is the number itself. Leniently "any count of digits" was
+    wrong: k52 measured (2026-11-20, 1,760 lines) nine at most, and found a fraction to
+    be one of a run ("java.time: what the formatter left").
   - words: the longest standing there, of two equal ones the later value (`J` is July);
     leniently those of every style, then a number; a field with no words is a number.
   - an offset: the no-offset text first, whatever follows (`x` reads `+0030` as `+00`);
@@ -2042,17 +2042,124 @@ fields only in a program that can hold one.** Provenance:
   .parse(x)`) run: the artefacts' `yavi/Event.java` prints a JDK's lines on the four
   backends. Strictly a pattern of `yyyy` makes no date (the year of an era stays a
   field), so such a check takes `2026-02-30` as a JDK does.
-- **Not there** (`.todo/k52`): the pattern letters of a locale's weeks (`Y`, `w`, `W`,
-  `e` and `c` of one or two letters), a quarter (`Q`, `q`), the modified Julian day
-  (`g`), a period of the day (`B`) and a zone's name in words (`z`, `v`), each an
-  `UnsupportedOperationException` by name when the pattern is read; `ISO_WEEK_DATE`,
-  `ofLocalized..`, `DecimalStyle`, `withChronology` and `getChronology`, `toFormat`,
-  `parseUnresolved`, `parse` at a `ParsePosition`, `withResolverFields`,
-  `TemporalQueries.chronology()`, refused by name.
+- **Not there**: what k52 left is `.todo/k57` ("java.time: what the formatter left").
 - Pins: java-spec `a-formatter-writes-and-reads-a-date-by-a-pattern` (standalone, 70
   lines; the corpus program above makes no formatter and so keeps the classes' own
   ways); `JavaLoweringTest#theLibraryIsJavaSourceLoweredAsFarAsTheProgramReaches` (the
   two questions).
+
+## java.time: what the formatter left (2026-11-20, k52)
+
+**Invariant: the classes k35 left and the letters k43 refused write, read and resolve as
+a JDK 25 answers; a program pays for the calendar only where it can ask a value for it,
+for resolving a field that is no `ChronoField` only where it makes one, and for the
+letters of weeks, quarters and Julian days only where a pattern of it can name one.**
+Provenance: [java-frontend-provenance.md](java-frontend-provenance.md). The grid and
+the sizes: `.todo/artefacts/k52-java-time-what-the-formatter-left/`.
+
+- **The classes** (Java source): `MonthDay` (`--MM-dd` read by `IsoText`; a text whose
+  fields make no day is refused with the words a JDK's formatter shows, `Unable to
+  obtain MonthDay from TemporalAccessor: {MonthOfYear=.., DayOfMonth=..},ISO of type
+  java.time.format.Parsed`, its list in one order); `OffsetTime` (`ISO_OFFSET_TIME`'s
+  text; an offset past 18 hours is the JDK's `Unable to obtain OffsetTime ..
+  {OffsetSeconds=n},ISO resolved to <time>`; the order is the instants', a time less its
+  offset, then the times'; hash `time ^ offset`); `InstantSource` (`Clock` is one; the
+  sources made are clocks in UTC, as a JDK's texts show: `FixedClock[..,Z]`,
+  `SystemInstantSource`, a program's own given a zone `SourceClock[source,zone]`);
+  `TemporalAdjusters` over the fields the documentation states; `datesUntil` (the n-th
+  date is plus n times the months, then n times the days; the count is estimated by
+  146,097 days in 4,800 months and settled by the dates beside it, so
+  `MIN.datesUntil(MAX, P1M).count()` runs no date); `OffsetDateTime.timeLineOrder()`
+  (the instants alone); `Year.isValidMonthDay` / `atMonthDay`; `getDisplayName` of
+  `Month`, `DayOfWeek` and `Era` (a formatter's words), of `ChronoField` (CLDR's names of
+  eight fields, the root's capitalized) and of a field of weeks (`week`).
+- **The calendar**: `Chronology`, `IsoChronology` (no `AbstractChronology`;
+  `resolveDate` refused), `Era`, `IsoEra`, `ChronoPeriod` (`Period` is one: its class
+  object costs `Booking.java` 459 B). Read off the answers: `ChronoLocalDate.from` of a
+  value of no calendar names `class java.time.LocalTime`; `epochSecond` refuses the year,
+  the month, the day of the month, the hour, the minute, the second, then the date;
+  `IsoChronology.hashCode` under a JDK is a class's identity (it moves with
+  `-Xshare:off`), so ours hashes as an object.
+- **Who pays: the calendar.** `calendars()` (in `Iso`, `TemporalQueries`, `Parsed`) is
+  answered by whether the program reaches `TemporalQueries.chronology()`
+  (`JavaLowering.reach` notes the first reach and lowers again); every class answers the
+  question behind it, and the question object is made only then
+  (`TemporalQueries.Calendar`). Measured: answered in every class unasked, a program
+  writing by a pattern grew 1.3 KB (`IsoChronology` made through the dispatch of
+  `query`); behind the question nothing. A formatter holds its calendar in one field
+  (ISO's for the ISO forms of a date).
+- **`IsoFields`, `JulianFields`, `WeekFields`** written from the definitions (ISO-8601's
+  week 1 holds January 4; a locale's week 1 is the first week of the period holding
+  `minimalDays` of its days, or the week before it where the days before its start
+  are that many): one formula over a day's index in its period and its day of the week
+  (`WeekFields.weekOne`). Compared with a JDK: all 49 `WeekFields` over 382 seeded dates
+  (values, ranges, `with`), every field of the three classes on the other classes. The
+  refusals name what a JDK reads first (`Unsupported field: DayOfWeek`, then
+  `DayOfMonth` / `DayOfYear` / `Year`). `WeekFields.of(Locale)`: `UK` Monday and 4, the
+  others Sunday and 1. **The todo's premise was wrong** (measured 2026-11-20, JDK 25.0.5):
+  a JDK under `C.UTF-8` has the default locale `en`, whose weeks start on Sunday with
+  one day, as `en_US`'s, `ROOT`'s and `en_CA`'s do, under `en_US.UTF-8` too; only `en_GB`
+  differs.
+- **Resolving a field that is no `ChronoField`** (`Parsed.resolveOthers`, behind
+  `Parsed.others()`: whether the program makes a `TemporalField` class other than
+  `ChronoField`): after the date's `ChronoField`s, each such field in the order read is
+  asked `resolve(map, parsed, style)` over a map view of the arrays (`Parsed.Fields`); one
+  that takes itself out or answers a date or a time is a change, after which the first
+  is asked again, and a date's `ChronoField` it put is resolved as they are; fifty
+  changes are `One of the parsed fields has an incorrectly implemented resolve method`.
+  A time a field answers leaves the time fields to be checked against it (a half day
+  alone is then no middle of it); the check compares such fields with the date or the
+  time too; two dates are `two different dates`, two times `different times`. The week
+  fields' rules, read off the grid: a localized day of the week is checked from 1 to 7 in
+  every style and overwrites `DAY_OF_WEEK`; a week-based year resolves only where no
+  `YEAR` is among the fields; strictly a date of another month or year is rejected;
+  smartly a week of a month or a year is checked against the field's range, of a
+  week-based year against that year's weeks. A JDK resolves them in the order of a hash
+  map of identity hashes, which changes from run to run (user docs).
+- **The letters**: `Y`, `w`, `W`, `e` and `c` of one or two (`Step.Localized`: a number
+  of the formatter's locale's field, made where it is written or read, one of a run as
+  any number; `Localized(..)` in the text); `Q`, `q` (`IsoFields.QUARTER_OF_YEAR`; the
+  words `1st quarter`, `Q1`, `1`, the root's full one `Q1` and short standalone one `1`);
+  `g`; `ISO_WEEK_DATE`. **Who pays: the letters a pattern names.** `ofPattern` and
+  `appendPattern` are natives whose emitters note the letters of a constant pattern
+  outside its quotes, all of them for a computed one (`JavaLowering.namesPattern`, the
+  front end's own calls not), then call the old bodies (`patterned`, `appended`);
+  `Patterns.weeks()`, `quarters()`, `julian()` answer by them, `Texts.quarters()` by
+  whether the program makes `IsoFields`' fields.
+- **Runs of numbers** (k43 did not follow a JDK; 1,760 lines of `Runs`): leniently a
+  number of no fixed width reads one to nine digits and those it keeps for the numbers
+  after it, where k43 read 19; a run's fixed-width first and a follower read their
+  widths; a number of no fixed width appended right after a run ends it, and its first
+  then reads its own widths keeping none (`Step.Digits.ended`); a fraction of a fixed
+  count and no point is one of a run, after a number or beginning one (then it keeps
+  none and the numbers after it read their widths); a fraction at the text's end makes
+  no field. `uuuuMMddHHmmssSSS` reads `20260307123456789`, which k43 refused.
+- **A type argument checked too early** (`JavaClasses.complete`): a declaration read
+  while another is completed checked its type arguments before the other's supertypes
+  were set, so `LocalDate` (implementing `ChronoLocalDate`, whose members now reach a
+  class implementing `ChronoZonedDateTime<LocalDate>`) was "not within bounds"; the
+  checks now wait for the outermost declaration. A program of several files could hit
+  it the same way.
+- **What a program pays** (wasm, the artefacts' table): every program of k35, k42 and
+  k43's tables the same bytes, 20 fewer or as above; a date written by a pattern 323,000
+  -> 324,879, read 428,993 -> 431,456 (the run model and the formatter's calendar); an ISO
+  form 3.3 KB smaller (the builder made a reduced number in every program to copy a
+  run's follower); a pattern computed where the program runs 429,380 -> 495,505: it can
+  name every letter (`WeekFields` 21.4 KB, `IsoFields` 12.6 KB, the top level 29.6 KB),
+  and so does YAVI's `isoLocalDate()` constraint, whose `localDate(pattern)` passes its
+  pattern on (k43's `yavi/Event.java` 946,257 -> 1,020,590, its four lines the same).
+  `MonthDay.parse` 153,734, `OffsetTime.parse` 145,010, a date by `"YYYY-ww-e"` written
+  370,960 and read 491,365, by `ISO_WEEK_DATE` read 402,801.
+- **The grid** (`Grid.java`, 4,561 lines): the interpreter (26 s), the JVM (2.6 s), wasm
+  (0.9 s, 1,172,798 B) and the component (1.2 s) print a JDK's lines (the JDK 2.4 s);
+  the k35 and k43 grids print theirs as before.
+- Not there: `.todo/k57` (CLDR's `B`, `z`, `v` and localized forms, `DecimalStyle`,
+  `toFormat`, `ParsePosition`, `withResolverFields`, the deviations, the cost of a
+  computed pattern).
+- Pins: java-spec `weeks-quarters-a-month-day-an-offset-time-and-the-iso-calendar`
+  (standalone, 94 lines); `JavaLoweringTest#theLibraryIsJavaSourceLoweredAsFarAsTheProgramReaches`
+  (the letters, the resolving and the calendar where a program names them);
+  `JavaLoweringTest#aProgramOfSeveralFilesIsReadFromItsSourceTree` (the type argument).
 
 ## java.util.Date and java.sql (2026-11-20, k37)
 

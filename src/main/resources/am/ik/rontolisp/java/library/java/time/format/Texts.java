@@ -11,6 +11,7 @@
 package java.time.format;
 
 import java.time.temporal.ChronoField;
+import java.time.temporal.IsoFields;
 import java.time.temporal.TemporalField;
 import java.util.Locale;
 
@@ -55,6 +56,22 @@ final class Texts {
     private Texts() {
     }
 
+    /**
+     * Whether the program makes the fields of IsoFields, so that a quarter can be written
+     * in words: answered by the compiler.
+     */
+    static native boolean quarters();
+
+    /** The words of a quarter, made in a program that writes one. */
+    private static final class Quarters {
+
+        static final String[] FULL = {"1st quarter", "2nd quarter", "3rd quarter", "4th quarter"};
+
+        static final String[] SHORT = {"Q1", "Q2", "Q3", "Q4"};
+
+        static final String[] NARROW = {"1", "2", "3", "4"};
+    }
+
     /** Which words a locale has: 0 the root's, 1 English, 2 British, 3 Canadian. */
     static int kind(Locale locale) {
         if (locale.getLanguage().isEmpty()) {
@@ -71,6 +88,15 @@ final class Texts {
     static String[] of(int kind, TemporalField field, TextStyle style) {
         boolean full = style == TextStyle.FULL || style == TextStyle.FULL_STANDALONE;
         boolean narrow = style == TextStyle.NARROW || style == TextStyle.NARROW_STANDALONE;
+        if (quarters()) {
+            if (field == IsoFields.QUARTER_OF_YEAR) {
+                // the root writes Q1 for the full word too, and its short standalone one as a number
+                if (narrow || (kind == 0 && style == TextStyle.SHORT_STANDALONE)) {
+                    return Quarters.NARROW;
+                }
+                return full && kind != 0 ? Quarters.FULL : Quarters.SHORT;
+            }
+        }
         if (field == ChronoField.MONTH_OF_YEAR) {
             if (kind == 0) {
                 return narrow ? NUMBERED_MONTHS : SHORT_MONTHS;

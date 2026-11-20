@@ -18,7 +18,10 @@ import java.time.Period;
 import java.time.ZoneId;
 import java.time.ZoneOffset;
 import java.time.ZonedDateTime;
+import java.time.chrono.Chronology;
+import java.time.chrono.IsoChronology;
 import java.time.temporal.ChronoField;
+import java.time.temporal.IsoFields;
 import java.time.temporal.TemporalAccessor;
 import java.time.temporal.TemporalField;
 import java.time.temporal.TemporalQuery;
@@ -34,19 +37,19 @@ public final class DateTimeFormatter {
         .appendValue(ChronoField.MONTH_OF_YEAR, 2)
         .appendLiteral('-')
         .appendValue(ChronoField.DAY_OF_MONTH, 2)
-        .formatter(Locale.getDefault(), ResolverStyle.STRICT) : null;
+        .formatter(Locale.getDefault(), ResolverStyle.STRICT, IsoChronology.INSTANCE) : null;
 
     public static final DateTimeFormatter ISO_OFFSET_DATE = wanted() ? new DateTimeFormatterBuilder()
         .parseCaseInsensitive()
         .append(ISO_LOCAL_DATE)
         .appendOffsetId()
-        .formatter(Locale.getDefault(), ResolverStyle.STRICT) : null;
+        .formatter(Locale.getDefault(), ResolverStyle.STRICT, IsoChronology.INSTANCE) : null;
 
     public static final DateTimeFormatter ISO_DATE = wanted() ? new DateTimeFormatterBuilder().parseCaseInsensitive()
         .append(ISO_LOCAL_DATE)
         .optionalStart()
         .appendOffsetId()
-        .formatter(Locale.getDefault(), ResolverStyle.STRICT) : null;
+        .formatter(Locale.getDefault(), ResolverStyle.STRICT, IsoChronology.INSTANCE) : null;
 
     public static final DateTimeFormatter ISO_LOCAL_TIME = wanted() ? new DateTimeFormatterBuilder()
         .appendValue(ChronoField.HOUR_OF_DAY, 2)
@@ -57,26 +60,26 @@ public final class DateTimeFormatter {
         .appendValue(ChronoField.SECOND_OF_MINUTE, 2)
         .optionalStart()
         .appendFraction(ChronoField.NANO_OF_SECOND, 0, 9, true)
-        .formatter(Locale.getDefault(), ResolverStyle.STRICT) : null;
+        .formatter(Locale.getDefault(), ResolverStyle.STRICT, null) : null;
 
     public static final DateTimeFormatter ISO_OFFSET_TIME = wanted() ? new DateTimeFormatterBuilder()
         .parseCaseInsensitive()
         .append(ISO_LOCAL_TIME)
         .appendOffsetId()
-        .formatter(Locale.getDefault(), ResolverStyle.STRICT) : null;
+        .formatter(Locale.getDefault(), ResolverStyle.STRICT, null) : null;
 
     public static final DateTimeFormatter ISO_TIME = wanted() ? new DateTimeFormatterBuilder().parseCaseInsensitive()
         .append(ISO_LOCAL_TIME)
         .optionalStart()
         .appendOffsetId()
-        .formatter(Locale.getDefault(), ResolverStyle.STRICT) : null;
+        .formatter(Locale.getDefault(), ResolverStyle.STRICT, null) : null;
 
     public static final DateTimeFormatter ISO_LOCAL_DATE_TIME = wanted() ? new DateTimeFormatterBuilder()
         .parseCaseInsensitive()
         .append(ISO_LOCAL_DATE)
         .appendLiteral('T')
         .append(ISO_LOCAL_TIME)
-        .formatter(Locale.getDefault(), ResolverStyle.STRICT) : null;
+        .formatter(Locale.getDefault(), ResolverStyle.STRICT, IsoChronology.INSTANCE) : null;
 
     public static final DateTimeFormatter ISO_OFFSET_DATE_TIME = wanted() ? new DateTimeFormatterBuilder()
         .parseCaseInsensitive()
@@ -84,7 +87,7 @@ public final class DateTimeFormatter {
         .parseLenient()
         .appendOffsetId()
         .parseStrict()
-        .formatter(Locale.getDefault(), ResolverStyle.STRICT) : null;
+        .formatter(Locale.getDefault(), ResolverStyle.STRICT, IsoChronology.INSTANCE) : null;
 
     public static final DateTimeFormatter ISO_ZONED_DATE_TIME = wanted() ? new DateTimeFormatterBuilder()
         .append(ISO_OFFSET_DATE_TIME)
@@ -93,7 +96,7 @@ public final class DateTimeFormatter {
         .parseCaseSensitive()
         .appendZoneRegionId()
         .appendLiteral(']')
-        .formatter(Locale.getDefault(), ResolverStyle.STRICT) : null;
+        .formatter(Locale.getDefault(), ResolverStyle.STRICT, IsoChronology.INSTANCE) : null;
 
     public static final DateTimeFormatter ISO_DATE_TIME = wanted() ? new DateTimeFormatterBuilder()
         .append(ISO_LOCAL_DATE_TIME)
@@ -104,7 +107,7 @@ public final class DateTimeFormatter {
         .parseCaseSensitive()
         .appendZoneRegionId()
         .appendLiteral(']')
-        .formatter(Locale.getDefault(), ResolverStyle.STRICT) : null;
+        .formatter(Locale.getDefault(), ResolverStyle.STRICT, IsoChronology.INSTANCE) : null;
 
     public static final DateTimeFormatter ISO_ORDINAL_DATE = wanted() ? new DateTimeFormatterBuilder()
         .parseCaseInsensitive()
@@ -113,12 +116,23 @@ public final class DateTimeFormatter {
         .appendValue(ChronoField.DAY_OF_YEAR, 3)
         .optionalStart()
         .appendOffsetId()
-        .formatter(Locale.getDefault(), ResolverStyle.STRICT) : null;
+        .formatter(Locale.getDefault(), ResolverStyle.STRICT, IsoChronology.INSTANCE) : null;
+
+    public static final DateTimeFormatter ISO_WEEK_DATE = wanted() ? new DateTimeFormatterBuilder()
+        .parseCaseInsensitive()
+        .appendValue(IsoFields.WEEK_BASED_YEAR, 4, 10, SignStyle.EXCEEDS_PAD)
+        .appendLiteral("-W")
+        .appendValue(IsoFields.WEEK_OF_WEEK_BASED_YEAR, 2)
+        .appendLiteral('-')
+        .appendValue(ChronoField.DAY_OF_WEEK, 1)
+        .optionalStart()
+        .appendOffsetId()
+        .formatter(Locale.getDefault(), ResolverStyle.STRICT, IsoChronology.INSTANCE) : null;
 
     public static final DateTimeFormatter ISO_INSTANT = wanted() ? new DateTimeFormatterBuilder()
         .parseCaseInsensitive()
         .appendInstant()
-        .formatter(Locale.getDefault(), ResolverStyle.STRICT) : null;
+        .formatter(Locale.getDefault(), ResolverStyle.STRICT, null) : null;
 
     public static final DateTimeFormatter BASIC_ISO_DATE = wanted() ? new DateTimeFormatterBuilder()
         .parseCaseInsensitive()
@@ -129,7 +143,7 @@ public final class DateTimeFormatter {
         .parseLenient()
         .appendOffset("+HHMMss", "Z")
         .parseStrict()
-        .formatter(Locale.getDefault(), ResolverStyle.STRICT) : null;
+        .formatter(Locale.getDefault(), ResolverStyle.STRICT, IsoChronology.INSTANCE) : null;
 
     public static final DateTimeFormatter RFC_1123_DATE_TIME = wanted() ? rfc1123() : null;
 
@@ -141,11 +155,15 @@ public final class DateTimeFormatter {
 
     private final ZoneId zone;
 
-    DateTimeFormatter(Step.Group root, Locale locale, ResolverStyle style, ZoneId zone) {
+    /** The calendar, or null: ISO's for the ISO forms of a date, any a program gave. */
+    private final Chronology chronology;
+
+    DateTimeFormatter(Step.Group root, Locale locale, ResolverStyle style, ZoneId zone, Chronology chronology) {
         this.root = root;
         this.locale = locale;
         this.style = style;
         this.zone = zone;
+        this.chronology = chronology;
     }
 
     /**
@@ -177,15 +195,23 @@ public final class DateTimeFormatter {
             .optionalEnd()
             .appendLiteral(' ')
             .appendOffset("+HHMM", "GMT")
-            .formatter(Locale.getDefault(), ResolverStyle.SMART);
+            .formatter(Locale.getDefault(), ResolverStyle.SMART, IsoChronology.INSTANCE);
     }
 
-    public static DateTimeFormatter ofPattern(String pattern) {
-        return new DateTimeFormatterBuilder().appendPattern(pattern).toFormatter();
+    /**
+     * A formatter of a pattern's parts: the compiler notes the letters of a pattern it
+     * sees, then calls patterned (Patterns).
+     */
+    public static native DateTimeFormatter ofPattern(String pattern);
+
+    public static native DateTimeFormatter ofPattern(String pattern, Locale locale);
+
+    static DateTimeFormatter patterned(String pattern) {
+        return DateTimeFormatterBuilder.appended(new DateTimeFormatterBuilder(), pattern).toFormatter();
     }
 
-    public static DateTimeFormatter ofPattern(String pattern, Locale locale) {
-        return new DateTimeFormatterBuilder().appendPattern(pattern).toFormatter(locale);
+    static DateTimeFormatter patterned(String pattern, Locale locale) {
+        return DateTimeFormatterBuilder.appended(new DateTimeFormatterBuilder(), pattern).toFormatter(locale);
     }
 
     public static TemporalQuery<Period> parsedExcessDays() {
@@ -202,7 +228,7 @@ public final class DateTimeFormatter {
 
     public DateTimeFormatter withLocale(Locale locale) {
         Objects.requireNonNull(locale, "locale");
-        return locale.equals(this.locale) ? this : new DateTimeFormatter(root, locale, style, zone);
+        return locale.equals(this.locale) ? this : new DateTimeFormatter(root, locale, style, zone, chronology);
     }
 
     public ResolverStyle getResolverStyle() {
@@ -211,7 +237,17 @@ public final class DateTimeFormatter {
 
     public DateTimeFormatter withResolverStyle(ResolverStyle resolverStyle) {
         Objects.requireNonNull(resolverStyle, "resolverStyle");
-        return resolverStyle == style ? this : new DateTimeFormatter(root, locale, resolverStyle, zone);
+        return resolverStyle == style ? this : new DateTimeFormatter(root, locale, resolverStyle, zone, chronology);
+    }
+
+    public Chronology getChronology() {
+        return chronology;
+    }
+
+    /** The calendar a text is read in and a value written in; the library has ISO's alone. */
+    public DateTimeFormatter withChronology(Chronology chronology) {
+        return Objects.equals(chronology, this.chronology) ? this
+                : new DateTimeFormatter(root, locale, style, zone, chronology);
     }
 
     public ZoneId getZone() {
@@ -219,7 +255,7 @@ public final class DateTimeFormatter {
     }
 
     public DateTimeFormatter withZone(ZoneId zone) {
-        return Objects.equals(zone, this.zone) ? this : new DateTimeFormatter(root, locale, style, zone);
+        return Objects.equals(zone, this.zone) ? this : new DateTimeFormatter(root, locale, style, zone, chronology);
     }
 
     public String format(TemporalAccessor temporal) {

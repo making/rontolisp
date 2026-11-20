@@ -16,6 +16,10 @@ public interface ChronoZonedDateTime<D extends ChronoLocalDate>
 
     D toLocalDate();
 
+    default Chronology getChronology() {
+        return toLocalDate().getChronology();
+    }
+
     LocalTime toLocalTime();
 
     ChronoLocalDateTime<D> toLocalDateTime();

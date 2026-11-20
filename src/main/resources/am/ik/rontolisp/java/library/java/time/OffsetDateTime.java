@@ -7,6 +7,7 @@
 package java.time;
 
 import java.io.Serializable;
+import java.time.chrono.IsoChronology;
 import java.time.format.DateTimeFormatter;
 import java.time.temporal.ChronoField;
 import java.time.temporal.ChronoUnit;
@@ -20,6 +21,7 @@ import java.time.temporal.TemporalQuery;
 import java.time.temporal.TemporalUnit;
 import java.time.temporal.UnsupportedTemporalTypeException;
 import java.time.temporal.ValueRange;
+import java.util.Comparator;
 import java.util.Objects;
 
 public final class OffsetDateTime implements Temporal, TemporalAdjuster, Comparable<OffsetDateTime>, Serializable {
@@ -35,6 +37,22 @@ public final class OffsetDateTime implements Temporal, TemporalAdjuster, Compara
     private OffsetDateTime(LocalDateTime dateTime, ZoneOffset offset) {
         this.dateTime = dateTime;
         this.offset = offset;
+    }
+
+    /** The order of the instants alone: one instant at two offsets is one place. */
+    public static Comparator<OffsetDateTime> timeLineOrder() {
+        return TimeLine.ORDER;
+    }
+
+    /** The one order, made where a program asks for it. */
+    private static final class TimeLine {
+
+        static final Comparator<OffsetDateTime> ORDER = OffsetDateTime::compareInstant;
+    }
+
+    private static int compareInstant(OffsetDateTime first, OffsetDateTime second) {
+        int order = Long.compare(first.toEpochSecond(), second.toEpochSecond());
+        return order != 0 ? order : first.getNano() - second.getNano();
     }
 
     public static OffsetDateTime now() {
@@ -182,6 +200,10 @@ public final class OffsetDateTime implements Temporal, TemporalAdjuster, Compara
 
     public LocalTime toLocalTime() {
         return dateTime.toLocalTime();
+    }
+
+    public OffsetTime toOffsetTime() {
+        return OffsetTime.of(dateTime.toLocalTime(), offset);
     }
 
     public int getYear() {
@@ -437,6 +459,11 @@ public final class OffsetDateTime implements Temporal, TemporalAdjuster, Compara
 
     @SuppressWarnings("unchecked")
     public <R> R query(TemporalQuery<R> query) {
+        if (Iso.calendars()) {
+            if (query == TemporalQueries.chronology()) {
+                return (R) IsoChronology.INSTANCE;
+            }
+        }
         return query == TemporalQueries.precision() ? (R) ChronoUnit.NANOS
                 : query == TemporalQueries.zoneId() ? null : query.queryFrom(this);
     }

@@ -3,6 +3,8 @@
 // (.kb/java-frontend-provenance.md). Lowered with every program that names it.
 package java.time;
 
+import java.time.format.DateTimeFormatterBuilder;
+import java.time.format.TextStyle;
 import java.time.temporal.ChronoField;
 import java.time.temporal.ChronoUnit;
 import java.time.temporal.Temporal;
@@ -12,6 +14,7 @@ import java.time.temporal.TemporalField;
 import java.time.temporal.TemporalQueries;
 import java.time.temporal.TemporalQuery;
 import java.time.temporal.UnsupportedTemporalTypeException;
+import java.util.Locale;
 
 // The seven days of a week, Monday the first, as ISO-8601 counts them.
 public enum DayOfWeek implements TemporalAccessor, TemporalAdjuster {
@@ -40,6 +43,11 @@ public enum DayOfWeek implements TemporalAccessor, TemporalAdjuster {
 
     public int getValue() {
         return ordinal() + 1;
+    }
+
+    /** The word of the locale in a style, or the value where the locale has none. */
+    public String getDisplayName(TextStyle style, Locale locale) {
+        return new DateTimeFormatterBuilder().appendText(ChronoField.DAY_OF_WEEK, style).toFormatter(locale).format(this);
     }
 
     public DayOfWeek plus(long days) {
@@ -71,6 +79,11 @@ public enum DayOfWeek implements TemporalAccessor, TemporalAdjuster {
 
     @SuppressWarnings("unchecked")
     public <R> R query(TemporalQuery<R> query) {
+        if (Iso.calendars()) {
+            if (query == TemporalQueries.chronology()) {
+                return null;
+            }
+        }
         return query == TemporalQueries.precision() ? (R) ChronoUnit.DAYS
                 : query == TemporalQueries.zoneId() ? null : query.queryFrom(this);
     }

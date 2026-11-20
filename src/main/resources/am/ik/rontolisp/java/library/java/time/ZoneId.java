@@ -252,7 +252,7 @@ public abstract class ZoneId implements Serializable {
         if (temporal instanceof ZonedDateTime dateTime) {
             return dateTime.getZone();
         }
-        if (temporal instanceof ZoneOffset || temporal instanceof OffsetDateTime) {
+        if (temporal instanceof ZoneOffset || temporal instanceof OffsetDateTime || temporal instanceof OffsetTime) {
             return ZoneOffset.from(temporal);
         }
         if (Iso.foreign()) {

@@ -7,6 +7,7 @@
 package java.time;
 
 import java.io.Serializable;
+import java.time.chrono.IsoChronology;
 import java.time.format.DateTimeFormatter;
 import java.time.temporal.ChronoField;
 import java.time.temporal.ChronoUnit;
@@ -244,6 +245,15 @@ public final class Year implements Temporal, TemporalAdjuster, Comparable<Year>,
         return LocalDate.ofYearDay(year, dayOfYear);
     }
 
+    public boolean isValidMonthDay(MonthDay monthDay) {
+        return monthDay != null && monthDay.isValidYear(year);
+    }
+
+    /** The day of this year, February 28 for February 29 of a year that is no leap year. */
+    public LocalDate atMonthDay(MonthDay monthDay) {
+        return monthDay.atYear(year);
+    }
+
     public YearMonth atMonth(Month month) {
         return YearMonth.of(year, month);
     }
@@ -274,6 +284,11 @@ public final class Year implements Temporal, TemporalAdjuster, Comparable<Year>,
 
     @SuppressWarnings("unchecked")
     public <R> R query(TemporalQuery<R> query) {
+        if (Iso.calendars()) {
+            if (query == TemporalQueries.chronology()) {
+                return (R) IsoChronology.INSTANCE;
+            }
+        }
         return query == TemporalQueries.precision() ? (R) ChronoUnit.YEARS
                 : query == TemporalQueries.zoneId() ? null : query.queryFrom(this);
     }

@@ -308,27 +308,32 @@ rontolisp でコンパイルし直すとプログラムに反映されます。`
 `GMT-04:56`）。JDK はその地域の最初の標準時のオフセットを使います。`clone` と、JDK 1.1 から
 非推奨のメンバー（`getYear`、`getHours`）は名前を挙げて拒否します。
 
-**フォーマッターが書く語は `Locale` にあるロケールのものです。** 月、曜日、紀元、午前と午後は、
-ルートロケール、`ENGLISH`、`US`、`UK`、`CANADA` の語です。ロケールを指定しない `ofPattern` と
-ISO の形式は、デフォルトのロケールである `US` を使います。パターンの文字のうち、ロケールの週を
-使うもの（`Y`、`w`、`W`、1 文字または 2 文字の `e` と `c`）、四半期（`Q`、`q`）、修正ユリウス日
-（`g`）、一日の時間帯（`B`）、ゾーンの語による名前（`z`、`v`）は、パターンを読む時点で
-`UnsupportedOperationException` になります。`ISO_WEEK_DATE`、`ofLocalizedDate` とその仲間、
-`DecimalStyle`、`withChronology`、`toFormat`、`parseUnresolved`、`ParsePosition` から読む
-`parse` は、名前を示して拒否されます。文字列中のゾーンの名前は、プログラムが持つゾーン（上記）
-の中から読みます。フォーマッターの文字列表現では、`parseDefaulting` は `Default(field,value)`
-と表示されます。JDK はオブジェクトの識別子を表示します。完全な形式の地域化オフセット（`OOOO` で
+**フォーマッターが書く語と週は `Locale` にあるロケールのものです。** 月、曜日、紀元、四半期、
+午前と午後は、ルートロケール、`ENGLISH`、`US`、`UK`、`CANADA` の語です。週は、`UK` では月曜日に
+始まり最初の週が年の 4 日を含み、それ以外では日曜日に始まり 1 日を含みます（`WeekFields.of`）。
+ロケールを指定しない `ofPattern` と ISO の形式は、デフォルトのロケールである `US` を使います。
+パターンの文字のうち、一日の時間帯（`B`）とゾーンの語による名前（`z`、`v`）は、パターンを読む
+時点で `UnsupportedOperationException` になります。`ofLocalizedDate` とその仲間、`DecimalStyle`、
+`toFormat`、`parseUnresolved`、`ParsePosition` から読む `parse`、`withResolverFields` は、
+名前を示して拒否されます。文字列中のゾーンの名前は、プログラムが持つゾーン（上記）の中から
+読みます。フォーマッターの文字列表現では、`parseDefaulting` は `Default(field,value)` と表示
+されます。JDK はオブジェクトの識別子を表示します。完全な形式の地域化オフセット（`OOOO` で
 `GMT+1` を読む場合など）の読み取り中に JDK がインデックスの例外で失敗する文字列は、先頭の位置で
 拒否します。また、寛容な読み取りで JDK は `CE` を紀元として読み、年の整列週の中の曜日を
-ここでは従っていない規則で決めます。
+ここでは従っていない規則で決めます。`ChronoField` でないフィールド（週、四半期、ユリウス日、
+プログラムが書いたもの）は読んだ順に解決します。JDK の順序は実行のたびに変わります。違いが
+現れるのは、文字列が曜日を 2 度（名前とロケールの週の中の番号で）与える場合と、そうした
+フィールドが 2 つの日付または 2 つの時刻になる場合だけです。
 
-**`java.time` の暦は ISO だけです。** ISO 以外の暦、`MonthDay`、`OffsetTime`、
-`TemporalAdjusters`、`getDisplayName`、`datesUntil`、`Duration.dividedBy` は、名前を示して
-拒否されます。フィールドから値を作れなかった文字列のメッセージは、フィールドを決まった順で並べます
+**`java.time` の暦は ISO だけです。** `Chronology.of` はほかの暦を知らず、
+`getAvailableChronologies()` は ISO だけを返します。`IsoChronology.resolveDate`、
+`AbstractChronology`、`ZoneId.getDisplayName`、`Duration.dividedBy` は、名前を示して拒否されます。
+フィールドから値を作れなかった文字列のメッセージは、フィールドを決まった順で並べます
 （`{Year=2020, MonthOfYear=13}`）。時のない時刻の複数のフィールドが範囲外のときも、決まった
 フィールドを先に拒否します。JDK ではどちらの順序も実行のたびに変わります。`ValueRange`、
 `ZoneRules`、`ZoneOffsetTransition`、`ZoneOffsetTransitionRule`、`Clock` のハッシュコードは
-JDK と異なります。
+JDK と異なり、`IsoChronology` はオブジェクトとしてハッシュします（JDK もクラスの識別子から
+作ります）。
 
 **`Normalizer` は JDK 25 の Unicode データを使います。** それより新しい JDK の Unicode で
 追加または変更された文字も、JDK 25 と同じ結果になります。すでにその形式になっている文字列を

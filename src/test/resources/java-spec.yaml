@@ -16948,6 +16948,281 @@ standalone:
       built JAN 5: 2026-01-05
       built mar 7, 2027: 2027-03-07
       Mar 7, 2026 Jan 5, 2026 2026/03/07
+  - name: weeks-quarters-a-month-day-an-offset-time-and-the-iso-calendar
+    file: Weeks.java
+    source: |
+      import java.time.*;
+      import java.time.chrono.*;
+      import java.time.format.*;
+      import java.time.temporal.*;
+      import java.util.*;
+      import java.util.function.Supplier;
+      import java.util.stream.Collectors;
+
+      public class Weeks {
+          static void attempt(String what, Supplier<Object> made) {
+              try {
+                  System.out.println(what + ": " + made.get());
+              }
+              catch (DateTimeParseException e) {
+                  // a JDK lists the fields of a text that makes no value in an order of its run
+                  String message = e.getMessage();
+                  System.out.println(what + ": " + (message.contains("{") ? message.substring(0, message.indexOf('{')) : message)
+                          + " @" + e.getErrorIndex());
+              }
+              catch (RuntimeException e) {
+                  System.out.println(what + ": " + e);
+              }
+          }
+
+          // a field of the program's own: a count of days from 2000-01-01, resolved into a date
+          static final TemporalField DAYS_2000 = new TemporalField() {
+              public TemporalUnit getBaseUnit() { return ChronoUnit.DAYS; }
+              public TemporalUnit getRangeUnit() { return ChronoUnit.FOREVER; }
+              public ValueRange range() { return ValueRange.of(-100000, 100000); }
+              public boolean isDateBased() { return true; }
+              public boolean isTimeBased() { return false; }
+              public boolean isSupportedBy(TemporalAccessor t) { return t.isSupported(ChronoField.EPOCH_DAY); }
+              public ValueRange rangeRefinedBy(TemporalAccessor t) { return range(); }
+              public long getFrom(TemporalAccessor t) { return t.getLong(ChronoField.EPOCH_DAY) - 10957; }
+              @SuppressWarnings("unchecked")
+              public <R extends Temporal> R adjustInto(R t, long value) { return (R) t.with(ChronoField.EPOCH_DAY, value + 10957); }
+              public TemporalAccessor resolve(Map<TemporalField, Long> fields, TemporalAccessor partial, ResolverStyle style) {
+                  fields.put(ChronoField.EPOCH_DAY, fields.remove(this) + 10957);
+                  return null;
+              }
+              public String toString() { return "Days2000"; }
+          };
+
+          public static void main(String[] args) {
+              // the ISO calendar and its eras
+              Chronology iso = IsoChronology.INSTANCE;
+              LocalDate day = LocalDate.of(2026, 3, 7);
+              System.out.println(iso + " " + iso.getCalendarType() + " " + iso.eras() + " " + day.getChronology() + " "
+                      + day.getEra() + " " + LocalDate.of(-5, 1, 1).getEra() + " " + Chronology.of("iso8601") + " "
+                      + iso.date(IsoEra.BCE, 5, 1, 2) + " " + iso.dateYearDay(2024, 366) + " " + iso.isLeapYear(1900));
+              for (TemporalAccessor value : List.<TemporalAccessor>of(day, LocalTime.NOON, Instant.EPOCH, Month.MAY,
+                      DayOfWeek.MONDAY, YearMonth.of(2026, 3), IsoEra.CE)) {
+                  System.out.println(value + " " + value.query(TemporalQueries.chronology()) + " " + Chronology.from(value));
+              }
+              System.out.println(IsoEra.BCE.getDisplayName(TextStyle.FULL, Locale.US) + " "
+                      + IsoEra.CE.getDisplayName(TextStyle.SHORT, Locale.ROOT) + " " + IsoEra.CE.getValue() + " "
+                      + DateTimeFormatter.ISO_LOCAL_DATE.getChronology() + " " + DateTimeFormatter.ISO_LOCAL_TIME.getChronology()
+                      + " " + DateTimeFormatter.ofPattern("uuuu").withChronology(iso).getChronology());
+              System.out.println(Month.SEPTEMBER.getDisplayName(TextStyle.SHORT, Locale.UK) + " "
+                      + DayOfWeek.TUESDAY.getDisplayName(TextStyle.NARROW, Locale.US) + " "
+                      + ChronoField.AMPM_OF_DAY.getDisplayName(Locale.CANADA) + " " + ChronoField.DAY_OF_WEEK.getDisplayName(Locale.ROOT)
+                      + " " + ChronoField.EPOCH_DAY.getDisplayName(Locale.US));
+              attempt("era 2", () -> IsoEra.of(2));
+              attempt("calendar", () -> Chronology.of("Coptic"));
+              attempt("epochSecond", () -> iso.epochSecond(2021, 2, 29, 23, 59, 60, ZoneOffset.UTC));
+              ChronoPeriod period = ChronoPeriod.between(day, LocalDate.of(2027, 1, 1));
+              System.out.println(period + " " + period.getChronology() + " " + period.getUnits());
+              // a month and a day of no year
+              MonthDay leap = MonthDay.of(2, 29);
+              System.out.println(leap + " " + leap.atYear(2026) + " " + leap.isValidYear(2024) + " "
+                      + Year.of(2026).isValidMonthDay(leap) + " " + Year.of(2024).atMonthDay(leap) + " " + leap.hashCode() + " "
+                      + MonthDay.of(1, 31).withMonth(4) + " " + leap.range(ChronoField.DAY_OF_MONTH) + " "
+                      + LocalDate.of(2027, 7, 7).with(leap) + " " + leap.compareTo(MonthDay.of(3, 1)) + " "
+                      + MonthDay.parse("--12-03") + " " + MonthDay.from(day));
+              for (String text : new String[] {"--02-30", "--13-01", "--1-01", "12-03", "--12-03x"}) {
+                  attempt("month day " + text, () -> MonthDay.parse(text));
+              }
+              attempt("month day of", () -> MonthDay.of(4, 31));
+              // a time with an offset, of no date
+              OffsetTime time = OffsetTime.of(10, 15, 30, 500, ZoneOffset.ofHours(2));
+              OffsetTime other = OffsetTime.of(9, 15, 30, 500, ZoneOffset.ofHours(1));
+              System.out.println(time + " " + time.hashCode() + " " + time.withOffsetSameInstant(ZoneOffset.UTC) + " "
+                      + time.plusHours(20) + " " + time.truncatedTo(ChronoUnit.MINUTES) + " " + time.compareTo(other) + " "
+                      + time.isEqual(other) + " " + time.equals(other) + " " + time.until(other, ChronoUnit.MINUTES) + " "
+                      + time.atDate(day) + " " + LocalTime.NOON.atOffset(ZoneOffset.UTC) + " "
+                      + day.atTime(time).toOffsetTime() + " " + OffsetTime.MIN + " "
+                      + OffsetTime.ofInstant(Instant.ofEpochSecond(3661), ZoneOffset.ofHours(-5)));
+              for (String text : new String[] {"10:15:30.5-01:30", "10:15z", "10:15", "10:15+01", "10:15+19:00", "24:00Z"}) {
+                  attempt("offset time " + text, () -> OffsetTime.parse(text));
+              }
+              attempt("offset time of a formatter", () -> OffsetTime.parse("10:15 +0530", DateTimeFormatter.ofPattern("HH:mm xx")));
+              attempt("offset time days", () -> time.plus(1, ChronoUnit.DAYS));
+              attempt("offset time from", () -> OffsetTime.from(LocalTime.NOON));
+              // sources of instants
+              InstantSource fixed = InstantSource.fixed(Instant.ofEpochSecond(1000, 123456789));
+              InstantSource own = () -> Instant.ofEpochMilli(5);
+              System.out.println(fixed + " " + fixed.millis() + " " + InstantSource.offset(fixed, Duration.ofSeconds(5)).instant()
+                      + " " + InstantSource.tick(fixed, Duration.ofMillis(10)).instant() + " " + InstantSource.system() + " "
+                      + own.withZone(ZoneOffset.ofHours(9)).instant() + " " + LocalDate.now(own.withZone(ZoneOffset.UTC)));
+              attempt("tick", () -> InstantSource.tick(fixed, Duration.ofNanos(7)));
+              // the adjusters and the dates until another
+              System.out.println(day.with(TemporalAdjusters.lastDayOfMonth()) + " " + day.with(TemporalAdjusters.firstDayOfNextYear())
+                      + " " + day.with(TemporalAdjusters.next(DayOfWeek.SATURDAY)) + " "
+                      + day.with(TemporalAdjusters.previousOrSame(DayOfWeek.SATURDAY)) + " "
+                      + day.with(TemporalAdjusters.dayOfWeekInMonth(0, DayOfWeek.MONDAY)) + " "
+                      + day.with(TemporalAdjusters.lastInMonth(DayOfWeek.WEDNESDAY)) + " "
+                      + LocalDateTime.of(day, LocalTime.NOON).with(TemporalAdjusters.ofDateAdjuster(d -> d.plusMonths(1))));
+              attempt("adjusting a time", () -> LocalTime.NOON.with(TemporalAdjusters.firstDayOfMonth()));
+              System.out.println(LocalDate.of(2020, 1, 30).datesUntil(LocalDate.of(2020, 2, 2)).collect(Collectors.toList()) + " "
+                      + LocalDate.of(2020, 1, 31).datesUntil(LocalDate.of(2020, 6, 1), Period.of(0, 1, 1)).collect(Collectors.toList())
+                      + " " + LocalDate.MIN.datesUntil(LocalDate.MAX, Period.ofMonths(1)).count());
+              attempt("dates back", () -> day.datesUntil(LocalDate.of(2026, 1, 1)));
+              attempt("dates of a mixed step", () -> day.datesUntil(LocalDate.of(2027, 1, 1), Period.of(0, 1, -1)));
+              List<OffsetDateTime> instants = new ArrayList<>(List.of(OffsetDateTime.of(2020, 1, 1, 10, 0, 0, 0, ZoneOffset.ofHours(1)),
+                      OffsetDateTime.of(2020, 1, 1, 8, 0, 0, 0, ZoneOffset.UTC), OffsetDateTime.of(2020, 1, 1, 9, 0, 0, 0, ZoneOffset.UTC)));
+              instants.sort(OffsetDateTime.timeLineOrder());
+              System.out.println(instants);
+              // quarters, week-based years, Julian days and the weeks of a locale
+              for (LocalDate date : List.of(LocalDate.of(2021, 1, 3), LocalDate.of(2020, 12, 31), day)) {
+                  System.out.println(date + " " + date.get(IsoFields.QUARTER_OF_YEAR) + " " + date.get(IsoFields.DAY_OF_QUARTER)
+                          + " " + date.get(IsoFields.WEEK_BASED_YEAR) + "-W" + date.get(IsoFields.WEEK_OF_WEEK_BASED_YEAR) + " "
+                          + date.range(IsoFields.WEEK_OF_WEEK_BASED_YEAR) + " " + date.getLong(JulianFields.MODIFIED_JULIAN_DAY)
+                          + " " + date.get(WeekFields.SUNDAY_START.weekOfYear()) + " " + date.get(WeekFields.ISO.weekOfMonth())
+                          + " " + date.range(WeekFields.ISO.weekOfMonth()) + " " + date.get(WeekFields.of(Locale.US).dayOfWeek()));
+              }
+              System.out.println(LocalDate.of(2020, 12, 31).with(IsoFields.WEEK_BASED_YEAR, 2021) + " "
+                      + day.with(IsoFields.QUARTER_OF_YEAR, 4) + " " + day.plus(5, IsoFields.QUARTER_YEARS) + " "
+                      + day.with(JulianFields.JULIAN_DAY, 0) + " " + WeekFields.of(Locale.UK) + " " + WeekFields.of(Locale.CANADA)
+                      + " " + WeekFields.of(DayOfWeek.WEDNESDAY, 3).weekOfWeekBasedYear() + " "
+                      + IsoFields.WEEK_OF_WEEK_BASED_YEAR.getDisplayName(Locale.UK) + " " + IsoFields.QUARTER_YEARS.getDuration());
+              attempt("week of a time", () -> LocalTime.NOON.get(WeekFields.ISO.weekOfYear()));
+              attempt("quarter 5", () -> day.with(IsoFields.QUARTER_OF_YEAR, 5));
+              // the letters of weeks, quarters and the modified Julian day
+              DateTimeFormatter letters = DateTimeFormatter.ofPattern("YYYY-'W'ww-e c W QQQ QQQQ qqq g", Locale.US);
+              System.out.println(letters);
+              for (Locale locale : new Locale[] {Locale.US, Locale.UK, Locale.ROOT}) {
+                  System.out.println(locale.toLanguageTag() + " " + letters.withLocale(locale).format(LocalDate.of(2021, 1, 3)) + " | "
+                          + DateTimeFormatter.ofPattern("YY ee QQQQQ", locale).format(LocalDate.of(2000, 1, 1)));
+              }
+              System.out.println(DateTimeFormatter.ISO_WEEK_DATE + " " + DateTimeFormatter.ISO_WEEK_DATE.format(day) + " "
+                      + DateTimeFormatter.ISO_WEEK_DATE.format(OffsetDateTime.of(2020, 12, 31, 1, 0, 0, 0, ZoneOffset.ofHours(2))));
+              for (ResolverStyle style : ResolverStyle.values()) {
+                  for (String text : new String[] {"2020-W53-5", "2021-W53-1", "2020-W00-1", "2020-W53-8"}) {
+                      attempt(style + " " + text, () -> LocalDate.parse(text, DateTimeFormatter.ISO_WEEK_DATE.withResolverStyle(style)));
+                  }
+                  for (Locale locale : new Locale[] {Locale.US, Locale.UK}) {
+                      DateTimeFormatter weeks = DateTimeFormatter.ofPattern("YYYY-'W'ww-e", locale).withResolverStyle(style);
+                      attempt(style + " " + locale.toLanguageTag() + " 2021-W01-1", () -> LocalDate.parse("2021-W01-1", weeks));
+                      attempt(style + " " + locale.toLanguageTag() + " 2020-W53-5", () -> LocalDate.parse("2020-W53-5", weeks));
+                  }
+              }
+              attempt("week of the month", () -> LocalDate.parse("2026-03 2 1", DateTimeFormatter.ofPattern("uuuu-MM W e", Locale.US)));
+              attempt("week of the month strictly", () -> LocalDate.parse("2026-03 0 1",
+                      DateTimeFormatter.ofPattern("uuuu-MM W e", Locale.US).withResolverStyle(ResolverStyle.STRICT)));
+              attempt("day of the week", () -> LocalDate.parse("2026-03-07 6", DateTimeFormatter.ofPattern("uuuu-MM-dd e", Locale.US)));
+              attempt("quarter", () -> DateTimeFormatter.ofPattern("QQQQ uuuu", Locale.US).parse("2nd quarter 2026").getLong(IsoFields.QUARTER_OF_YEAR));
+              attempt("julian", () -> LocalDate.parse("58849", DateTimeFormatter.ofPattern("g")));
+              attempt("week-based year alone", () -> LocalDate.parse("2026", DateTimeFormatter.ofPattern("YYYY", Locale.US)));
+              DateTimeFormatter quarterDays = new DateTimeFormatterBuilder().appendValue(ChronoField.YEAR).appendLiteral('-')
+                  .appendValue(IsoFields.QUARTER_OF_YEAR).appendLiteral('-').appendValue(IsoFields.DAY_OF_QUARTER).toFormatter();
+              for (ResolverStyle style : ResolverStyle.values()) {
+                  attempt(style + " day 91 of the first quarter", () -> LocalDate.parse("2026-1-91", quarterDays.withResolverStyle(style)));
+              }
+              DateTimeFormatter days = new DateTimeFormatterBuilder().appendValue(DAYS_2000).appendLiteral(' ').appendPattern("HH:mm").toFormatter();
+              attempt("a field of the program's own", () -> LocalDateTime.parse("9562 10:30", days));
+              attempt("its value written", () -> days.format(LocalDateTime.of(2026, 3, 7, 10, 30)));
+              // a run of numbers: a fraction of fixed width is one of it; leniently a number of
+              // no fixed width reads at most nine digits and the ones the numbers after it keep
+              System.out.println(LocalDateTime.parse("20260307123456789", DateTimeFormatter.ofPattern("uuuuMMddHHmmssSSS")));
+              for (String pattern : new String[] {"uuuu", "uuuuMM", "MMuuuu", "MM'x'uuuu"}) {
+                  DateTimeFormatter lenient = new DateTimeFormatterBuilder().parseLenient().appendPattern(pattern).toFormatter();
+                  for (String text : new String[] {"123456789012", "12345"}) {
+                      attempt("lenient " + pattern + " " + text, () -> lenient.parse(text).getLong(ChronoField.YEAR));
+                  }
+              }
+          }
+      }
+    stdout: |
+      ISO iso8601 [BCE, CE] ISO CE BCE ISO -0004-01-02 2024-12-31 false
+      2026-03-07 ISO ISO
+      12:00 null ISO
+      1970-01-01T00:00:00Z null ISO
+      MAY ISO ISO
+      MONDAY null ISO
+      2026-03 ISO ISO
+      CE null ISO
+      Before Christ CE 1 ISO null ISO
+      Sept T a.m./p.m. Day of the Week EpochDay
+      era 2: java.time.DateTimeException: Invalid era: 2
+      calendar: java.time.DateTimeException: Unknown chronology: Coptic
+      epochSecond: java.time.DateTimeException: Invalid value for SecondOfMinute (valid values 0 - 59): 60
+      P9M25D ISO [Years, Months, Days]
+      --02-29 2026-02-28 true false 2024-02-29 157 --04-30 1 - 28/29 2027-02-28 -1 --12-03 --03-07
+      month day --02-30: Text '--02-30' could not be parsed: Unable to obtain MonthDay from TemporalAccessor:  @0
+      month day --13-01: Text '--13-01' could not be parsed: Unable to obtain MonthDay from TemporalAccessor:  @0
+      month day --1-01: Text '--1-01' could not be parsed at index 2 @2
+      month day 12-03: Text '12-03' could not be parsed at index 0 @0
+      month day --12-03x: Text '--12-03x' could not be parsed, unparsed text found at index 7 @7
+      month day of: java.time.DateTimeException: Illegal value for DayOfMonth field, value 31 is not valid for month APRIL
+      10:15:30.000000500+02:00 1871194178 08:15:30.000000500Z 06:15:30.000000500+02:00 10:15+02:00 1 true false 0 2026-03-07T10:15:30.000000500+02:00 12:00Z 10:15:30.000000500+02:00 00:00+18:00 20:01:01-05:00
+      offset time 10:15:30.5-01:30: 10:15:30.500-01:30
+      offset time 10:15z: 10:15Z
+      offset time 10:15: Text '10:15' could not be parsed at index 5 @5
+      offset time 10:15+01: Text '10:15+01' could not be parsed at index 5 @5
+      offset time 10:15+19:00: Text '10:15+19:00' could not be parsed: Unable to obtain OffsetTime from TemporalAccessor:  @0
+      offset time 24:00Z: Text '24:00Z' could not be parsed: Invalid value for HourOfDay (valid values 0 - 23): 24 @0
+      offset time of a formatter: 10:15+05:30
+      offset time days: java.time.temporal.UnsupportedTemporalTypeException: Unsupported unit: Days
+      offset time from: java.time.DateTimeException: Unable to obtain OffsetTime from TemporalAccessor: 12:00 of type java.time.LocalTime
+      FixedClock[1970-01-01T00:16:40.123456789Z,Z] 1000123 1970-01-01T00:16:45.123456789Z 1970-01-01T00:16:40.120Z SystemInstantSource 1970-01-01T00:00:00.005Z 1970-01-01
+      tick: java.lang.IllegalArgumentException: Invalid tick duration
+      2026-03-31 2027-01-01 2026-03-14 2026-03-07 2026-02-23 2026-03-25 2026-04-07T12:00
+      adjusting a time: java.time.temporal.UnsupportedTemporalTypeException: Unsupported field: DayOfMonth
+      [2020-01-30, 2020-01-31, 2020-02-01] [2020-01-31, 2020-03-01, 2020-04-02, 2020-05-03] 23999999988
+      dates back: java.lang.IllegalArgumentException: 2026-01-01 < 2026-03-07
+      dates of a mixed step: java.lang.IllegalArgumentException: period months and days are of opposite sign
+      [2020-01-01T08:00Z, 2020-01-01T10:00+01:00, 2020-01-01T09:00Z]
+      2021-01-03 1 3 2020-W53 1 - 53 59217 2 0 0 - 4 1
+      2020-12-31 4 92 2020-W53 1 - 53 59214 53 5 1 - 5 5
+      2026-03-07 1 66 2026-W10 1 - 53 61106 10 1 0 - 5 7
+      2021-12-30 2026-12-07 2027-06-07 -4713-11-24 WeekFields[MONDAY,4] WeekFields[SUNDAY,1] WeekOfWeekBasedYear[WeekFields[WEDNESDAY,3]] week PT2191H27M18S
+      week of a time: java.time.temporal.UnsupportedTemporalTypeException: Unsupported field: DayOfWeek
+      quarter 5: java.time.DateTimeException: Invalid value for QuarterOfYear (valid values 1 - 4): 5
+      Localized(WeekBasedYear,4,19,EXCEEDS_PAD)'-''W'Localized(WeekOfWeekBasedYear,2)'-'Localized(DayOfWeek,1)' 'Localized(DayOfWeek,1)' 'Localized(WeekOfMonth,1)' 'Text(QuarterOfYear,SHORT)' 'Text(QuarterOfYear)' 'Text(QuarterOfYear,SHORT_STANDALONE)' 'Value(ModifiedJulianDay)
+      en-US 2021-W02-1 1 2 Q1 1st quarter Q1 59217 | 00 07 1
+      en-GB 2020-W53-7 7 0 Q1 1st quarter Q1 59217 | 99 06 1
+      und 2021-W02-1 1 2 Q1 Q1 1 59217 | 00 07 1
+      ParseCaseSensitive(false)Value(WeekBasedYear,4,10,EXCEEDS_PAD)'-W'Value(WeekOfWeekBasedYear,2)'-'Value(DayOfWeek,1)[Offset(+HH:MM:ss,'Z')] 2026-W10-6 2020-W53-4+02:00
+      STRICT 2020-W53-5: 2021-01-01
+      STRICT 2021-W53-1: Text '2021-W53-1' could not be parsed: Invalid value for WeekOfWeekBasedYear (valid values 1 - 52): 53 @0
+      STRICT 2020-W00-1: Text '2020-W00-1' could not be parsed: Invalid value for WeekOfWeekBasedYear (valid values 1 - 53): 0 @0
+      STRICT 2020-W53-8: Text '2020-W53-8' could not be parsed: Invalid value for DayOfWeek (valid values 1 - 7): 8 @0
+      STRICT en-US 2021-W01-1: 2020-12-27
+      STRICT en-US 2020-W53-5: Text '2020-W53-5' could not be parsed: Invalid value for WeekOfWeekBasedYear[WeekFields[SUNDAY,1]] (valid values 1 - 52): 53 @0
+      STRICT en-GB 2021-W01-1: 2021-01-04
+      STRICT en-GB 2020-W53-5: 2021-01-01
+      SMART 2020-W53-5: 2021-01-01
+      SMART 2021-W53-1: 2022-01-03
+      SMART 2020-W00-1: Text '2020-W00-1' could not be parsed: Invalid value for WeekOfWeekBasedYear (valid values 1 - 52/53): 0 @0
+      SMART 2020-W53-8: Text '2020-W53-8' could not be parsed: Invalid value for DayOfWeek (valid values 1 - 7): 8 @0
+      SMART en-US 2021-W01-1: 2020-12-27
+      SMART en-US 2020-W53-5: Text '2020-W53-5' could not be parsed: Invalid value for WeekOfWeekBasedYear[WeekFields[SUNDAY,1]] (valid values 1 - 52): 53 @0
+      SMART en-GB 2021-W01-1: 2021-01-04
+      SMART en-GB 2020-W53-5: 2021-01-01
+      LENIENT 2020-W53-5: 2021-01-01
+      LENIENT 2021-W53-1: 2022-01-03
+      LENIENT 2020-W00-1: 2019-12-23
+      LENIENT 2020-W53-8: 2021-01-04
+      LENIENT en-US 2021-W01-1: 2020-12-27
+      LENIENT en-US 2020-W53-5: 2020-12-31
+      LENIENT en-GB 2021-W01-1: 2021-01-04
+      LENIENT en-GB 2020-W53-5: 2021-01-01
+      week of the month: 2026-03-08
+      week of the month strictly: Text '2026-03 0 1' could not be parsed: Strict mode rejected resolved date as it is in a different month @0
+      day of the week: Text '2026-03-07 6' could not be parsed: Conflict found: Field DayOfWeek 6 differs from DayOfWeek 5 derived from 2026-03-07 @0
+      quarter: 2
+      julian: 2020-01-01
+      week-based year alone: Text '2026' could not be parsed: Unable to obtain LocalDate from TemporalAccessor:  @0
+      STRICT day 91 of the first quarter: Text '2026-1-91' could not be parsed: Invalid value for DayOfQuarter (valid values 1 - 90): 91 @0
+      SMART day 91 of the first quarter: 2026-04-01
+      LENIENT day 91 of the first quarter: 2026-04-01
+      a field of the program's own: 2026-03-07T10:30
+      its value written: 9562 10:30
+      2026-03-07T12:34:56.789
+      lenient uuuu 123456789012: Text '123456789012' could not be parsed, unparsed text found at index 9 @9
+      lenient uuuu 12345: 12345
+      lenient uuuuMM 123456789012: Text '123456789012' could not be parsed, unparsed text found at index 11 @11
+      lenient uuuuMM 12345: 123
+      lenient MMuuuu 123456789012: Text '123456789012' could not be parsed, unparsed text found at index 11 @11
+      lenient MMuuuu 12345: 345
+      lenient MM'x'uuuu 123456789012: Text '123456789012' could not be parsed at index 9 @9
+      lenient MM'x'uuuu 12345: Text '12345' could not be parsed at index 5 @5
 refused:
   scaffold: |
     class Refused {

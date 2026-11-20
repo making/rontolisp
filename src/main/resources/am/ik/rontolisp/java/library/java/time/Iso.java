@@ -31,6 +31,13 @@ final class Iso {
      */
     static native boolean foreign();
 
+    /**
+     * Whether the program can ask a date or a time for its calendar: answered by the
+     * compiler (it reaches TemporalQueries.chronology()), so a program asking none holds
+     * no calendar.
+     */
+    static native boolean calendars();
+
     static boolean leap(long year) {
         return (year & 3) == 0 && (year % 100 != 0 || year % 400 == 0);
     }

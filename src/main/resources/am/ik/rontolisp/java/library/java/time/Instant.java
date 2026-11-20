@@ -389,6 +389,11 @@ public final class Instant implements Temporal, TemporalAdjuster, Comparable<Ins
 
     @SuppressWarnings("unchecked")
     public <R> R query(TemporalQuery<R> query) {
+        if (Iso.calendars()) {
+            if (query == TemporalQueries.chronology()) {
+                return null;
+            }
+        }
         return query == TemporalQueries.precision() ? (R) ChronoUnit.NANOS
                 : query == TemporalQueries.zoneId() ? null : query.queryFrom(this);
     }

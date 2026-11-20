@@ -106,6 +106,9 @@ public final class LocalTime implements Temporal, TemporalAdjuster, Comparable<L
         if (temporal instanceof OffsetDateTime dateTime) {
             return dateTime.toLocalTime();
         }
+        if (temporal instanceof OffsetTime time) {
+            return time.toLocalTime();
+        }
         if (Iso.foreign()) {
             LocalTime time = temporal.query(TemporalQueries.localTime());
             if (time != null) {
@@ -380,6 +383,10 @@ public final class LocalTime implements Temporal, TemporalAdjuster, Comparable<L
         return unit.between(this, end);
     }
 
+    public OffsetTime atOffset(ZoneOffset offset) {
+        return OffsetTime.of(this, offset);
+    }
+
     public LocalDateTime atDate(LocalDate date) {
         return LocalDateTime.of(date, this);
     }
@@ -419,6 +426,11 @@ public final class LocalTime implements Temporal, TemporalAdjuster, Comparable<L
 
     @SuppressWarnings("unchecked")
     public <R> R query(TemporalQuery<R> query) {
+        if (Iso.calendars()) {
+            if (query == TemporalQueries.chronology()) {
+                return null;
+            }
+        }
         return query == TemporalQueries.precision() ? (R) ChronoUnit.NANOS
                 : query == TemporalQueries.zoneId() ? null : query.queryFrom(this);
     }

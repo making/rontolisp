@@ -378,6 +378,23 @@ algorithm came from, and the answer goes in the file's header.
   locales are CLDR's as a running JDK writes them, under the Unicode entry of
   `THIRD-PARTY-NOTICES.txt`. The answers are lines of `java-spec.yaml`, which the JDK leg
   asks again.
+- **What the formatter of `java.time` left (k52, 2026-11-20).** `MonthDay`, `OffsetTime`,
+  `InstantSource`, `TemporalAdjusters`, `IsoFields`, `JulianFields`, `WeekFields`,
+  `java.time.chrono`'s calendar and eras, the pattern letters of weeks, quarters and the
+  modified Julian day, `ISO_WEEK_DATE` and the resolving of a field that is no
+  `ChronoField` were written from the API documentation (the definitions of a week, a
+  week-based year, a quarter and the Julian days; what each adjuster sets) and JDK 25's
+  answers to probes (`Grid.java` of `.todo/artefacts/k52-java-time-what-the-formatter-left/`,
+  4,561 lines). Nobody opened OpenJDK's source, and the shape is its own: one formula over
+  a day's index in its period and its day of the week for every week of every
+  `WeekFields`, a map view over `Parsed`'s two arrays. What the documentation does not
+  state was read off the answers: the order a field's refusals and `epochSecond`'s come
+  in, which week of a week-based year each style checks, that a week-based year resolves
+  only with no year beside it, the words of a refusal of `MonthDay` and `OffsetTime`, the
+  texts of the sources of instants, how many digits a lenient number reads and that a
+  fraction is one of a run. The quarters' words and the names of the fields are CLDR's as
+  a running JDK writes them, under the Unicode entry of `THIRD-PARTY-NOTICES.txt`. The
+  answers are lines of `java-spec.yaml`, which the JDK leg asks again.
 - **`java.util.Date` and `java.sql` (k37, 2026-11-20).** Written from the API
   documentation (which states `Date.hashCode`, `equals` and the text forms) and JDK 25's
   answers to probes (`Grid.java`, 2,095 lines; `Gap.java`, the wall times four zones skip

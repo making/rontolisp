@@ -7,6 +7,7 @@ import java.time.LocalDate;
 import java.time.LocalTime;
 import java.time.ZoneId;
 import java.time.ZoneOffset;
+import java.time.chrono.Chronology;
 
 // The questions the library asks of a date or a time. A class answers the ones it can
 // tell by itself (its query); any other is answered from its fields. Each question is
@@ -27,6 +28,9 @@ public final class TemporalQueries {
 
     private TemporalQueries() {
     }
+
+    /** Whether the program can ask for a calendar: answered by the compiler, as Iso's. */
+    static native boolean calendars();
 
     public static TemporalQuery<ZoneId> zoneId() {
         return ZONE_ID;
@@ -50,6 +54,10 @@ public final class TemporalQueries {
 
     public static TemporalQuery<LocalTime> localTime() {
         return LOCAL_TIME;
+    }
+
+    public static TemporalQuery<Chronology> chronology() {
+        return Calendar.QUESTION;
     }
 
     private static final class Question<R> implements TemporalQuery<R> {
@@ -88,6 +96,23 @@ public final class TemporalQueries {
 
         public String toString() {
             return name;
+        }
+    }
+
+    /**
+     * The question of a calendar, made where a program asks for it: the classes answer it
+     * only in such a program (calendars()), and only a class that knows its calendar does.
+     */
+    private static final class Calendar implements TemporalQuery<Chronology> {
+
+        static final TemporalQuery<Chronology> QUESTION = new Calendar();
+
+        public Chronology queryFrom(TemporalAccessor temporal) {
+            return temporal.query(this);
+        }
+
+        public String toString() {
+            return "Chronology";
         }
     }
 }

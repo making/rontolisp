@@ -11,6 +11,7 @@
 package java.time.format;
 
 import java.time.chrono.ChronoLocalDate;
+import java.time.chrono.Chronology;
 import java.time.temporal.TemporalField;
 import java.util.ArrayList;
 import java.util.List;
@@ -79,7 +80,7 @@ public final class DateTimeFormatterBuilder {
 
     public DateTimeFormatterBuilder appendValue(TemporalField field) {
         Objects.requireNonNull(field, "field");
-        return number(new Step.Digits(field, 1, 19, SignStyle.NORMAL, 0, false));
+        return number(new Step.Digits(field, 1, 19, SignStyle.NORMAL, 0, false, false));
     }
 
     public DateTimeFormatterBuilder appendValue(TemporalField field, int width) {
@@ -87,7 +88,7 @@ public final class DateTimeFormatterBuilder {
         if (width < 1 || width > 19) {
             throw new IllegalArgumentException("The width must be from 1 to 19 inclusive but was " + width);
         }
-        return number(new Step.Digits(field, width, width, SignStyle.NOT_NEGATIVE, 0, false));
+        return number(new Step.Digits(field, width, width, SignStyle.NOT_NEGATIVE, 0, false, false));
     }
 
     public DateTimeFormatterBuilder appendValue(TemporalField field, int minWidth, int maxWidth,
@@ -107,7 +108,7 @@ public final class DateTimeFormatterBuilder {
             throw new IllegalArgumentException(
                     "The maximum width must exceed or equal the minimum width but " + maxWidth + " < " + minWidth);
         }
-        return number(new Step.Digits(field, minWidth, maxWidth, signStyle, 0, false));
+        return number(new Step.Digits(field, minWidth, maxWidth, signStyle, 0, false, false));
     }
 
     public DateTimeFormatterBuilder appendValueReduced(TemporalField field, int width, int maxWidth, int baseValue) {
@@ -146,29 +147,39 @@ public final class DateTimeFormatterBuilder {
         if (base + range > Integer.MAX_VALUE) {
             throw new java.time.DateTimeException("Unable to add printer-parser as the range exceeds the capacity of an int");
         }
-        return new Step.Reduced(field, width, maxWidth, base, date, 0, false);
+        return new Step.Reduced(field, width, maxWidth, base, date, 0, false, false);
     }
 
     /**
      * A number appended: one of fixed width and no sign right after another number is
-     * read as one of its run, the run's first keeping its digits.
+     * read as one of its run, the run's first keeping its digits; one of no fixed width
+     * there starts a run of its own, and the run before ends (Step.Digits). Digits of a
+     * fraction of a fixed count may begin a run too, keeping none.
      */
     private DateTimeFormatterBuilder number(Step.Digits digits) {
         List<Step> open = open();
-        if (run >= 0 && padWidth == 0 && digits.fixed()) {
-            Step.Digits first = (Step.Digits) open.get(run);
-            open.set(run, first.reserving(digits.most));
-            Step.Digits follower = digits instanceof Step.Reduced reduced
-                    ? new Step.Reduced(reduced.field, reduced.least, reduced.most, reduced.base, reduced.baseDate, 0,
-                            true)
-                    : new Step.Digits(digits.field, digits.least, digits.most, digits.sign, 0, true);
-            open.add(follower);
-            return this;
+        if (run >= 0 && padWidth == 0) {
+            Step at = open.get(run);
+            if (digits.fixed()) {
+                if (at instanceof Step.Digits first) {
+                    open.set(run, first.reserving(digits.most));
+                }
+                open.add(digits.following());
+                return this;
+            }
+            if (at instanceof Step.Digits first) {
+                open.set(run, first.ending());
+            }
         }
         boolean padded = padWidth > 0;
         append0(digits);
         run = padded ? -1 : open.size() - 1;
         return this;
+    }
+
+    /** A number of the weeks of the formatter's locale, which a pattern's letter names. */
+    DateTimeFormatterBuilder appendLocalized(Step.Localized localized) {
+        return number(localized);
     }
 
     public DateTimeFormatterBuilder appendFraction(TemporalField field, int minWidth, int maxWidth,
@@ -187,7 +198,23 @@ public final class DateTimeFormatterBuilder {
             throw new IllegalArgumentException(
                     "Maximum width must exceed or equal the minimum width but " + maxWidth + " < " + minWidth);
         }
-        return add(new Step.Fraction(field, minWidth, maxWidth, decimalPoint));
+        Step.Fraction fraction = new Step.Fraction(field, minWidth, maxWidth, decimalPoint);
+        if (minWidth == maxWidth && !decimalPoint && padWidth == 0) {
+            // digits of a fixed count right after a number are read as one of its run;
+            // with no run before them, they begin one
+            List<Step> open = open();
+            if (run >= 0) {
+                if (open.get(run) instanceof Step.Digits first) {
+                    open.set(run, first.reserving(maxWidth));
+                }
+                open.add(fraction);
+                return this;
+            }
+            open.add(fraction);
+            run = open.size() - 1;
+            return this;
+        }
+        return add(fraction);
     }
 
     public DateTimeFormatterBuilder appendText(TemporalField field) {
@@ -325,10 +352,13 @@ public final class DateTimeFormatterBuilder {
         return this;
     }
 
-    public DateTimeFormatterBuilder appendPattern(String pattern) {
+    /** A pattern's parts: the compiler notes the letters of a pattern it sees, then calls appended. */
+    public native DateTimeFormatterBuilder appendPattern(String pattern);
+
+    static DateTimeFormatterBuilder appended(DateTimeFormatterBuilder builder, String pattern) {
         Objects.requireNonNull(pattern, "pattern");
-        Patterns.read(this, pattern);
-        return this;
+        Patterns.read(builder, pattern);
+        return builder;
     }
 
     public DateTimeFormatter toFormatter() {
@@ -337,13 +367,15 @@ public final class DateTimeFormatterBuilder {
 
     public DateTimeFormatter toFormatter(Locale locale) {
         Objects.requireNonNull(locale, "locale");
-        return formatter(locale, ResolverStyle.SMART);
+        return formatter(locale, ResolverStyle.SMART, null);
     }
 
-    DateTimeFormatter formatter(Locale locale, ResolverStyle style) {
+    /** The formatter of the parts appended, of a calendar or of none. */
+    DateTimeFormatter formatter(Locale locale, ResolverStyle style, Chronology chronology) {
         while (groups.size() > 1) {
             optionalEnd();
         }
-        return new DateTimeFormatter(new Step.Group(open().toArray(new Step[0]), false), locale, style, null);
+        return new DateTimeFormatter(new Step.Group(open().toArray(new Step[0]), false), locale, style, null,
+                chronology);
     }
 }

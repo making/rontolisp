@@ -199,6 +199,23 @@ final class JavaClasses {
 	boolean everyRegion;
 
 	/**
+	 * Whether the program reaches {@code TemporalQueries.chronology()}, so that a date or
+	 * a time may be asked its calendar. Until a pass finds it does, no class of
+	 * {@code java.time} compares a query with that question.
+	 */
+	boolean calendars;
+
+	/**
+	 * The letters the patterns of the program's formatters name, outside their quoted
+	 * texts: the constant ones it was seen making. A letter of weeks, quarters or the
+	 * modified Julian day makes its parts only once one names it.
+	 */
+	final Set<Character> patternLetters = new java.util.TreeSet<>();
+
+	/** Whether the program makes a formatter of a pattern computed where it runs. */
+	boolean everyLetter;
+
+	/**
 	 * The static fields of the library some pass read whose initializers ask whether they
 	 * are wanted: a constant no program reads is not made (a formatter's ISO forms).
 	 */
@@ -851,7 +868,11 @@ final class JavaClasses {
 	/**
 	 * What each new class extends, what a sealed one permits, then the members; then
 	 * whether each type argument their declarations wrote is within its parameter's
-	 * bounds, which the declarations set.
+	 * bounds, which the declarations set. A declaration read while another one is being
+	 * completed hands its checks to that one: a class it names may be the one whose
+	 * supertypes are being read ({@code LocalDate} implementing {@code ChronoLocalDate},
+	 * whose members name a class whose supertype is
+	 * {@code ChronoZonedDateTime<LocalDate>}).
 	 */
 	private void complete(List<JavaClass> all, Unit unit) {
 		List<Runnable> outer = this.boundChecks;
@@ -859,8 +880,13 @@ final class JavaClasses {
 		this.completing++;
 		try {
 			declareMembers(all, unit);
-			for (Runnable check : this.boundChecks) {
-				check.run();
+			if (outer != null) {
+				outer.addAll(this.boundChecks);
+			}
+			else {
+				for (Runnable check : this.boundChecks) {
+					check.run();
+				}
 			}
 		}
 		finally {

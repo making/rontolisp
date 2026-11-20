@@ -36,6 +36,11 @@ public interface TemporalAccessor {
 
     @SuppressWarnings("unchecked")
     default <R> R query(TemporalQuery<R> query) {
+        if (TemporalQueries.calendars()) {
+            if (query == TemporalQueries.chronology()) {
+                return null;
+            }
+        }
         return query == TemporalQueries.zoneId() || query == TemporalQueries.precision() ? null
                 : query.queryFrom(this);
     }

@@ -15,6 +15,10 @@ public interface ChronoLocalDateTime<D extends ChronoLocalDate>
 
     D toLocalDate();
 
+    default Chronology getChronology() {
+        return toLocalDate().getChronology();
+    }
+
     LocalTime toLocalTime();
 
     long toEpochSecond(ZoneOffset offset);

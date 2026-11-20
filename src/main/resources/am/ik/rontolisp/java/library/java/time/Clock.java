@@ -4,10 +4,10 @@
 //
 // What tells the present instant and the zone a date is read from it in: the host's
 // clock, one that stands still, one a fixed time ahead of another, one that moves in
-// steps. A program may write its own.
+// steps, one over a source of instants. A program may write its own.
 package java.time;
 
-public abstract class Clock {
+public abstract class Clock implements InstantSource {
 
     protected Clock() {
     }
@@ -176,6 +176,68 @@ public abstract class Clock {
 
         public String toString() {
             return "OffsetClock[" + base + "," + offset + "]";
+        }
+    }
+
+    /** The host's instant, of no zone: what InstantSource.system() answers. */
+    static final class SystemInstantSource implements InstantSource {
+
+        static final SystemInstantSource INSTANCE = new SystemInstantSource();
+
+        private SystemInstantSource() {
+        }
+
+        public Instant instant() {
+            return Instant.now();
+        }
+
+        public Clock withZone(ZoneId zone) {
+            return Clock.system(zone);
+        }
+
+        public String toString() {
+            return "SystemInstantSource";
+        }
+    }
+
+    /** A source of instants given a zone. */
+    static final class SourceClock extends Clock {
+
+        private final InstantSource source;
+
+        private final ZoneId zone;
+
+        SourceClock(InstantSource source, ZoneId zone) {
+            this.source = source;
+            this.zone = zone;
+        }
+
+        public ZoneId getZone() {
+            return zone;
+        }
+
+        public Clock withZone(ZoneId zone) {
+            return zone.equals(this.zone) ? this : new SourceClock(source, zone);
+        }
+
+        public Instant instant() {
+            return source.instant();
+        }
+
+        public long millis() {
+            return source.millis();
+        }
+
+        public boolean equals(Object other) {
+            return other instanceof SourceClock that && that.source.equals(source) && that.zone.equals(zone);
+        }
+
+        public int hashCode() {
+            return source.hashCode() ^ zone.hashCode();
+        }
+
+        public String toString() {
+            return "SourceClock[" + source + "," + zone + "]";
         }
     }
 

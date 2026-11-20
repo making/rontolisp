@@ -101,6 +101,14 @@ final class IsoText {
         at++;
     }
 
+    /** A literal of several characters, refused where it starts. */
+    void literal(String wanted) {
+        if (!text.startsWith(wanted, at)) {
+            throw failed(at);
+        }
+        at += wanted.length();
+    }
+
     /**
      * A year: four digits; more, as many as ten, behind a sign, which a plus has to
      * have; no year zero behind a minus.

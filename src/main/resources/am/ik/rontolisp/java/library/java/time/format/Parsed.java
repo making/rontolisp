@@ -18,12 +18,24 @@ import java.time.LocalTime;
 import java.time.Period;
 import java.time.ZoneId;
 import java.time.ZoneOffset;
+import java.time.chrono.ChronoLocalDate;
+import java.time.chrono.ChronoLocalDateTime;
+import java.time.chrono.ChronoZonedDateTime;
+import java.time.chrono.IsoChronology;
 import java.time.temporal.ChronoField;
 import java.time.temporal.TemporalAccessor;
 import java.time.temporal.TemporalField;
 import java.time.temporal.TemporalQueries;
 import java.time.temporal.TemporalQuery;
 import java.time.temporal.UnsupportedTemporalTypeException;
+import java.util.AbstractMap;
+import java.util.AbstractSet;
+import java.util.ArrayList;
+import java.util.Iterator;
+import java.util.List;
+import java.util.Map;
+import java.util.Objects;
+import java.util.Set;
 
 final class Parsed implements TemporalAccessor {
 
@@ -54,6 +66,9 @@ final class Parsed implements TemporalAccessor {
     private boolean leapSecond;
 
     private ResolverStyle style;
+
+    /** Whether the program can ask for a calendar: answered by the compiler, as Iso's. */
+    static native boolean calendars();
 
     Parsed(Reading in) {
         this.fields = java.util.Arrays.copyOf(in.fields, in.count + 4);
@@ -101,6 +116,10 @@ final class Parsed implements TemporalAccessor {
             }
             return;
         }
+        append(field, value);
+    }
+
+    private void append(TemporalField field, long value) {
         if (count == fields.length) {
             fields = java.util.Arrays.copyOf(fields, count * 2);
             values = java.util.Arrays.copyOf(values, count * 2);
@@ -117,12 +136,29 @@ final class Parsed implements TemporalAccessor {
         date = made;
     }
 
+    private void time(LocalTime made) {
+        if (time != null && !time.equals(made)) {
+            throw new DateTimeException("Conflict found: Fields resolved to different times: " + time + " " + made);
+        }
+        time = made;
+    }
+
+    /**
+     * Whether the program makes a field that is no ChronoField -- of IsoFields,
+     * JulianFields, WeekFields or its own --: answered by the compiler, so a program
+     * making none has nothing of resolving one.
+     */
+    static native boolean others();
+
     void resolve(ResolverStyle style, ZoneId override) {
         this.style = style;
         if (zone == null) {
             zone = override;
         }
         resolveDate();
+        if (others()) {
+            resolveOthers();
+        }
         resolveTimeFields();
         resolveTime();
         check();
@@ -205,6 +241,69 @@ final class Parsed implements TemporalAccessor {
         if (has(ChronoField.ALIGNED_WEEK_OF_YEAR)
                 && (has(ChronoField.ALIGNED_DAY_OF_WEEK_IN_YEAR) || has(ChronoField.DAY_OF_WEEK))) {
             weekOfYear();
+        }
+    }
+
+    /**
+     * The fields that are no ChronoField resolve themselves (TemporalField.resolve), after
+     * the date's fields: in the order read, the first that takes itself out or answers a
+     * date or a time, then again from the first; what one puts among a date's fields is
+     * resolved as they are. Fifty such changes are a field that goes on for ever, refused
+     * as a JDK refuses it.
+     */
+    private void resolveOthers() {
+        Fields view = new Fields();
+        for (int changes = 0; resolveOne(view); changes++) {
+            if (changes == 49) {
+                throw new DateTimeException("One of the parsed fields has an incorrectly implemented resolve method");
+            }
+            if (view.dated) {
+                view.dated = false;
+                resolveDate();
+            }
+        }
+    }
+
+    private boolean resolveOne(Fields view) {
+        for (int i = 0; i < count; i++) {
+            TemporalField field = fields[i];
+            if (field instanceof ChronoField) {
+                continue;
+            }
+            TemporalAccessor made = field.resolve(view, this, style);
+            if (made != null) {
+                made(made);
+                return true;
+            }
+            i = index(field);
+            if (i < 0) {
+                return true;
+            }
+        }
+        return false;
+    }
+
+    /** A date, a time or both a field resolved to; of a zoned value its zone too. */
+    private void made(TemporalAccessor made) {
+        if (made instanceof ChronoZonedDateTime<?> zoned) {
+            if (zone == null) {
+                zone = zoned.getZone();
+            }
+            made = zoned.toLocalDateTime();
+        }
+        if (made instanceof ChronoLocalDateTime<?> local) {
+            date(LocalDate.from(local.toLocalDate()));
+            time(local.toLocalTime());
+        }
+        else if (made instanceof ChronoLocalDate local) {
+            date(LocalDate.from(local));
+        }
+        else if (made instanceof LocalTime local) {
+            time(local);
+        }
+        else {
+            throw new DateTimeException(
+                    "Method resolve() can only return ChronoZonedDateTime, ChronoLocalDateTime, ChronoLocalDate or LocalTime");
         }
     }
 
@@ -361,7 +460,7 @@ final class Parsed implements TemporalAccessor {
                 put(ChronoField.NANO_OF_SECOND, micros * 1000, ChronoField.MICRO_OF_SECOND);
             }
         }
-        if (style != ResolverStyle.STRICT && has(ChronoField.AMPM_OF_DAY) && !has(ChronoField.HOUR_OF_DAY)
+        if (time == null && style != ResolverStyle.STRICT && has(ChronoField.AMPM_OF_DAY) && !has(ChronoField.HOUR_OF_DAY)
                 && !has(ChronoField.HOUR_OF_AMPM) && !has(ChronoField.MINUTE_OF_HOUR)
                 && !has(ChronoField.SECOND_OF_MINUTE) && !has(ChronoField.NANO_OF_SECOND)) {
             // half a day alone is its middle
@@ -381,7 +480,7 @@ final class Parsed implements TemporalAccessor {
 
     /** A time of the hour, the minute, the second and the nanosecond, each where the one before is. */
     private void resolveTime() {
-        if (has(ChronoField.HOUR_OF_DAY)) {
+        if (time == null && has(ChronoField.HOUR_OF_DAY)) {
             boolean minute = has(ChronoField.MINUTE_OF_HOUR);
             boolean second = has(ChronoField.SECOND_OF_MINUTE);
             boolean nano = has(ChronoField.NANO_OF_SECOND);
@@ -419,7 +518,7 @@ final class Parsed implements TemporalAccessor {
                 }
             }
         }
-        if (has(ChronoField.SECOND_OF_MINUTE) || has(ChronoField.INSTANT_SECONDS)) {
+        if (time == null && (has(ChronoField.SECOND_OF_MINUTE) || has(ChronoField.INSTANT_SECONDS))) {
             // a second with no time: its fraction in each of the three fields
             long nano = has(ChronoField.NANO_OF_SECOND) ? valueOf(ChronoField.NANO_OF_SECOND) : 0;
             put(ChronoField.NANO_OF_SECOND, nano, null);
@@ -432,8 +531,13 @@ final class Parsed implements TemporalAccessor {
     private void check() {
         for (int i = 0; i < count;) {
             TemporalField field = fields[i];
-            TemporalAccessor made = !(field instanceof ChronoField) ? null
-                    : field.isDateBased() ? date : field.isTimeBased() ? time : null;
+            TemporalAccessor made = null;
+            if (field instanceof ChronoField) {
+                made = field.isDateBased() ? date : field.isTimeBased() ? time : null;
+            }
+            else if (others()) {
+                made = date != null && date.isSupported(field) ? date : time;
+            }
             if (made != null && made.isSupported(field)) {
                 long value = made.getLong(field);
                 if (value != values[i]) {
@@ -529,7 +633,63 @@ final class Parsed implements TemporalAccessor {
         if (query == TemporalQueries.precision()) {
             return null;
         }
+        if (calendars()) {
+            if (query == TemporalQueries.chronology()) {
+                return (R) IsoChronology.INSTANCE;
+            }
+        }
         return query.queryFrom(this);
+    }
+
+    /** The fields read as the map a field's resolve takes: what it changes, the arrays hold. */
+    private final class Fields extends AbstractMap<TemporalField, Long> {
+
+        /** Whether a field of a date was put since the last look. */
+        boolean dated;
+
+        public boolean containsKey(Object key) {
+            return key instanceof TemporalField field && has(field);
+        }
+
+        public Long get(Object key) {
+            return containsKey(key) ? valueOf((TemporalField) key) : null;
+        }
+
+        public Long put(TemporalField key, Long value) {
+            Objects.requireNonNull(key, "key");
+            Objects.requireNonNull(value, "value");
+            if (key instanceof ChronoField && key.isDateBased()) {
+                dated = true;
+            }
+            int index = index(key);
+            if (index >= 0) {
+                long old = values[index];
+                values[index] = value;
+                return old;
+            }
+            append(key, value);
+            return null;
+        }
+
+        public Long remove(Object key) {
+            return containsKey(key) ? Parsed.this.remove((TemporalField) key) : null;
+        }
+
+        public Set<Map.Entry<TemporalField, Long>> entrySet() {
+            List<Map.Entry<TemporalField, Long>> entries = new ArrayList<>();
+            for (int i = 0; i < count; i++) {
+                entries.add(new SimpleImmutableEntry<>(fields[i], values[i]));
+            }
+            return new AbstractSet<>() {
+                public Iterator<Map.Entry<TemporalField, Long>> iterator() {
+                    return entries.iterator();
+                }
+
+                public int size() {
+                    return entries.size();
+                }
+            };
+        }
     }
 
     public String toString() {

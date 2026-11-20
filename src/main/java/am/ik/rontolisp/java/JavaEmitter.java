@@ -159,6 +159,32 @@ interface JavaEmitter {
 		 */
 		boolean wantedField();
 
+		/**
+		 * Whether the program can ask a date or a time for its calendar: it reaches
+		 * {@code TemporalQueries.chronology()}, the one way to the question.
+		 */
+		boolean asksCalendars();
+
+		/**
+		 * Notes the pattern of a formatter the program makes where this is called: the
+		 * letters of a constant one are ones its patterns can name, and one computed
+		 * where it runs ({@code null} here) can name them all.
+		 */
+		void namesPattern(@Nullable String pattern);
+
+		/** Whether a pattern of the program can name one of these letters. */
+		boolean namesLetter(String letters);
+
+		/** Whether the program makes an instance of the library's class of this name. */
+		boolean makesClass(String name);
+
+		/**
+		 * Whether the program makes a {@code TemporalField} that is no
+		 * {@code ChronoField}: one of {@code IsoFields}, {@code JulianFields},
+		 * {@code WeekFields} or its own.
+		 */
+		boolean makesOtherFields();
+
 	}
 
 	LispVal emit(Context context, Invocation invocation);

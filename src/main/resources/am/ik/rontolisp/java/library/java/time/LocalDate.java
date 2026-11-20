@@ -9,6 +9,8 @@ package java.time;
 
 import java.io.Serializable;
 import java.time.chrono.ChronoLocalDate;
+import java.time.chrono.IsoChronology;
+import java.time.chrono.IsoEra;
 import java.time.format.DateTimeFormatter;
 import java.time.temporal.ChronoField;
 import java.time.temporal.ChronoUnit;
@@ -23,6 +25,8 @@ import java.time.temporal.TemporalUnit;
 import java.time.temporal.UnsupportedTemporalTypeException;
 import java.time.temporal.ValueRange;
 import java.util.Objects;
+import java.util.stream.LongStream;
+import java.util.stream.Stream;
 
 public final class LocalDate implements Temporal, TemporalAdjuster, ChronoLocalDate, Serializable {
 
@@ -216,6 +220,14 @@ public final class LocalDate implements Temporal, TemporalAdjuster, ChronoLocalD
 
     private long prolepticMonth() {
         return year * 12L + month - 1;
+    }
+
+    public IsoChronology getChronology() {
+        return IsoChronology.INSTANCE;
+    }
+
+    public IsoEra getEra() {
+        return year >= 1 ? IsoEra.CE : IsoEra.BCE;
     }
 
     public int getYear() {
@@ -456,6 +468,65 @@ public final class LocalDate implements Temporal, TemporalAdjuster, ChronoLocalD
         return Period.of(Math.toIntExact(months / 12), (int) (months % 12), days);
     }
 
+    /** The dates from this one up to an end, a day apart. */
+    public Stream<LocalDate> datesUntil(LocalDate endExclusive) {
+        long start = toEpochDay();
+        long end = endExclusive.toEpochDay();
+        if (end < start) {
+            throw new IllegalArgumentException(endExclusive + " < " + this);
+        }
+        return LongStream.range(start, end).mapToObj(LocalDate::ofEpochDay);
+    }
+
+    /**
+     * The dates from this one toward an end, the n-th one this date plus the step n
+     * times: months, then days. The count is found from the step's average length and
+     * the dates beside it, so a stream over many dates is made at once.
+     */
+    public Stream<LocalDate> datesUntil(LocalDate endExclusive, Period step) {
+        long end = endExclusive.toEpochDay();
+        long until = end - toEpochDay();
+        if (step.isZero()) {
+            throw new IllegalArgumentException("step is zero");
+        }
+        long months = step.toTotalMonths();
+        long days = step.getDays();
+        if ((months < 0 && days > 0) || (months > 0 && days < 0)) {
+            throw new IllegalArgumentException("period months and days are of opposite sign");
+        }
+        boolean back = months < 0 || days < 0;
+        if (until != 0 && back != until < 0) {
+            throw new IllegalArgumentException(endExclusive + (back ? " > " : " < ") + this);
+        }
+        if (until == 0) {
+            return Stream.empty();
+        }
+        // 4800 months are 146097 days: an estimate of the last step, then the steps
+        // beside it until the last date before the end is found
+        long last = until * 4800 / (months * 146097 + days * 4800);
+        while (last > 0 && !before(stepped(months, days, last), end, back)) {
+            last--;
+        }
+        while (before(stepped(months, days, last + 1), end, back)) {
+            last++;
+        }
+        return LongStream.rangeClosed(0, last).mapToObj(n -> plusMonths(months * n).plusDays(days * n));
+    }
+
+    /** The epoch day of this date plus a step n times, or a day past every date where there is none. */
+    private long stepped(long months, long days, long n) {
+        try {
+            return plusMonths(Math.multiplyExact(months, n)).plusDays(Math.multiplyExact(days, n)).toEpochDay();
+        }
+        catch (DateTimeException | ArithmeticException past) {
+            return months < 0 || days < 0 ? Long.MIN_VALUE : Long.MAX_VALUE;
+        }
+    }
+
+    private static boolean before(long day, long end, boolean back) {
+        return back ? day > end : day < end;
+    }
+
     public LocalDateTime atTime(LocalTime time) {
         return LocalDateTime.of(this, time);
     }
@@ -470,6 +541,10 @@ public final class LocalDate implements Temporal, TemporalAdjuster, ChronoLocalD
 
     public LocalDateTime atTime(int hour, int minute, int second, int nanoOfSecond) {
         return atTime(LocalTime.of(hour, minute, second, nanoOfSecond));
+    }
+
+    public OffsetDateTime atTime(OffsetTime time) {
+        return OffsetDateTime.of(LocalDateTime.of(this, time.toLocalTime()), time.getOffset());
     }
 
     public LocalDateTime atStartOfDay() {
@@ -528,6 +603,11 @@ public final class LocalDate implements Temporal, TemporalAdjuster, ChronoLocalD
 
     @SuppressWarnings("unchecked")
     public <R> R query(TemporalQuery<R> query) {
+        if (Iso.calendars()) {
+            if (query == TemporalQueries.chronology()) {
+                return (R) IsoChronology.INSTANCE;
+            }
+        }
         return query == TemporalQueries.precision() ? (R) ChronoUnit.DAYS
                 : query == TemporalQueries.zoneId() ? null : query.queryFrom(this);
     }

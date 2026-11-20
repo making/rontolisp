@@ -4,11 +4,16 @@
 //
 // A pattern's letters made the parts of a formatter, as the API documentation's table of
 // letters and counts gives them. The refusals and their order (a count is refused before
-// a letter the subset lacks) are a JDK 25's answers.
+// a letter the subset lacks) are a JDK 25's answers. The letters of weeks, quarters and
+// the modified Julian day make their parts only in a program whose patterns can name
+// them: the compiler notes the letters of each pattern it sees, all of them for one
+// computed where the program runs (weeks(), quarters(), julian()).
 package java.time.format;
 
 import java.time.LocalDate;
 import java.time.temporal.ChronoField;
+import java.time.temporal.IsoFields;
+import java.time.temporal.JulianFields;
 import java.time.temporal.TemporalField;
 
 final class Patterns {
@@ -19,6 +24,15 @@ final class Patterns {
 
     private Patterns() {
     }
+
+    /** Whether a pattern of the program can name a letter of a locale's weeks: Y, w, W, e, c. */
+    static native boolean weeks();
+
+    /** Whether one can name a quarter: Q, q. */
+    static native boolean quarters();
+
+    /** Whether one can name the modified Julian day: g. */
+    static native boolean julian();
 
     static void read(DateTimeFormatterBuilder builder, String pattern) {
         for (int at = 0; at < pattern.length(); at++) {
@@ -191,6 +205,10 @@ final class Patterns {
                     throw new IllegalArgumentException("Invalid pattern \"cc\"");
                 }
                 if (count < 3) {
+                    if (weeks()) {
+                        localized(builder, c, count);
+                        return;
+                    }
                     throw unsupported(c);
                 }
                 builder.appendText(ChronoField.DAY_OF_WEEK, text(count, c == 'c'));
@@ -270,13 +288,44 @@ final class Patterns {
                     builder.appendOffset("+HHMM", "+0000");
                 }
                 return;
-            case 'Q':
-            case 'q':
-            case 'B':
             case 'Y':
             case 'w':
             case 'W':
+                if (count > (c == 'w' ? 2 : c == 'W' ? 1 : count)) {
+                    throw tooMany(c);
+                }
+                if (weeks()) {
+                    localized(builder, c, count);
+                    return;
+                }
+                throw unsupported(c);
+            case 'Q':
+            case 'q':
+                if (count > 5) {
+                    throw tooMany(c);
+                }
+                if (quarters()) {
+                    if (count < 3) {
+                        small(builder, c, count, IsoFields.QUARTER_OF_YEAR);
+                    }
+                    else {
+                        builder.appendText(IsoFields.QUARTER_OF_YEAR, text(count, c == 'q'));
+                    }
+                    return;
+                }
+                throw unsupported(c);
             case 'g':
+                if (julian()) {
+                    if (count == 1) {
+                        builder.appendValue(JulianFields.MODIFIED_JULIAN_DAY);
+                    }
+                    else {
+                        builder.appendValue(JulianFields.MODIFIED_JULIAN_DAY, count, 19, SignStyle.NORMAL);
+                    }
+                    return;
+                }
+                throw unsupported(c);
+            case 'B':
             case 'z':
             case 'v':
                 refused(c, count);
@@ -284,6 +333,25 @@ final class Patterns {
             default:
                 throw new IllegalArgumentException("Unknown pattern letter: " + c);
         }
+    }
+
+    /**
+     * A number of the weeks of the formatter's locale: the week-based year (Y) as a year
+     * is written by its count, the weeks (w, W) and the day of the week (e, c) in one or
+     * two digits.
+     */
+    private static void localized(DateTimeFormatterBuilder builder, char c, int count) {
+        Step.Localized step;
+        if (c == 'Y') {
+            step = count == 2 ? new Step.Localized(c, 2, 2, 2, SignStyle.NOT_NEGATIVE, 0, false, false)
+                    : new Step.Localized(c, count, count, 19, count < 4 ? SignStyle.NORMAL : SignStyle.EXCEEDS_PAD, 0,
+                            false, false);
+        }
+        else {
+            step = new Step.Localized(c, count, count, c == 'w' && count == 1 ? 2 : count, SignStyle.NOT_NEGATIVE, 0,
+                    false, false);
+        }
+        builder.appendLocalized(step);
     }
 
     /**
@@ -296,7 +364,7 @@ final class Patterns {
                 throw new IllegalArgumentException("Wrong number of pattern letters: " + c);
             }
         }
-        else if (count > (c == 'w' ? 2 : c == 'W' ? 1 : c == 'z' ? 4 : c == 'Q' || c == 'q' ? 5 : 19)) {
+        else if (count > 4) {
             throw tooMany(c);
         }
         throw unsupported(c);

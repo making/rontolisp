@@ -6,6 +6,7 @@
 package java.time;
 
 import java.io.Serializable;
+import java.time.chrono.IsoChronology;
 import java.time.format.DateTimeFormatter;
 import java.time.temporal.ChronoField;
 import java.time.temporal.ChronoUnit;
@@ -320,6 +321,11 @@ public final class YearMonth implements Temporal, TemporalAdjuster, Comparable<Y
 
     @SuppressWarnings("unchecked")
     public <R> R query(TemporalQuery<R> query) {
+        if (Iso.calendars()) {
+            if (query == TemporalQueries.chronology()) {
+                return (R) IsoChronology.INSTANCE;
+            }
+        }
         return query == TemporalQueries.precision() ? (R) ChronoUnit.MONTHS
                 : query == TemporalQueries.zoneId() ? null : query.queryFrom(this);
     }

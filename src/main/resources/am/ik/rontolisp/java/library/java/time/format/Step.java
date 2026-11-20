@@ -20,6 +20,7 @@ import java.time.temporal.ChronoField;
 import java.time.temporal.TemporalField;
 import java.time.temporal.TemporalQueries;
 import java.time.temporal.ValueRange;
+import java.time.temporal.WeekFields;
 
 abstract class Step {
 
@@ -89,6 +90,9 @@ abstract class Step {
      * width and at most the most, with a sign as its style says. A run of numbers with
      * no text between them is read by keeping, for the fixed widths after its first
      * number, the digits they take (reserved); one of those reads its width exactly.
+     * Leniently a number reads from one digit to nine and those it keeps, but within its
+     * widths where it is a run's fixed-width first or follows, or where a number of no
+     * fixed width came right after its run (ended: then it keeps none). JDK 25's answers.
      */
     static class Digits extends Step {
 
@@ -106,18 +110,33 @@ abstract class Step {
         /** Whether this follows a number with no text between: its width, no sign. */
         final boolean follows;
 
-        Digits(TemporalField field, int least, int most, SignStyle sign, int reserved, boolean follows) {
+        /** Whether a number of no fixed width came right after this one's run. */
+        final boolean ended;
+
+        Digits(TemporalField field, int least, int most, SignStyle sign, int reserved, boolean follows,
+                boolean ended) {
             this.field = field;
             this.least = least;
             this.most = most;
             this.sign = sign;
             this.reserved = reserved;
             this.follows = follows;
+            this.ended = ended;
         }
 
         /** The same number keeping more digits for the numbers after it. */
         Digits reserving(int width) {
-            return new Digits(field, least, most, sign, reserved + width, follows);
+            return new Digits(field, least, most, sign, reserved + width, follows, ended);
+        }
+
+        /** The same number once a number of no fixed width comes right after its run. */
+        Digits ending() {
+            return new Digits(field, least, most, sign, reserved, follows, true);
+        }
+
+        /** The same number as one following another in a run. */
+        Digits following() {
+            return new Digits(field, least, most, sign, 0, true, ended);
         }
 
         boolean fixed() {
@@ -185,11 +204,12 @@ abstract class Step {
             else if (in.strict && !follows && sign == SignStyle.ALWAYS) {
                 return ~at;
             }
-            boolean exact = in.strict || follows;
+            boolean exact = in.strict || follows || ended || (fixed() && reserved > 0);
             int low = exact ? least : 1;
-            int high = exact ? most : 19;
-            int available = digits(in, at, high + reserved);
-            int count = Math.min(high, Math.max(low, available - reserved));
+            int high = exact ? most : 9;
+            int kept = ended ? 0 : reserved;
+            int available = digits(in, at, high + kept);
+            int count = Math.min(high, Math.max(low, available - kept));
             if (available < count) {
                 return ~at;
             }
@@ -239,14 +259,22 @@ abstract class Step {
         final LocalDate baseDate;
 
         Reduced(TemporalField field, int width, int most, long base, LocalDate baseDate, int reserved,
-                boolean follows) {
-            super(field, width, most, SignStyle.NOT_NEGATIVE, reserved, follows);
+                boolean follows, boolean ended) {
+            super(field, width, most, SignStyle.NOT_NEGATIVE, reserved, follows, ended);
             this.base = base;
             this.baseDate = baseDate;
         }
 
         Digits reserving(int width) {
-            return new Reduced(field, least, most, base, baseDate, reserved + width, follows);
+            return new Reduced(field, least, most, base, baseDate, reserved + width, follows, ended);
+        }
+
+        Digits ending() {
+            return new Reduced(field, least, most, base, baseDate, reserved, follows, true);
+        }
+
+        Digits following() {
+            return new Reduced(field, least, most, base, baseDate, 0, true, ended);
         }
 
         private long range() {
@@ -298,6 +326,73 @@ abstract class Step {
         }
     }
 
+    /**
+     * A number of a field of the weeks of the formatter's locale (WeekFields.of): a
+     * pattern's Y, w, W, e and c, made the number of that locale's field where it is
+     * written or read. It is one of a run of numbers as any number is.
+     */
+    static final class Localized extends Digits {
+
+        /** The pattern's letter and how many of it. */
+        final char letter;
+
+        final int count;
+
+        Localized(char letter, int count, int least, int most, SignStyle sign, int reserved, boolean follows,
+                boolean ended) {
+            super(null, least, most, sign, reserved, follows, ended);
+            this.letter = letter;
+            this.count = count;
+        }
+
+        Digits reserving(int width) {
+            return new Localized(letter, count, least, most, sign, reserved + width, follows, ended);
+        }
+
+        Digits ending() {
+            return new Localized(letter, count, least, most, sign, reserved, follows, true);
+        }
+
+        Digits following() {
+            return new Localized(letter, count, least, most, sign, 0, true, ended);
+        }
+
+        private static TemporalField field(WeekFields weeks, char letter) {
+            return letter == 'Y' ? weeks.weekBasedYear() : letter == 'w' ? weeks.weekOfWeekBasedYear()
+                    : letter == 'W' ? weeks.weekOfMonth() : weeks.dayOfWeek();
+        }
+
+        /** The number of the locale's field: the weeks of the United Kingdom's, or of the others. */
+        private Digits of(int texts) {
+            TemporalField field = field(texts == 2 ? WeekFields.ISO : WeekFields.SUNDAY_START, letter);
+            if (letter == 'Y' && count == 2) {
+                LocalDate base = LocalDate.of(2000, 1, 1);
+                return new Reduced(field, 2, 2, base.getLong(field), base, reserved, follows, ended);
+            }
+            return new Digits(field, least, most, sign, reserved, follows, ended);
+        }
+
+        boolean print(Writing out) {
+            return of(out.texts).print(out);
+        }
+
+        int parse(Reading in, int at) {
+            return of(in.texts).parse(in, at);
+        }
+
+        public String toString() {
+            String name = letter == 'Y' ? "WeekBasedYear" : letter == 'w' ? "WeekOfWeekBasedYear"
+                    : letter == 'W' ? "WeekOfMonth" : "DayOfWeek";
+            if (letter != 'Y') {
+                return "Localized(" + name + "," + count + ")";
+            }
+            if (count == 2) {
+                return "Localized(ReducedValue(" + name + ",2,2,2000-01-01))";
+            }
+            return "Localized(" + name + (count == 1 ? "" : "," + count + ",19," + sign.name()) + ")";
+        }
+    }
+
     /** A fraction of a field's range, in digits after a point. */
     static final class Fraction extends Step {
 
@@ -346,10 +441,11 @@ abstract class Step {
             int low = in.strict ? least : 0;
             int high = in.strict ? most : 9;
             int start = at;
+            if (point ? at >= in.length || in.text.charAt(at) != '.' : at >= in.length) {
+                // no point, or the text's end: no field (a JDK's answer)
+                return low > 0 ? ~at : at;
+            }
             if (point) {
-                if (at >= in.length || in.text.charAt(at) != '.') {
-                    return low > 0 ? ~at : at;
-                }
                 at++;
             }
             int count = digits(in, at, high);
@@ -396,7 +492,7 @@ abstract class Step {
         }
 
         private Digits number() {
-            return new Digits(field, 1, 19, SignStyle.NORMAL, 0, false);
+            return new Digits(field, 1, 19, SignStyle.NORMAL, 0, false, false);
         }
 
         boolean print(Writing out) {
@@ -959,13 +1055,13 @@ abstract class Step {
 
         /** The form an instant is read in, a fraction of the digits asked. */
         private static Group form(int digits) {
-            Step[] steps = {new Setting(1), new Digits(ChronoField.YEAR, 4, 10, SignStyle.EXCEEDS_PAD, 0, false),
-                    new Literal("-"), new Digits(ChronoField.MONTH_OF_YEAR, 2, 2, SignStyle.NOT_NEGATIVE, 0, false),
-                    new Literal("-"), new Digits(ChronoField.DAY_OF_MONTH, 2, 2, SignStyle.NOT_NEGATIVE, 0, false),
-                    new Literal("T"), new Digits(ChronoField.HOUR_OF_DAY, 2, 2, SignStyle.NOT_NEGATIVE, 0, false),
-                    new Literal(":"), new Digits(ChronoField.MINUTE_OF_HOUR, 2, 2, SignStyle.NOT_NEGATIVE, 0, false),
+            Step[] steps = {new Setting(1), new Digits(ChronoField.YEAR, 4, 10, SignStyle.EXCEEDS_PAD, 0, false, false),
+                    new Literal("-"), new Digits(ChronoField.MONTH_OF_YEAR, 2, 2, SignStyle.NOT_NEGATIVE, 0, false, false),
+                    new Literal("-"), new Digits(ChronoField.DAY_OF_MONTH, 2, 2, SignStyle.NOT_NEGATIVE, 0, false, false),
+                    new Literal("T"), new Digits(ChronoField.HOUR_OF_DAY, 2, 2, SignStyle.NOT_NEGATIVE, 0, false, false),
+                    new Literal(":"), new Digits(ChronoField.MINUTE_OF_HOUR, 2, 2, SignStyle.NOT_NEGATIVE, 0, false, false),
                     new Literal(":"),
-                    new Digits(ChronoField.SECOND_OF_MINUTE, 2, 2, SignStyle.NOT_NEGATIVE, 0, false),
+                    new Digits(ChronoField.SECOND_OF_MINUTE, 2, 2, SignStyle.NOT_NEGATIVE, 0, false, false),
                     new Fraction(ChronoField.NANO_OF_SECOND, digits < 0 ? 0 : digits, digits < 0 ? 9 : digits,
                             true),
                     new Offset("+HH:MM:ss", "Z")};

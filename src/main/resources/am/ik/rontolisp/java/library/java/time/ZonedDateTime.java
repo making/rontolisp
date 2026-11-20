@@ -17,6 +17,7 @@ package java.time;
 
 import java.io.Serializable;
 import java.time.chrono.ChronoZonedDateTime;
+import java.time.chrono.IsoChronology;
 import java.time.format.DateTimeFormatter;
 import java.time.temporal.ChronoField;
 import java.time.temporal.ChronoUnit;
@@ -643,6 +644,11 @@ public final class ZonedDateTime implements Temporal, ChronoZonedDateTime<LocalD
 
     @SuppressWarnings("unchecked")
     public <R> R query(TemporalQuery<R> query) {
+        if (Iso.calendars()) {
+            if (query == TemporalQueries.chronology()) {
+                return (R) IsoChronology.INSTANCE;
+            }
+        }
         return query == TemporalQueries.zoneId() ? (R) zone
                 : query == TemporalQueries.precision() ? (R) ChronoUnit.NANOS : query.queryFrom(this);
     }

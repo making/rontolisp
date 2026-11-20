@@ -8,6 +8,8 @@
 package java.time;
 
 import java.io.Serializable;
+import java.time.chrono.ChronoPeriod;
+import java.time.chrono.IsoChronology;
 import java.time.format.DateTimeParseException;
 import java.time.temporal.ChronoUnit;
 import java.time.temporal.Temporal;
@@ -16,7 +18,7 @@ import java.time.temporal.TemporalUnit;
 import java.time.temporal.UnsupportedTemporalTypeException;
 import java.util.List;
 
-public final class Period implements TemporalAmount, Serializable {
+public final class Period implements ChronoPeriod, Serializable {
 
     public static final Period ZERO = new Period(0, 0, 0);
 
@@ -178,6 +180,10 @@ public final class Period implements TemporalAmount, Serializable {
 
     public boolean isNegative() {
         return years < 0 || months < 0 || days < 0;
+    }
+
+    public IsoChronology getChronology() {
+        return IsoChronology.INSTANCE;
     }
 
     public int getYears() {

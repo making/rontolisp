@@ -542,6 +542,28 @@ class JavaLoweringTest {
 					&& form.contains("TemporalQueries.localDate()"));
 		assertThat(lower(formatted.formatted(""), "L14.java"))
 			.noneMatch(form -> form.contains("TemporalQueries") || form.contains("java.time.format."));
+		// The letters of weeks, quarters and the modified Julian day make their parts
+		// only in a program whose patterns can name them -- a constant pattern names the
+		// letters outside its quotes, a computed one all of them --; a field that is no
+		// ChronoField is resolved only in a program that makes one, and a value is asked
+		// its calendar only in a program that reaches the question.
+		String patterned = """
+				import java.time.format.DateTimeFormatter;
+				import java.time.temporal.TemporalQueries;
+				class L15 {
+				    public static void main(String[] args) {
+				        System.out.println(DateTimeFormatter.ofPattern(%s).parse("2026Y")%s);
+				    }
+				}
+				""";
+		assertThat(lower(patterned.formatted("\"uuuu'Y'\"", ""), "L15.java")).noneMatch(
+				form -> form.contains("WeekFields") || form.contains("IsoFields") || form.contains("JulianFields")
+						|| form.contains("Parsed.resolveOthers") || form.contains("IsoChronology"));
+		assertThat(lower(patterned.formatted("args[0]", ".query(TemporalQueries.chronology())"), "L15.java"))
+			.anyMatch(form -> form.startsWith("(DEFUN |java.time.temporal.WeekFields.of(java.time.DayOfWeek,int)| "))
+			.anyMatch(form -> form.startsWith("(DEFUN |java.time.format.Parsed.resolveOthers()| "))
+			.anyMatch(form -> form.startsWith("(DEFUN |java.time.format.Parsed.query(")
+					&& form.contains("java.time.chrono.IsoChronology.INSTANCE"));
 		assertThat(lower(pool.formatted("{ protected void afterExecute(Runnable r, Throwable t) { } }"), "L7.java"))
 			.anyMatch(form -> form.contains("(DEFUN |java.util.concurrent.ThreadPoolExecutor.hooked()| NIL "
 					+ "(|java.util.concurrent.ThreadPoolExecutor.Hooked.new()|))"));
@@ -1538,7 +1560,11 @@ class JavaLoweringTest {
 				"package other; public class Q { }", "app/Helper.java", """
 						package app;
 						class Helper { static int twice(int x) { return 2 * x; } }
-						""");
+						""", "c/Chrono.java", "package c; public interface Chrono<D extends Base> { }", "c/Base.java",
+				"package c; public interface Base { Holder held(); }", "c/Holder.java",
+				"package c; public class Holder implements Chrono<Impl> { }", "c/Impl.java",
+				"package c; public class Impl implements Base { public Holder held() { return null; } }", "c/Bad.java",
+				"package c; public class Bad implements Chrono<String> { }");
 		JavaFiles files = (from, path) -> {
 			String resolved = Path.of(from).resolveSibling(path).normalize().toString();
 			String text = tree.get(resolved);
@@ -1574,7 +1600,12 @@ class JavaLoweringTest {
 				{ "app/Main.java", "package app; import static p.U.*; class Main { void main() { inst(); } }",
 						"app/Main.java:1:62: cannot find symbol: method inst()" },
 				{ "app/Main.java", "package app; class Main { void main() { new p.Q(); } }",
-						"p/Q.java:1:1: bad source file: p/Q.java: file does not contain class p.Q" } };
+						"p/Q.java:1:1: bad source file: p/Q.java: file does not contain class p.Q" },
+				// a type argument is checked once the supertypes of every class it names
+				// are read: Impl's, here, are being read when Holder is
+				{ "app/Main.java", "package app; class Main { void main() { new c.Impl(); } }", null },
+				{ "app/Main.java", "package app; class Main { void main() { new c.Bad(); } }",
+						"c/Bad.java:1:47: type argument String is not within bounds of type-variable D" } };
 		List<@Nullable String> reported = new java.util.ArrayList<>();
 		for (String[] error : errors) {
 			try {

@@ -206,6 +206,22 @@ final class JavaIntrinsics {
 
 	private static final String ZONE_WANTED = ZONE_ID + ".wanted()";
 
+	/** The question of a calendar, asked in each package that answers it. */
+	private static final List<String> CALENDARS = List.of("java.time.Iso.calendars()",
+			"java.time.temporal.TemporalQueries.calendars()", "java.time.format.Parsed.calendars()");
+
+	private static final String FORMATTER = "java.time.format.DateTimeFormatter";
+
+	private static final String FORMATTER_BUILDER = "java.time.format.DateTimeFormatterBuilder";
+
+	/** The letters of a pattern each question of Patterns asks for. */
+	private static final Map<String, String> PATTERN_LETTERS = Map.of("java.time.format.Patterns.weeks()", "YwWec",
+			"java.time.format.Patterns.quarters()", "Qq", "java.time.format.Patterns.julian()", "g");
+
+	private static final String TEXTS_QUARTERS = "java.time.format.Texts.quarters()";
+
+	private static final String PARSED_OTHERS = "java.time.format.Parsed.others()";
+
 	private static final String ZONED = "java.time.ZonedDateTime";
 
 	private static final String ZONE_RULES_PROVIDER = "java.time.zone.ZoneRulesProvider";
@@ -223,7 +239,11 @@ final class JavaIntrinsics {
 			case REGIONAL -> lowering.holdsRegions();
 			case FOREIGN -> lowering.foreignTemporals();
 			case WANTED, ZONE_WANTED -> lowering.wantedField();
-			default -> null;
+			case TEXTS_QUARTERS -> lowering.makesClass("java.time.temporal.IsoFields.Field");
+			case PARSED_OTHERS -> lowering.makesOtherFields();
+			default -> CALENDARS.contains(member) ? Boolean.valueOf(lowering.asksCalendars())
+					: PATTERN_LETTERS.containsKey(member)
+							? Boolean.valueOf(lowering.namesLetter(PATTERN_LETTERS.get(member))) : null;
 		};
 	}
 
@@ -2004,6 +2024,29 @@ final class JavaIntrinsics {
 		// formatter reads a zone's name through ZoneId's own lookup, which notes none
 		natives.put(FOREIGN, (lowering, call) -> lowering.foreignTemporals() ? JavaForms.T : JavaForms.NIL);
 		natives.put(WANTED, (lowering, call) -> lowering.wantedField() ? JavaForms.T : JavaForms.NIL);
+		// a date or a time is asked its calendar only where the program can ask it
+		for (String calendars : CALENDARS) {
+			natives.put(calendars, (lowering, call) -> lowering.asksCalendars() ? JavaForms.T : JavaForms.NIL);
+		}
+		// a formatter's pattern: the parts of the letters of weeks, quarters and the
+		// modified Julian day are made where a pattern of the program can name them, the
+		// words of a quarter where it makes the fields of IsoFields, and the resolving of
+		// a field that is no ChronoField where it makes one
+		JavaEmitter pattern = (lowering, call) -> {
+			lowering.namesPattern(call.arguments().get(0).constant() instanceof String text ? text : null);
+			return lowering.library(FORMATTER, "patterned", operands(call));
+		};
+		natives.put(FORMATTER + ".ofPattern(String)", pattern);
+		natives.put(FORMATTER + ".ofPattern(String,java.util.Locale)", pattern);
+		natives.put(FORMATTER_BUILDER + ".appendPattern(String)", (lowering, call) -> {
+			lowering.namesPattern(call.arguments().get(0).constant() instanceof String text ? text : null);
+			return lowering.library(FORMATTER_BUILDER, "appended", operands(call));
+		});
+		PATTERN_LETTERS.forEach((question, letters) -> natives.put(question,
+				(lowering, call) -> lowering.namesLetter(letters) ? JavaForms.T : JavaForms.NIL));
+		natives.put(TEXTS_QUARTERS, (lowering, call) -> lowering.makesClass("java.time.temporal.IsoFields.Field")
+				? JavaForms.T : JavaForms.NIL);
+		natives.put(PARSED_OTHERS, (lowering, call) -> lowering.makesOtherFields() ? JavaForms.T : JavaForms.NIL);
 		natives.put("java.time.format.Step.region0(String)", library(ZONE_ID, "region"));
 		// the rules of a region are read and asked in their own package, which the
 		// classes of java.time reach here: a static method each, of the class the rules
