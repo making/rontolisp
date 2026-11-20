@@ -1,7 +1,9 @@
 package am.ik.rontolisp.codegen.jvm;
 
+import java.util.HashMap;
 import java.util.LinkedHashSet;
 import java.util.List;
+import java.util.Map;
 import java.util.SequencedSet;
 import java.util.Set;
 
@@ -84,15 +86,24 @@ final class JvmRawGlobals {
 		if (!enabled) {
 			return eligible;
 		}
+		// one walk counts every candidate's sites: a walk per name was the program's
+		// size times its globals -- minutes for the Java corpus, whose every static is
+		// one
+		Map<String, int[]> shapedAndSites = new HashMap<>();
 		for (String name : globals) {
-			if (excluded.contains(name) || reserved(name)) {
-				continue;
+			if (!excluded.contains(name) && !reserved(name)) {
+				shapedAndSites.put(name, new int[2]);
 			}
-			int[] shapedAndSites = new int[2];
-			for (LispVal form : program) {
-				scanAssigns(form, name, shapedAndSites);
-			}
-			if (shapedAndSites[0] > 0 && shapedAndSites[1] <= MAX_ASSIGN_SITES) {
+		}
+		if (shapedAndSites.isEmpty()) {
+			return eligible;
+		}
+		for (LispVal form : program) {
+			scanAssigns(form, shapedAndSites);
+		}
+		for (String name : globals) {
+			int[] counts = shapedAndSites.get(name);
+			if (counts != null && counts[0] > 0 && counts[1] <= MAX_ASSIGN_SITES) {
 				eligible.add(name);
 			}
 		}
@@ -110,12 +121,13 @@ final class JvmRawGlobals {
 	}
 
 	/**
-	 * Counts assignment sites of {@code name} anywhere in a form (into {@code out[1]}),
-	 * integer-shaped ones also into {@code out[0]}. Unlike the {@code let}-local scan
-	 * this descends INTO {@code defun} bodies: a global's home is a static field every
-	 * method body reaches, so an assignment inside a function is the same assignment.
+	 * Counts the assignment sites of each name of {@code counts} anywhere in a form (into
+	 * its {@code [1]}), integer-shaped ones also into its {@code [0]}. Unlike the
+	 * {@code let}-local scan this descends INTO {@code defun} bodies: a global's home is
+	 * a static field every method body reaches, so an assignment inside a function is the
+	 * same assignment.
 	 */
-	private static void scanAssigns(LispVal form, String name, int[] out) {
+	private static void scanAssigns(LispVal form, Map<String, int[]> counts) {
 		if (!(form instanceof LispCons cons)) {
 			return;
 		}
@@ -127,7 +139,8 @@ final class JvmRawGlobals {
 				List<LispVal> parts = cons.toList();
 				if (LispNames.SETQ.equals(head.name()) || LispNames.SETF.equals(head.name())) {
 					for (int i = 1; i + 1 < parts.size(); i += 2) {
-						if (parts.get(i) instanceof LispSymbol target && name.equals(target.name())) {
+						if (parts.get(i) instanceof LispSymbol target
+								&& counts.get(target.name()) instanceof int[] out) {
 							out[1]++;
 							if (integerShaped(parts.get(i + 1))) {
 								out[0]++;
@@ -137,14 +150,15 @@ final class JvmRawGlobals {
 				}
 				else if ((LispNames.DEFVAR.equals(head.name()) || LispNames.DEFPARAMETER.equals(head.name())
 						|| LispNames.DEFCONSTANT.equals(head.name())) && parts.size() > 2
-						&& parts.get(1) instanceof LispSymbol target && name.equals(target.name())) {
+						&& parts.get(1) instanceof LispSymbol target
+						&& counts.get(target.name()) instanceof int[] out) {
 					out[1]++;
 				}
 			}
 		}
 		LispVal cur = cons;
 		while (cur instanceof LispCons cell) {
-			scanAssigns(cell.car(), name, out);
+			scanAssigns(cell.car(), counts);
 			cur = cell.cdr();
 		}
 	}
