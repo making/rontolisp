@@ -2130,19 +2130,23 @@ final class JavaIntrinsics {
 		natives.put("java.time.TzRegion.placed0(java.time.zone.ZoneRules,long,long[])",
 				library(ZONE_CHANGES, "placed"));
 		// the resources a program reads: found while it is lowered
-		natives.put("java.lang.Class.getResourceAsStream(String)", (lowering, call) -> lowering.classResource(call));
+		natives.put("java.lang.Class.getResourceAsStream(String)",
+				(lowering, call) -> lowering.classResource(call, false));
+		natives.put("java.lang.Class.getResource(String)", (lowering, call) -> lowering.classResource(call, true));
 		natives.put("java.lang.Class.getClassLoader()", (lowering, call) -> lowering.classLoader(call));
-		natives.put("java.lang.ClassLoader.getResourceAsStream(String)",
-				(lowering, call) -> lowering.loaderResource(call));
-		natives.put("java.lang.ClassLoader.getSystemResourceAsStream(String)",
-				(lowering, call) -> lowering.loaderResource(call));
+		for (String loader : List.of("java.lang.ClassLoader.get", "java.lang.ClassLoader.getSystem")) {
+			natives.put(loader + "ResourceAsStream(String)", (lowering, call) -> lowering.loaderResource(call, 0));
+			natives.put(loader + "Resource(String)", (lowering, call) -> lowering.loaderResource(call, 1));
+			natives.put(loader + "Resources(String)", (lowering, call) -> lowering.loaderResource(call, 2));
+		}
 		natives.put("rontolisp.internal.ResourceTable.table0()", (lowering, call) -> lowering.resourceTable());
+		natives.put("rontolisp.internal.ResourceTable.located0(int,String,String,String)",
+				library("java.net.URL", "located"));
 		JavaEmitter bundle = (lowering, call) -> lowering.bundle(call);
 		natives.put("java.util.ResourceBundle.getBundle(String)", bundle);
 		natives.put("java.util.ResourceBundle.getBundle(String,java.util.Locale)", bundle);
 		natives.put("java.util.ResourceBundle.getBundle(String,java.util.Locale,ClassLoader)", bundle);
-		natives.put("java.util.ResourceBundle.searchesTree(ClassLoader)",
-				library("java.lang.ClassLoader", "searchesTree"));
+		natives.put("java.util.ResourceBundle.reach(ClassLoader)", library("java.lang.ClassLoader", "reach"));
 		natives.put("java.util.ResourceBundle.classBundle(String,boolean)",
 				(lowering, call) -> lowering.classBundle(call));
 		natives.put("java.util.ServiceLoader.load(Class)", (lowering, call) -> lowering.services(call, 0));

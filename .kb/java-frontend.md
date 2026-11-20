@@ -58,8 +58,10 @@ dependencies from their sources jars, a session reading the source path: k32 (20
 a library's class in the file of another, the playground's uploads as a program's source
 tree, a sources jar's resources measured: k44 (2026-11-20); the resources a program and its
 libraries read: k53 (2026-11-20; "Resources" below); a resource name computed where the program runs,
-`Properties`, `ResourceBundle` and `ServiceLoader`: k58 (2026-11-20; "Resources" below;
-`.todo/k69` is what it left); `LinkedHashMap`, `LinkedHashSet`, `LinkedList`: k27 (2026-11-19);
+`Properties`, `ResourceBundle` and `ServiceLoader`: k58 (2026-11-20; "Resources" below);
+`java.net.URL`, a resource's URL, the loaders above the program's, `ServiceLoader` of a computed
+class, a member class as a bundle: k69 (2026-11-20; "Resources" below; `.todo/k75` is what it
+left); `LinkedHashMap`, `LinkedHashSet`, `LinkedList`: k27 (2026-11-19);
 `java.text.MessageFormat`: k28 (2026-11-19); `java.text.Normalizer` over the normalization
 forms the front ends share: k29 (2026-11-19); a `Class` as a value, a type variable in
 scope kept apart from the one a call finds, `Name.this` as the instance of `Name`
@@ -448,7 +450,7 @@ is refused by name where it is reached, never where a class is read.** Asked for
   `library:` is zipped to a sources jar for the four legs and compiled by javac for the
   JDK leg, `provided:` is what javac alone reads).
 
-## Resources (2026-11-20, k53; a computed name, bundles, services: k58)
+## Resources (2026-11-20, k53; a computed name, bundles, services: k58; URLs, a computed service: k69)
 
 **Invariant: a resource is found while the program is lowered, by the loader a source
 launcher would give the class, and its octets travel in the output: a constant name's one
@@ -488,9 +490,10 @@ first measurement).
   `Class.located` (the binary name at run time), anything else `nil` -- so a library's
   `getClass().getResourceAsStream("note.txt")` reads the SUBCLASS's package, as a JDK
   does. A loader's `getResourceAsStream` is `(if (ClassLoader.searchesTree l) tree
-  roots)` where the tree has another answer, `getSystemResourceAsStream` the roots'. A
-  computed name (k58) takes the same roads with `ResourceTable.beside(tree, directory,
-  name)` / `find(tree, name)` as the answer, the receiver then the name read once
+  (and (ClassLoader.searchesRoots l) roots))` where the tree has another answer (k69: the
+  platform's finds none), `getSystemResourceAsStream` the roots'. A computed name (k58)
+  takes the same roads with `ResourceTable.beside(reach, directory, name)` /
+  `find(reach, name)` as the answer, the receiver then the name read once
   (`classResource`'s `let*`), a `null` name the NPE every class gives.
 - **The octets** travel as a text of one character an octet (`Resources.stream`, a new
   `ByteArrayInputStream` every read). Not their UTF-8 text: one road for every file,
@@ -538,7 +541,7 @@ first measurement).
     (`unsupported`: `a resource named where the program runs while the source tree holds
     more than 10000 files to carry`) -- a tree whose top is a home directory. The
     playground's uploads list as no directory (its `SourceLoader` has no
-    `listDirectory`), so a computed name finds none of them (`.todo/k69`).
+    `listDirectory`), so a computed name finds none of them (`.todo/k75`).
   - **The table** (`ResourceTable.table0()`, a native answered by
     `JavaClasses.carriedTable()`): one text, the tree first then the roots in order, each
     place a letter (`T`, `D`, `J`), its count and `;`, each file its name's length, `;`,
@@ -597,15 +600,90 @@ first measurement).
   true); a stream fails at its advance for the first three and in `get` for the rest; a
   `get` makes a new instance each time; the iterator's instances and the stream's
   providers are cached apart, each going on from where its lookup stopped;
-  `load(S.class, null)` is the system's, `loadInstalled` finds none. Any other `Class`
-  is refused by name (`ServiceLoader.load of a service named by no class literal`).
+  `load(S.class, null)` is the system's, `loadInstalled` finds none. The maker and the
+  type are raw lambdas `ServiceLoader` holds as `Supplier`s, so `provider` makes `Supplier`
+  a lambda target: k58 left that to the program, and one whose only `Supplier` was a
+  provider's failed in `get` with `get() has no implementation for its receiver` (k69;
+  pinned by `a-program-of-several-files-finds-its-classes-by-package`).
+  - **A service named by no class literal (k69)**: a `Class<?>`, a `Class<T>` in a
+    generic helper (31 of k58's 110 scanned calls pass a parameter) is told at run time:
+    `byService` is a `cond` over `Class.located` among the services the `META-INF/services/`
+    files of the loader's places name (`JavaClasses.serviceNames`) whose class the program
+    has (a `Class` object the program holds is of a class it has), each arm the chain of
+    the exact case; any other class a loader of none. An interface is under `Object`
+    (`isSubclassOf` answers false for it, which the bound check must not ask).
+  - The platform loader finds no provider: `load(S, platform)` is a loader of none
+    (probed).
 - **The JDK leg's default locale is `en_US`** (k58): `JavaSpecE2eTest.runOnJdk` passes
   `-Duser.language=en -Duser.country=US`, the subset's `Locale.getDefault()`, so a line
   that reaches the default locale (a bundle's fallback) is not the host's.
-- **Left** (`.todo/k69`): `getResource` / `getResources` (no `java.net.URL`),
-  `ClassLoader.getParent`, `ServiceLoader` of a computed class, a member class as a
-  bundle, the playground's uploads for a computed name, `ResourceBundle.Control`,
-  `Properties`' XML.
+- **URLs (k69)**: `getResource` of a class or a loader, `getResources`,
+  `getSystemResource(s)`. Measured against JDK 25.0.5's launcher
+  (`.todo/artefacts/k69-java-resources-urls-a-computed-service-and-what-k58-left/`):
+  - **What a URL names**: the file where it was found -- the tree's
+    `file:/<tree>/<name as written>` (the launcher's in-memory loader: `Path.toUri`), a
+    directory root's `file:/<dir>/<name resolved>`, a jar's `jar:file:/<jar>!/<entry>`.
+    The tree's and a directory's have the authority `""` (`file:///..` read, printed
+    `file:/..`), a jar's `null`; the host `""`, the port -1. The escapes differ by place
+    (every ASCII character probed in each): the tree escapes space `" # % < > ? [ \ ] ^ `` ` ``
+    `{ | }` and a character past ASCII by its UTF-8 in capitals; a class path root `;` and
+    `=` too, in small letters, and a character past U+FFFF as its two surrogates' three
+    octets each (`😀` is `%ed%a0%bd%ed%b8%80`). A name holding `:` is found by no class
+    path root (not carried over: the subset finds it).
+  - **Order**: `getResources` of the program's loader is the tree's file, then each root
+    holding the name in the source path's order; the system's the roots only. A
+    directory is no resource (k53's deviation): the launcher answers a URL of it
+    (`getResource("")` beside a class the class's directory, of the program's loader the
+    first class path directory), a listing through `openStream`.
+  - **The loaders above**: the program's parent is the system's, whose parent is the
+    platform's, whose parent is `null`; the platform's finds no resource, bundle or
+    provider. `ClassLoader` holds a reach (0 the platform's, 1 roots, 2 the tree and the
+    roots): a constant name is `(let ((l ..)) (if (searchesTree l) tree (and
+    (searchesRoots l) roots)))`, a computed one `ResourceTable.find(reach, name)`;
+    `ResourceBundle.called` takes the reach too. `new ClassLoader()` of a program is
+    under the system's (its resources the roots'), `new ClassLoader(parent)` reaches as
+    its parent.
+  - **The URL carries the octets**: `URL.located(kind, place, name, octets)` (the
+    lowering's form for a constant, `ResourceTable.located0` for a computed name) makes
+    one with its fields set, no text read; `openStream` streams the octets. Any other URL
+    reads nothing: `FileNotFoundException` (`deviations.md`), a URL made again from a
+    resource's text included -- the alternative, a table of URLs to octets, would carry
+    every constant read twice for a round trip a program rarely makes (`Path.of(uri)`, the
+    usual one, has no `java.nio.file` here).
+  - **The table** names each place's path (letter, count, `;`, the path's length, `;`,
+    the path) only once a URL is asked of a computed name (`carryPlaces`): a program
+    reading streams carries an empty one. `ResourceTable.find` keeps its own walk; the
+    URLs' `search` (which hands back where the place and the octets are) is a second one,
+    so a program reading streams does not carry it: written as one walk, the program
+    computing one name grew from 47,499 to 50,600 B of wasm.
+  - **`java.net.URL`** is written from the API documentation and the answers to 98 probe
+    lines (corpus `a-url-is-cut-into-its-parts-as-a-jdk-cuts-it`): the protocols a JDK
+    25 has a handler for (`file ftp http https jar jmod jrt mailto`), the spaces and a
+    `url:` ahead of a text dropped, the port's refusals with their index, the host's
+    characters (controls, space, `" < > \ ] ^ `` ` `` { | }` and DEL refused), two `@`
+    leaving no user and no host, a jar's `!/` and its inner URL, an empty authority
+    printed as none. `equals` / `sameFile` compare the protocol, the host's text ignoring
+    case, the port or the default one, the file and (equals) the fragment, not the user;
+    `hashCode` is a number of our own, equal for equal URLs. `URI.toURL` refuses a
+    relative URI (`URI is not absolute`) and reads the text. The checks are ASCII: a
+    first draft took `Character.isLetter` and `toLowerCase` and pulled the Unicode
+    tables, 56 KB of wasm for a program asking one resource's URL.
+  - **Measured** (wasm, 2026-11-20, a tree under the scratch directory): a constant
+    `getResourceAsStream` 41,682 B before and after; a computed one 47,499 -> 47,759; a
+    loader's constant read 43,616 -> 43,902 (the reach check), computed 49,071 -> 49,724;
+    a constant `getResource(..).getPath()` 27,191; a computed `getResource(..).openStream()`
+    80,358, and with a `FileNotFoundException` the program throws anyway 80,478 against
+    71,711 for the same stream read.
+- **A member class as a bundle (k69)**: a base name with a `$` (`app.Outer$Texts`) finds
+  the classes nested in `Outer` (`bundleClassNames` reads `Outer.java` of the base's
+  package and walks its members) named as the base or as it and `_`; a JDK finds a
+  public static one with a public constructor of no parameters, skipping a non-public or
+  an inner one (probed; `app.Outer.Texts` with dots finds no member). The files are
+  `Outer$Texts_en_GB.properties`, which the base's path already selects.
+- **Left** (`.todo/k75`): the playground's uploads for a computed name,
+  `ResourceBundle.Control` and `getBundle(.., Module)`, `Properties`' XML, a bundle
+  class only a computed base name finds, the candidate locales of a script and a
+  variant.
 - **Beside it** (k53): a qualified name of a JDK package naming no class the subset has,
   read as a value (`java.util.ResourceBundle.getBundle("m")`), is `the class
   java.util.ResourceBundle` and no longer `cannot find symbol: variable java`
@@ -614,9 +692,13 @@ first measurement).
   (`resources()`: the JDK leg's library classes carry the `library:` entries that are no
   `.java` beside them; k58's `computed()`, `bundles()` and `services()` with the tree's and
   the library's `.properties`, bundle classes and services files),
-  `a-deque-an-optional-the-utilities-and-the-older-classes` (`properties()`),
+  `a-deque-an-optional-the-utilities-and-the-older-classes` (`properties()`), k69's
+  `urls()`, the providers of a `Class<?>` and a member class's bundles in the first,
+  `a-url-is-cut-into-its-parts-as-a-jdk-cuts-it`,
+  `a-program-of-several-files-finds-its-classes-by-package` (a provider the one
+  `Supplier` of a program),
   `JavaLoweringTest#aConstructTheSubsetDoesNotHaveIsRefusedByNameAtItsPosition`
-  (a service named by no class literal, the qualified JDK classes),
+  (the qualified JDK classes),
   `JavaLoweringTest#aProgramOfSeveralFilesIsReadFromItsSourceTree` (a tree of more files
   than a program carries),
   `PlaygroundReplTest#theJavaPickKeepsItsDeclarationsAcrossBuffersAndRunsAProgram` (an
@@ -3658,9 +3740,38 @@ class of a package of our own was needed (`deviations.md`, "The HTTP server").
   the walk 31 / 16.5 s of wall time before and after, its lines' strings, and on the
   interpreter 6.9 -> 6.4 min (the masked field one call); 50,000,000 steps of the sieve loop
   9.0 s before and after; 200 walks of `Sieve`'s tree 4.2 -> 4.0 / 1.8 s; 30,000,000 `int`
-  and 10,000,000 `long` steps 0.164 -> 0.110 / 0.50 s. What is left of the reader is its array accesses: a
-  `long[]` read is the generic dispatch, the arrays of a program being undeclared (a null
-  array raises `NullPointerException` where it is read).
+  and 10,000,000 `long` steps 0.164 -> 0.110 / 0.50 s.
+- **An array the types prove is declared of its vector or nil** (2026-11-20, k64): a
+  parameter, a local, a loop and a lambda's variable of an array type is declared `(or null
+  (simple-array E (*)))` (`JavaForms.arrayType`, `declaredType`; E the element type a read
+  answers: `(unsigned-byte 32)` an `int[]` as its vector holds it, `(signed-byte 64)` a
+  `long[]`, `bit` a `boolean[]`, `t` an array of references), a static field's read is
+  asserted with `the` of the same, and an element access through any other form -- an instance
+  field, a call, a row of an array of arrays -- too (`knownArray`); `.length` and the enhanced
+  `for` take `(the (simple-array E (*)) (or a (%java-npe)))` (`vector`), no nil. A null array is
+  read as before: the access evaluates its index (and a store its value) and the backends'
+  check raises what `%java-exception-of` makes `NullPointerException` (wasm keeps that order:
+  `.kb/declarations-type-checks.md`, "Declaration-driven array emission"). The interpreter
+  and the JVM read no array declaration; the wasm kinds and a general array's integer elements
+  do (`.kb/wasm-int-fusion.md`, "Ranges, and sites with nothing to bail on"). A Common Lisp vector of
+  another representation handed to a parameter is a false declaration (`doc/*/java/index.md`).
+- **Measured** (k64, base `303deba92`; bytes of wasm, CPU seconds best of 2-4 on a loaded
+  64-core box; the programs and the script in
+  `.todo/artefacts/k64-java-wasm-an-array-the-types-prove-takes-the-generic-dispatch/`): the zone reader 13,217 -> 12,765 (`region` 7,012 -> 6,975, `find` 3,046 ->
+  2,779, `rule` 2,355 -> 2,208), its instance methods `placed` 5,166 -> 2,793 and `ruled` 4,829
+  -> 3,028; `ZonedDateTime.of(.., ZoneId.of("Europe/Paris")).plusHours(1)` 173,105 -> 166,183;
+  `Sieve` 21,305 -> 19,699; `SieveLoop` 18,402 -> 16,797, its time 8.2-9.0 -> 7.6-8.3 s (a
+  sieve of 50,000,000 bound by memory); YAVI `Booking.java` 1,128,428 -> 1,125,245,
+  `Member.java` 648,210 -> 646,545; 2,000,000 offsets of an instant and a local date-time in
+  Europe/Paris 4.83 -> 2.59 s; a `long[1000]` summed 10^5 times 93.8 -> 1.44 s
+  (`.kb/wasm-int-fusion.md`). The JVM (that offsets program's jar 65,079 -> 65,003 B, both
+  times) and the interpreter are unchanged. **The premise was the dispatch's bytes, and it held only where nothing had pinned
+  the array**: the type-test fold had already cut each undeclared site of the reader to the
+  general arm, `region`'s arrays were general by their `make-array` inits, and a general
+  array's `length` at the speed levels is a 57 B arm where the call is 3 (nine in `region`).
+  What is left of the reader: five `make-array`s of a computed size (some 150 B each: the dims
+  of any rank, `_vec_sync`), three generic divisions of declared integers and the checks of
+  what the inline arms refuse.
 - **`byte` and `short`** are integers an operator promotes to `int` and an assignment of a
   constant that fits, a cast or a compound assignment narrows (`JavaForms.signed`).
   **`float` is the double of its value** -- every binary32 is a binary64 -- and each operation's
@@ -3848,9 +3959,15 @@ virtual call can run --, classes used):
   not known to be initialized (`initialized`: the class itself, a subclass, a class declared
   inside one of those and not static). The class the program starts at is initialized by the
   entry form and never tested.
-- Constant variables are set first; a field holds its type's default before its initializer
-  only when something can read it there (no initializer, a lazy class, a read through a method
-  the initialization calls or by a qualified name ahead of the field).
+- Constant variables are set first. Every static field is `(defvar |C.f| <default>)`, its type's
+  default (JLS 12.4: before its initializer, and for a class a read finds not yet initialized);
+  so is each `|C.<clinit>%done|` flag (nil), class object and interned string. A `defvar`
+  without a value is a special without one, every read of it a test of the UNBOUND marker
+  and a call to the `unbound-variable` report ([dynamic-special-variables.md](dynamic-special-variables.md),
+  "A read of a special without a value"): a static is never unbound. Measured 2026-11-21 (k67,
+  wasm P1): the `Europe/Paris` program (`ZonedDateTime.of(..).plusHours(1)`) 173,105 -> 170,858 B
+  (-2,247), `examples/java/shop` 319,781 -> 318,309 B (-1,472; the fields -864, the `%done`
+  flags -608). A session's buffer still sets the defaults of a class it declares again.
 - The decision is made at the end of a pass and the next pass is lowered with it.
 - **Where it runs** (k63): what cannot throw -- the class objects, the constant fields, the
   defaults a field holds ahead of its initializer, the lazy classes' flags -- is set by

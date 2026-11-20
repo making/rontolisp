@@ -29,8 +29,8 @@ public abstract class ResourceBundle {
     public ResourceBundle() {
     }
 
-    // the bundles made, by loader (T the program's, S the system's), base name and
-    // locale; NONE where no class or file is one
+    // the bundles made, by the loader's reach (2 the program's, 1 the system's, 0 the
+    // platform's), base name and locale; NONE where no class or file is one
     private static final HashMap<String, ResourceBundle> MADE = new HashMap<>();
 
     // a bundle no file holds
@@ -43,20 +43,20 @@ public abstract class ResourceBundle {
     public static native ResourceBundle getBundle(String baseName, Locale targetLocale, ClassLoader loader);
 
     // what the lowering makes of getBundle(String) and getBundle(String, Locale): the
-    // loader of the class calling it, the program's when tree
-    static ResourceBundle called(String baseName, Locale locale, boolean tree) {
+    // loader of the class calling it, by its reach (ClassLoader's)
+    static ResourceBundle called(String baseName, Locale locale, int reach) {
         if (baseName == null || locale == null) {
             throw new NullPointerException();
         }
         synchronized (MADE) {
             List<Locale> candidates = candidates(locale);
-            ResourceBundle found = chain(baseName, candidates, tree);
+            ResourceBundle found = chain(baseName, candidates, reach);
             if (found != null && (!found.locale.getLanguage().isEmpty() || candidates.size() == 1)) {
                 return found;
             }
             Locale fallback = Locale.getDefault();
             if (!fallback.toString().equals(locale.toString())) {
-                ResourceBundle other = chain(baseName, candidates(fallback), tree);
+                ResourceBundle other = chain(baseName, candidates(fallback), reach);
                 if (other != null && (found == null || !other.locale.getLanguage().isEmpty())) {
                     return other;
                 }
@@ -75,10 +75,10 @@ public abstract class ResourceBundle {
         if (loader == null) {
             throw new NullPointerException();
         }
-        return called(baseName, locale, searchesTree(loader));
+        return called(baseName, locale, reach(loader));
     }
 
-    private static native boolean searchesTree(ClassLoader loader);
+    private static native int reach(ClassLoader loader);
 
     // the locale's language and country, its language, then the root: of the locales
     // Locale has, a language alone is ENGLISH
@@ -95,11 +95,11 @@ public abstract class ResourceBundle {
     }
 
     // the first candidate's bundle there is, its parent the next one's, and so on
-    private static ResourceBundle chain(String baseName, List<Locale> candidates, boolean tree) {
+    private static ResourceBundle chain(String baseName, List<Locale> candidates, int reach) {
         ResourceBundle first = null;
         ResourceBundle last = null;
         for (Locale candidate : candidates) {
-            ResourceBundle bundle = made(baseName, candidate, tree);
+            ResourceBundle bundle = made(baseName, candidate, reach);
             if (bundle == null) {
                 continue;
             }
@@ -114,14 +114,14 @@ public abstract class ResourceBundle {
         return first;
     }
 
-    private static ResourceBundle made(String baseName, Locale locale, boolean tree) {
+    private static ResourceBundle made(String baseName, Locale locale, int reach) {
         String bundleName = locale.toString().isEmpty() ? baseName : baseName + "_" + locale;
-        String key = (tree ? "T" : "S") + baseName + "\n" + locale;
+        String key = reach + baseName + "\n" + locale;
         ResourceBundle bundle = MADE.get(key);
         if (bundle == null) {
-            bundle = classBundle(bundleName, tree);
+            bundle = reach == 0 ? null : classBundle(bundleName, reach == 2);
             InputStream in = bundle != null ? null
-                    : ResourceTable.find(tree, bundleName.replace('.', '/') + ".properties");
+                    : ResourceTable.find(reach, bundleName.replace('.', '/') + ".properties");
             if (in != null) {
                 try (in) {
                     bundle = new PropertyResourceBundle(in);
@@ -154,9 +154,9 @@ public abstract class ResourceBundle {
         if (loader == null) {
             throw new NullPointerException();
         }
-        boolean tree = searchesTree(loader);
+        int reach = reach(loader);
         synchronized (MADE) {
-            MADE.keySet().removeIf(key -> key.charAt(0) == (tree ? 'T' : 'S'));
+            MADE.keySet().removeIf(key -> key.charAt(0) == '0' + reach);
         }
     }
 

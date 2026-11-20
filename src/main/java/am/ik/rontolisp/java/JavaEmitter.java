@@ -200,16 +200,19 @@ interface JavaEmitter {
 		boolean reaches(String member);
 
 		/**
-		 * What {@code getResourceAsStream} of a class object answers: the stream of the
-		 * resource found beside the class it stands for at run time, or {@code null}.
+		 * What {@code getResourceAsStream} or {@code getResource} of a class object
+		 * answers: the stream or the URL of the resource found beside the class it stands
+		 * for at run time, or {@code null}.
+		 * @param url whether the URL is asked for
 		 */
-		LispVal classResource(Invocation call);
+		LispVal classResource(Invocation call, boolean url);
 
 		/**
-		 * What {@code getResourceAsStream} of the class loader, or
-		 * {@code getSystemResourceAsStream}, answers.
+		 * What {@code getResourceAsStream}, {@code getResource} or {@code getResources}
+		 * of a class loader, or the system's {@code getSystemResource..}, answers.
+		 * @param kind 0 the stream, 1 the URL, 2 every place's URL
 		 */
-		LispVal loaderResource(Invocation call);
+		LispVal loaderResource(Invocation call, int kind);
 
 		/**
 		 * What {@code getClassLoader} of a class object answers: the loader of the class

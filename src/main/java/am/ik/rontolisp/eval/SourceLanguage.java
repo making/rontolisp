@@ -593,6 +593,18 @@ public enum SourceLanguage {
 			}
 
 			@Override
+			public @Nullable String treeTop(@Nullable String from, String root) {
+				String top = from == null ? sourceTree
+						: SourceLoader.resolve(SourceLoader.parentDir(from), root.isEmpty() ? "." : root);
+				return top == null ? null : absolute(top);
+			}
+
+			@Override
+			public String libraryTop(int root) {
+				return absolute(sourcePath.get(root));
+			}
+
+			@Override
 			public String absolute(String path) {
 				try {
 					return java.nio.file.Path.of(path).toAbsolutePath().normalize().toString();

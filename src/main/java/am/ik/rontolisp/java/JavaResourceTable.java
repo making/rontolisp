@@ -24,9 +24,10 @@ import org.jspecify.annotations.Nullable;
  * <p>
  * The table is a text the run time reads once ({@code rontolisp.internal.ResourceTable}):
  * for each place a letter ({@code T} the tree, {@code D} a directory of the source path,
- * {@code J} a jar), its count of files and a {@code ;}, then for each file the length of
- * its name, a {@code ;}, the name, the count of its octets, a {@code ;} and the octets,
- * one character an octet. The tree comes first, then the roots in their order.
+ * {@code J} a jar), its count of files, a {@code ;}, the length of its path, a {@code ;}
+ * and the path (where it is, for a resource's URL), then for each file the length of its
+ * name, a {@code ;}, the name, the count of its octets, a {@code ;} and the octets, one
+ * character an octet. The tree comes first, then the roots in their order.
  */
 final class JavaResourceTable {
 
@@ -50,8 +51,11 @@ final class JavaResourceTable {
 
 	private int visits;
 
-	/** A place the files are found in and the files found there, by name. */
-	private record Place(char kind, Map<String, byte[]> files) {
+	/**
+	 * A place the files are found in, where it is (its absolute path where the program is
+	 * compiled, for a resource's URL), and the files found there, by name.
+	 */
+	private record Place(char kind, String path, Map<String, byte[]> files) {
 	}
 
 	/**
@@ -71,6 +75,7 @@ final class JavaResourceTable {
 	 * Selects files of a place below one of its directories.
 	 * @param index the place: -1 the tree, a root's index in the source path
 	 * @param kind {@code T}, {@code D} or {@code J}
+	 * @param path where the place is, its absolute path
 	 * @param listing the entries of a directory of the place (the top the empty string,
 	 * any other ending in {@code /}), a directory's ending in {@code /}; {@code null} for
 	 * none
@@ -80,10 +85,10 @@ final class JavaResourceTable {
 	 * @param wanted which file names are selected
 	 * @param named what the place is called in a refusal
 	 */
-	void select(int index, char kind, Function<String, @Nullable List<String>> listing,
+	void select(int index, char kind, String path, Function<String, @Nullable List<String>> listing,
 			Function<String, byte @Nullable []> reading, String directory, boolean deep, Predicate<String> wanted,
 			String named) throws Bounded {
-		Place place = this.places.computeIfAbsent(index, key -> new Place(kind, new TreeMap<>()));
+		Place place = this.places.computeIfAbsent(index, key -> new Place(kind, path, new TreeMap<>()));
 		walk(place, directory, listing, reading, deep, wanted, named);
 	}
 
@@ -133,11 +138,17 @@ final class JavaResourceTable {
 		return !name.endsWith(".java") && !name.endsWith(".class");
 	}
 
-	/** The table as the run time reads it. */
-	String text() {
+	/**
+	 * The table as the run time reads it.
+	 * @param paths whether each place's path is written, for a resource's URL: an empty
+	 * one otherwise
+	 */
+	String text(boolean paths) {
 		StringBuilder text = new StringBuilder();
 		for (Place place : this.places.values()) {
 			text.append(place.kind()).append(place.files().size()).append(';');
+			String path = paths ? place.path() : "";
+			text.append(path.length()).append(';').append(path);
 			place.files().forEach((name, read) -> {
 				text.append(name.length()).append(';').append(name).append(read.length).append(';');
 				for (byte octet : read) {

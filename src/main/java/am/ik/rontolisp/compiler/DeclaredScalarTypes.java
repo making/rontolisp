@@ -86,7 +86,7 @@ public final class DeclaredScalarTypes {
 	 * The declared float names of a FUNCTION body: the body-head declarations plus the
 	 * ones sitting behind the sole trailing {@code %fn-block}/{@code (block name ...)}
 	 * wrapper {@code LambdaLists} and the flet lowering produce -- the same walk the wasm
-	 * backend's {@code WasmArrayCompiler.functionBodyDeclaredKinds} does for the array
+	 * backend's {@code WasmArrayCompiler.functionBodyDeclaredPins} does for the array
 	 * kinds. The caller removes special variable names (it owns the scope).
 	 * @param bodyExprs the function body forms as lowered
 	 * @param registry the registry holding {@code deftype} expansions, or null

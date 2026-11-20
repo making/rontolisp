@@ -1328,11 +1328,12 @@ final class JavaLowering implements JavaEmitter.Context {
 			if (!field.isStatic) {
 				continue;
 			}
-			// a session's variable holds its type's default from its declaration on, also
-			// when the step giving it its value fails
-			this.variables.add(this.session != null && declaration == this.declared.get(0)
-					? list(cl("defvar"), JavaNames.global(field), defaultValue(field.type))
-					: list(cl("defvar"), JavaNames.global(field)));
+			// a variable holds its type's default from its declaration on (JLS 12.4:
+			// before
+			// its initializer runs, and when the step giving it its value fails); one
+			// with no
+			// value would be a special without one, every read of it a test for unbound
+			this.variables.add(list(cl("defvar"), JavaNames.global(field), defaultValue(field.type)));
 			if (field.initializer != null && constantOf(field) == null) {
 				items.add(new Item(field.pos, field, null));
 			}
@@ -1540,11 +1541,11 @@ final class JavaLowering implements JavaEmitter.Context {
 	}
 
 	/**
-	 * A body with the integral ones among its variables declared of their types
-	 * ({@link JavaForms#integerType}) ahead of its forms.
+	 * A body with the integral ones and the arrays among its variables declared of their
+	 * types ({@link JavaForms#declaredType}) ahead of its forms.
 	 */
 	private static List<LispVal> declaring(List<Local> locals, List<LispVal> forms) {
-		LispVal declaration = JavaForms.integerDeclaration(symbols(locals), locals.stream().map(Local::type).toList());
+		LispVal declaration = JavaForms.typeDeclaration(symbols(locals), locals.stream().map(Local::type).toList());
 		if (declaration == null) {
 			return forms;
 		}
@@ -1556,11 +1557,12 @@ final class JavaLowering implements JavaEmitter.Context {
 
 	/**
 	 * Locals bound in turn around a body: one {@code let} each where one of them is of an
-	 * integral type, which its own {@code let} declares; one {@code let*} where none is.
+	 * integral or an array type, which its own {@code let} declares; one {@code let*}
+	 * where none is.
 	 */
 	private static LispVal boundInTurn(List<Declared> locals, List<LispVal> body, String binder) {
-		boolean integral = locals.stream().anyMatch(declared -> JavaForms.integerType(declared.local().type()) != null);
-		if (!integral) {
+		boolean typed = locals.stream().anyMatch(declared -> JavaForms.declaredType(declared.local().type()) != null);
+		if (!typed) {
 			List<LispVal> bindings = new ArrayList<>();
 			locals.forEach(declared -> bindings.add(list(declared.local().symbol(), declared.value())));
 			return form(cl(bindings.size() == 1 ? binder : "let*"), prepend(list(bindings), body));
@@ -4557,9 +4559,10 @@ final class JavaLowering implements JavaEmitter.Context {
 				Typed object = assigning && this.early && select.target() instanceof This
 						? new Typed(THIS, this.currentClass.self()) : expression(select.target(), null);
 				if (object.type() instanceof ArrayType && select.name().equals("length")) {
-					return new Place(Primitive.INT, call("length", dereferenced(object.form())), value -> {
-						throw error(select.pos(), "cannot assign a value to final variable length");
-					}, bindings);
+					return new Place(Primitive.INT,
+							call("length", JavaForms.vector(object.type(), dereferenced(object.form()))), value -> {
+								throw error(select.pos(), "cannot assign a value to final variable length");
+							}, bindings);
 				}
 				if (!(object.type() instanceof ClassType) && !(object.type() instanceof Variable)) {
 					throw error(select.pos(), object.type() + " cannot be dereferenced");
@@ -4606,7 +4609,7 @@ final class JavaLowering implements JavaEmitter.Context {
 					throw error(index.index().pos(),
 							"incompatible types: " + at.type() + " cannot be converted to int");
 				}
-				LispVal element = call("aref", stabilized(array.form(), stable, bindings),
+				LispVal element = call("aref", stabilized(JavaForms.knownArray(type, array.form()), stable, bindings),
 						stabilized(at.form(), stable, bindings));
 				return new Place(type.element(), elementRead(type.element(), element),
 						value -> call("setf", element, elementStored(type.element(), value)), bindings);
@@ -7360,21 +7363,25 @@ final class JavaLowering implements JavaEmitter.Context {
 	}
 
 	/**
-	 * What a class's {@code getResourceAsStream} of a name computed where the program
-	 * runs answers: the lookup of the files carried, beside the class; {@code null} for a
-	 * class whose loader finds none.
+	 * What a class's {@code getResourceAsStream} or {@code getResource} of a name
+	 * computed where the program runs answers: the lookup of the files carried, beside
+	 * the class; {@code null} for a class whose loader finds none.
 	 * @param name the name, which is not {@code null}
+	 * @param url whether the URL is asked for, not the stream
 	 */
-	private @Nullable Answer computedBeside(@Nullable JavaClass declaration, LispVal name, int pos) {
+	private @Nullable Answer computedBeside(@Nullable JavaClass declaration, LispVal name, boolean url, int pos) {
 		Boolean program = loader(declaration);
 		if (program == null) {
 			return null;
 		}
 		carries(program, pos);
+		if (url) {
+			this.classes.carryPlaces();
+		}
 		String packageName = this.classes.packageOf(Objects.requireNonNull(declaration));
 		String directory = packageName == null || packageName.isEmpty() ? "" : packageName.replace('.', '/') + "/";
-		return new Answer((program ? "program " : "system ") + directory,
-				library(RESOURCE_TABLE, "beside", List.of(program ? T : NIL, string(directory), name)));
+		return new Answer((program ? "program " : "system ") + directory, library(RESOURCE_TABLE,
+				url ? "besideUrl" : "beside", List.of(integer(program ? 2 : 1), string(directory), name)));
 	}
 
 	@Override
@@ -7398,12 +7405,14 @@ final class JavaLowering implements JavaEmitter.Context {
 	private static final int PROVIDER_INACCESSIBLE = 5;
 
 	/**
-	 * {@code ServiceLoader.load} of a class literal ({@code Class<S>} of an exact
-	 * {@code S}): the providers the service's files name are found while the program is
-	 * lowered, for the program's loader ({@code load(S.class)}: the thread's context
-	 * loader) or, for a loader given, for the program's and the system's, chosen where
-	 * the program runs. {@code loadInstalled} finds none: the platform's loader has no
-	 * class of the program's world.
+	 * {@code ServiceLoader.load}: the providers the service's files name are found while
+	 * the program is lowered, for the program's loader ({@code load(S)}: the thread's
+	 * context loader) or, for a loader given, for the program's and the system's, chosen
+	 * where the program runs; the platform's finds none. A {@code Class<S>} of an exact
+	 * {@code S} names its service; any other is told by its name at run time among the
+	 * services of the program's classes the files name (under the type's bound).
+	 * {@code loadInstalled} finds none: the platform's loader has no class of the
+	 * program's world.
 	 * @param kind 0 {@code load(Class)}, 1 {@code load(Class, ClassLoader)}, 2
 	 * {@code loadInstalled(Class)}
 	 */
@@ -7414,24 +7423,56 @@ final class JavaLowering implements JavaEmitter.Context {
 				? type.arguments().get(0) : null;
 		JavaClass named = argument == null || argument instanceof Wildcard || argument instanceof Variable ? null
 				: locatedClass(argument);
-		if (named == null) {
-			throw unsupported(call.pos(), "ServiceLoader." + (kind == 2 ? "loadInstalled" : "load")
-					+ " of a service named by no class literal");
-		}
 		LispSymbol held = temporary();
 		LispVal made = library(SERVICE_LOADER, "made", List.of(held));
 		if (kind == 2) {
 			return JavaForms.let(held, service.form(), List.of(made));
 		}
-		LispVal program = providers(made, named, true, call.pos());
+		JavaType upper = argument instanceof Wildcard wildcard ? wildcard.upper() : argument;
+		JavaClass bound = upper == null ? null : locatedClass(upper);
+		LispVal program = named != null ? providers(made, named, true, call.pos())
+				: byService(held, made, bound, true, call.pos());
 		if (kind == 0) {
 			return JavaForms.let(held, service.form(), List.of(program));
 		}
 		LispSymbol loader = temporary();
-		LispVal system = providers(made, named, false, call.pos());
+		LispVal system = named != null ? providers(made, named, false, call.pos())
+				: byService(held, made, bound, false, call.pos());
+		LispVal roots = call("if",
+				call("or", call("null", loader), library(CLASS_LOADER, "searchesRoots", List.of(loader))), system,
+				made);
 		return list(cl("let*"), list(list(held, service.form()), list(loader, call.argument(1))),
-				program.equals(system) ? program : call("if",
-						call("and", loader, library(CLASS_LOADER, "searchesTree", List.of(loader))), program, system));
+				program.equals(system) ? roots : call("if",
+						call("and", loader, library(CLASS_LOADER, "searchesTree", List.of(loader))), program, roots));
+	}
+
+	/**
+	 * The providers of a service told by its class's name at run time: a {@code cond}
+	 * over the services the files of a loader's resources name whose class the program
+	 * has (under a bound), each a loader made with its providers; a loader of none for
+	 * any other class.
+	 */
+	private LispVal byService(LispSymbol held, LispVal made, @Nullable JavaClass bound, boolean tree, int pos) {
+		Map<String, JavaClass> known = new HashMap<>();
+		for (JavaClass declaration : List.copyOf(this.classes.all())) {
+			known.putIfAbsent(declaration.binaryName, declaration);
+		}
+		LispSymbol name = temporary();
+		List<LispVal> arms = new ArrayList<>();
+		arms.add(cl("cond"));
+		for (String service : this.classes.serviceNames(tree)) {
+			JavaClass found = known.get(service);
+			// an interface is under Object too
+			if (found != null
+					&& (bound == null || bound.name.equals("java.lang.Object") || found.isSubclassOf(bound))) {
+				arms.add(list(call("equal", name, string(service)), providers(made, found, tree, pos)));
+			}
+		}
+		if (arms.size() == 1) {
+			return made;
+		}
+		arms.add(list(T, made));
+		return JavaForms.let(name, library(CLASS, "located", List.of(held)), List.of(list(arms)));
 	}
 
 	/** A loader made with each provider the service's files name for a loader. */
@@ -7453,6 +7494,14 @@ final class JavaLowering implements JavaEmitter.Context {
 	 * made, the function making one and the one answering its class object.
 	 */
 	private List<LispVal> provider(LispVal chain, String name, JavaClass found, JavaClass service, int pos) {
+		// the maker and the type are functions ServiceLoader holds as Suppliers
+		JavaClass supplier = this.classes.library("java.util.function.Supplier");
+		if (this.classes.lambdaTargets.add(supplier)) {
+			this.classes.changed();
+		}
+		if (this.session != null) {
+			tag(List.of(supplier));
+		}
 		if (!found.isSubclassOf(service)) {
 			return List.of(chain, string(name), integer(PROVIDER_NOT_SUBTYPE), NIL, NIL);
 		}
@@ -7577,7 +7626,7 @@ final class JavaLowering implements JavaEmitter.Context {
 		}
 		LispVal locale = given == 1 ? library("java.util.Locale", "getDefault", List.of()) : call.argument(1);
 		return given == 3 ? library(RESOURCE_BUNDLE, "given", List.of(base.form(), locale, call.argument(2)))
-				: library(RESOURCE_BUNDLE, "called", List.of(base.form(), locale, tree ? T : NIL));
+				: library(RESOURCE_BUNDLE, "called", List.of(base.form(), locale, integer(tree ? 2 : 1)));
 	}
 
 	/**
@@ -7617,18 +7666,18 @@ final class JavaLowering implements JavaEmitter.Context {
 	}
 
 	/**
-	 * What a class's {@code getResourceAsStream} answers: the stream of the resource its
-	 * loader finds, its key (which loader, which name) and the stream; {@code null} where
-	 * it finds none.
+	 * What a class's {@code getResourceAsStream} or {@code getResource} answers: the
+	 * stream or the URL of the resource its loader finds, its key (which loader, which
+	 * name) and the form; {@code null} where it finds none.
 	 */
-	private @Nullable Answer resourceBeside(@Nullable JavaClass declaration, String name) {
+	private @Nullable Answer resourceBeside(@Nullable JavaClass declaration, String name, boolean url) {
 		Boolean program = loader(declaration);
 		if (program == null) {
 			return null;
 		}
 		String resolved = resolvedName(Objects.requireNonNull(declaration), name);
-		LispVal stream = resourceStream(resolved, program);
-		return stream == NIL ? null : new Answer((program ? "program " : "system ") + resolved, stream);
+		LispVal found = url ? resourceUrl(resolved, program) : resourceStream(resolved, program);
+		return found == NIL ? null : new Answer((program ? "program " : "system ") + resolved, found);
 	}
 
 	/** What a class's {@code getClassLoader} answers, or {@code null} for none. */
@@ -7664,12 +7713,53 @@ final class JavaLowering implements JavaEmitter.Context {
 		if (octets == null) {
 			return NIL;
 		}
+		return library(RESOURCES, "stream", List.of(string(octets(octets))));
+	}
+
+	/** Octets as the library reads them: a text of one character an octet. */
+	private static String octets(byte[] octets) {
 		char[] text = new char[octets.length];
 		for (int i = 0; i < octets.length; i++) {
 			text[i] = (char) (octets[i] & 0xff);
 		}
-		return library(RESOURCES, "stream", List.of(string(new String(text))));
+		return new String(text);
 	}
+
+	/**
+	 * The URL of the resource a loader finds, where the program is compiled, or
+	 * {@code nil}.
+	 * @param program whether it is the program's loader, which looks in the program's
+	 * source tree first
+	 */
+	private LispVal resourceUrl(String name, boolean program) {
+		if (name.startsWith("/")) {
+			return NIL;
+		}
+		List<JavaClasses.Located> found = this.classes.located(name, program, true);
+		return found.isEmpty() ? NIL : url(found.get(0));
+	}
+
+	/** A new URL of a resource found, which holds its octets. */
+	private LispVal url(JavaClasses.Located found) {
+		return library(URL, "located", List.of(integer(found.kind()), string(found.place()), string(found.name()),
+				string(octets(found.octets()))));
+	}
+
+	/**
+	 * The URLs of every place a loader finds a resource in, as a list {@code URL.listed}
+	 * makes an enumeration of.
+	 */
+	private LispVal urls(String name, boolean program) {
+		LispVal list = library(URL, "none", List.of());
+		if (!name.startsWith("/")) {
+			for (JavaClasses.Located found : this.classes.located(name, program, false)) {
+				list = library(URL, "more", List.of(list, url(found)));
+			}
+		}
+		return list;
+	}
+
+	private static final String URL = "java.net.URL";
 
 	/**
 	 * A member of a class object answering by the class it stands for: {@code Class<X>}
@@ -7716,18 +7806,18 @@ final class JavaLowering implements JavaEmitter.Context {
 	}
 
 	@Override
-	public LispVal classResource(Invocation call) {
+	public LispVal classResource(Invocation call, boolean url) {
 		Typed receiver = Objects.requireNonNull(call.receiver());
 		Typed argument = call.arguments().get(0);
 		if (argument.constant() instanceof String name) {
-			return byClass(receiver, declaration -> resourceBeside(declaration, name));
+			return byClass(receiver, declaration -> resourceBeside(declaration, name, url));
 		}
 		// the class object, then the name, each read once
 		LispSymbol held = temporary();
 		LispSymbol name = temporary();
 		this.nonNull.add(held);
 		LispVal chosen = byClass(new Typed(held, receiver.type()),
-				declaration -> computedBeside(declaration, name, call.pos()));
+				declaration -> computedBeside(declaration, name, url, call.pos()));
 		return list(cl("let*"), list(list(held, receiver.form()), list(name, dereferenced(argument.form()))), chosen);
 	}
 
@@ -7737,28 +7827,43 @@ final class JavaLowering implements JavaEmitter.Context {
 	}
 
 	/**
-	 * {@code getResourceAsStream} of a class loader, told at run time by whether it is
-	 * the program's where that finds another resource than the system's; and
-	 * {@code getSystemResourceAsStream}: a name as it is.
+	 * {@code getResourceAsStream}, {@code getResource} or {@code getResources} of a class
+	 * loader, told at run time by how far it reaches -- the program's, the system's, the
+	 * platform's, which finds none --; and the system's {@code getSystemResource..}: a
+	 * name as it is.
+	 * @param kind 0 the stream, 1 the URL, 2 every place's URL
 	 */
 	@Override
-	public LispVal loaderResource(Invocation call) {
+	public LispVal loaderResource(Invocation call, int kind) {
 		Typed argument = call.arguments().get(0);
 		if (!(argument.constant() instanceof String name)) {
 			LispVal named = dereferenced(argument.form());
 			carries(call.receiver() != null, call.pos());
-			return library(RESOURCE_TABLE, "find",
-					List.of(call.receiver() == null ? NIL : library(CLASS_LOADER, "searchesTree", List.of(call.self())),
+			if (kind != 0) {
+				this.classes.carryPlaces();
+			}
+			return library(RESOURCE_TABLE, kind == 0 ? "find" : kind == 1 ? "findUrl" : "findAll",
+					List.of(call.receiver() == null ? integer(1) : library(CLASS_LOADER, "reach", List.of(call.self())),
 							named));
 		}
-		LispVal system = resourceStream(name, false);
+		LispVal system = kind == 0 ? resourceStream(name, false)
+				: kind == 1 ? resourceUrl(name, false) : urls(name, false);
+		LispVal tree = name.startsWith("/") || this.classes.treeResource(name) == null ? null
+				: kind == 0 ? resourceStream(name, true) : kind == 1 ? resourceUrl(name, true) : urls(name, true);
+		LispVal found;
 		if (call.receiver() == null) {
-			return system;
+			found = system;
 		}
-		LispVal tree = name.startsWith("/") ? null
-				: this.classes.treeResource(name) == null ? null : resourceStream(name, true);
-		LispVal searches = library(CLASS_LOADER, "searchesTree", List.of(call.self()));
-		return tree == null ? call("progn", searches, system) : call("if", searches, tree, system);
+		else {
+			LispSymbol loader = temporary();
+			LispVal roots = kind == 2
+					? call("if", library(CLASS_LOADER, "searchesRoots", List.of(loader)), system,
+							library(URL, "none", List.of()))
+					: call("and", library(CLASS_LOADER, "searchesRoots", List.of(loader)), system);
+			found = JavaForms.let(loader, call.self(), List.of(tree == null ? call("progn", loader, roots)
+					: call("if", library(CLASS_LOADER, "searchesTree", List.of(loader)), tree, roots)));
+		}
+		return kind == 2 ? library(URL, "listed", List.of(found)) : found;
 	}
 
 	/**
@@ -7766,20 +7871,21 @@ final class JavaLowering implements JavaEmitter.Context {
 	 * object of it is made. {@code null} for any other call.
 	 */
 	private @Nullable Typed literalResource(JavaSyntax.ClassLiteral literal, Call call) {
-		if (call.name().equals("getResourceAsStream") && call.arguments().size() == 1) {
+		boolean url = call.name().equals("getResource");
+		if ((url || call.name().equals("getResourceAsStream")) && call.arguments().size() == 1) {
 			Typed argument = expression(call.arguments().get(0), this.stringType);
 			if (!isSubtype(argument.type(), this.stringType)) {
 				throw error(call.arguments().get(0).pos(),
 						"incompatible types: " + argument.type() + " cannot be converted to String");
 			}
 			JavaClass located = locatedClass(literalType(literal));
-			ClassType stream = new ClassType(this.classes.library("java.io.InputStream"), List.of());
+			ClassType stream = new ClassType(this.classes.library(url ? URL : "java.io.InputStream"), List.of());
 			if (!(argument.constant() instanceof String name)) {
 				LispVal named = dereferenced(argument.form());
-				Answer found = computedBeside(located, named, call.pos());
+				Answer found = computedBeside(located, named, url, call.pos());
 				return new Typed(found == null ? call("progn", named, NIL) : found.form(), stream);
 			}
-			Answer found = resourceBeside(located, name);
+			Answer found = resourceBeside(located, name, url);
 			return new Typed(found == null ? NIL : found.form(), stream);
 		}
 		if (call.name().equals("getClassLoader") && call.arguments().isEmpty()) {
@@ -8007,7 +8113,7 @@ final class JavaLowering implements JavaEmitter.Context {
 			inits.add(call("if", variable, NIL, call("setq", variable, object)));
 		}
 		else {
-			forms.add(list(cl("defvar"), variable));
+			forms.add(list(cl("defvar"), variable, NIL));
 			inits.add(call("setq", variable, object));
 		}
 		return variable;
@@ -9458,7 +9564,7 @@ final class JavaLowering implements JavaEmitter.Context {
 		LispVal test;
 		if (through == null) {
 			round.add(call("setq", index, call("+", index, integer(1))));
-			bindings.add(list(items, dereferenced(iterable.form())));
+			bindings.add(list(items, JavaForms.vector(iterable.type(), dereferenced(iterable.form()))));
 			bindings.add(list(count, call("length", items)));
 			bindings.add(list(index, integer(0)));
 			test = call("<", index, count);
@@ -10283,7 +10389,7 @@ final class JavaLowering implements JavaEmitter.Context {
 		// can throw, and one form holding them all can be more than a method of a
 		// JVM class holds
 		for (Map.Entry<String, LispSymbol> constant : this.interned.entrySet()) {
-			this.variables.add(list(cl("defvar"), constant.getValue()));
+			this.variables.add(list(cl("defvar"), constant.getValue(), NIL));
 			this.internings.add(call("setq", constant.getValue(), runtimeCall("intern", string(constant.getKey()))));
 		}
 		for (JavaClass declaration : this.classes.all()) {
@@ -10309,9 +10415,10 @@ final class JavaLowering implements JavaEmitter.Context {
 					settings.add(call("setq", JavaNames.global(field),
 							constant instanceof String text ? constantString(text).form() : constant(constant).form()));
 				}
-				else if (fresh && (field.initializer == null || this.order.isLazy(declaration)
+				else if (fresh && this.session != null && (field.initializer == null || this.order.isLazy(declaration)
 						|| called.reads.contains(field))) {
-					// a field read ahead of its initializer holds its type's default
+					// a buffer declaring the class again starts it from its type's
+					// default
 					settings.add(call("setq", JavaNames.global(field), defaultValue(field.type)));
 				}
 			}
@@ -10326,8 +10433,8 @@ final class JavaLowering implements JavaEmitter.Context {
 				continue;
 			}
 			LispSymbol done = JavaNames.initialized(declaration);
-			this.variables.add(list(cl("defvar"), done));
-			if (isFresh(declaration)) {
+			this.variables.add(list(cl("defvar"), done, NIL));
+			if (this.session != null && isFresh(declaration)) {
 				settings.add(call("setq", done, NIL));
 			}
 			List<LispVal> body = new ArrayList<>();

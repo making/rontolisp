@@ -239,13 +239,13 @@ final class WasmFixnumVersioning {
 		// The copy for fixnums: each variable an exact unboxed local over it.
 		Map<String, Integer> savedLocals = ctx.locals;
 		Map<String, WasmIntFusionCompiler.RawLocal> savedRawLocals = ctx.rawLocals;
-		Map<String, am.ik.rontolisp.compiler.DeclaredArrayTypes.Kind> savedDeclaredArrays = ctx.declaredArrays;
+		Map<String, am.ik.rontolisp.compiler.DeclaredArrayTypes.Pin> savedDeclaredArrays = ctx.declaredArrays;
 		Set<String> savedArrayLocals = ctx.arrayLocals;
 		Map<String, WasmIntFusionCompiler.LocalIntLambda> savedLocalLambdas = ctx.localIntLambdas;
 		int savedNextI64Local = ctx.nextI64Local;
 		Map<String, Integer> locals = new HashMap<>(savedLocals);
 		Map<String, WasmIntFusionCompiler.RawLocal> rawLocals = new HashMap<>(savedRawLocals);
-		Map<String, am.ik.rontolisp.compiler.DeclaredArrayTypes.Kind> declaredArrays = new HashMap<>(
+		Map<String, am.ik.rontolisp.compiler.DeclaredArrayTypes.Pin> declaredArrays = new HashMap<>(
 				savedDeclaredArrays);
 		Set<String> arrayLocals = new HashSet<>(savedArrayLocals);
 		Map<String, WasmIntFusionCompiler.LocalIntLambda> localLambdas = new HashMap<>(savedLocalLambdas);

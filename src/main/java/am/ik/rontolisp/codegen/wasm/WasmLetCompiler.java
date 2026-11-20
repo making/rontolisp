@@ -424,8 +424,8 @@ final class WasmLetCompiler {
 		// general representation is a runtime fact. It routes replace/fill sites to the
 		// array-arm-only shared runtime (.kb/sequence-op-runtimes.md) and is registered,
 		// shadowed and restored exactly like the kinds.
-		Map<String, am.ik.rontolisp.compiler.DeclaredArrayTypes.Kind> savedDeclaredArrays = ctx.declaredArrays;
-		Map<String, am.ik.rontolisp.compiler.DeclaredArrayTypes.Kind> newDeclaredArrays = null;
+		Map<String, am.ik.rontolisp.compiler.DeclaredArrayTypes.Pin> savedDeclaredArrays = ctx.declaredArrays;
+		Map<String, am.ik.rontolisp.compiler.DeclaredArrayTypes.Pin> newDeclaredArrays = null;
 		Set<String> savedArrayLocals = ctx.arrayLocals;
 		Set<String> newArrayLocals = null;
 		// The integer ranges declared for the body, bound and free names alike, scoped as
@@ -470,11 +470,11 @@ final class WasmLetCompiler {
 			}
 		}
 		if (!ctx.topLevel && !async && ctx.asyncResume == null) {
-			Map<String, am.ik.rontolisp.compiler.DeclaredArrayTypes.Kind> declared = am.ik.rontolisp.compiler.DeclaredArrayTypes
-				.declaredKinds(bodyExprs, ctx.closRegistry);
+			Map<String, am.ik.rontolisp.compiler.DeclaredArrayTypes.Pin> declared = am.ik.rontolisp.compiler.DeclaredArrayTypes
+				.declared(bodyExprs, ctx.closRegistry);
 			Set<String> assignedInBody = null;
-			Map<String, am.ik.rontolisp.compiler.DeclaredArrayTypes.Kind> additions = new HashMap<>();
-			for (Map.Entry<String, am.ik.rontolisp.compiler.DeclaredArrayTypes.Kind> entry : declared.entrySet()) {
+			Map<String, am.ik.rontolisp.compiler.DeclaredArrayTypes.Pin> additions = new HashMap<>();
+			for (Map.Entry<String, am.ik.rontolisp.compiler.DeclaredArrayTypes.Pin> entry : declared.entrySet()) {
 				if (!letVarNames.contains(entry.getKey()) && !ctx.specialVars.contains(entry.getKey())) {
 					// A free declaration: applies to the outer binding within this body.
 					additions.put(entry.getKey(), entry.getValue());
@@ -487,23 +487,31 @@ final class WasmLetCompiler {
 					if (ctx.specialVars.contains(name)) {
 						continue;
 					}
-					am.ik.rontolisp.compiler.DeclaredArrayTypes.Kind kind = declared.get(name);
-					if (kind == null) {
-						kind = WasmArrayCompiler.initExprKind(pairList.get(1), ctx);
-						if (kind != null) {
+					am.ik.rontolisp.compiler.DeclaredArrayTypes.Pin pin = declared.get(name);
+					if (pin == null || pin.orNull()) {
+						// What the init proves holds while the body never reassigns the
+						// name: a representation, or that the array a declaration lets
+						// nil stand in for is one
+						am.ik.rontolisp.compiler.DeclaredArrayTypes.Pin init = WasmArrayCompiler
+							.initExprPin(pairList.get(1), ctx);
+						boolean made = pin != null && init == null
+								&& WasmArrayCompiler.makeArrayBuildsArrayValue(pairList.get(1), ctx);
+						if (init != null || made) {
 							if (assignedInBody == null) {
 								assignedInBody = new HashSet<>();
 								for (LispVal bodyForm : bodyExprs) {
 									collectAssignedNames(bodyForm, assignedInBody);
 								}
 							}
-							if (assignedInBody.contains(name)) {
-								kind = null;
+							if (!assignedInBody.contains(name)) {
+								pin = pin == null ? init
+										: made ? new am.ik.rontolisp.compiler.DeclaredArrayTypes.Pin(pin.kind(), false,
+												pin.elements()) : pin.and(init);
 							}
 						}
 					}
-					if (kind != null) {
-						additions.put(name, kind);
+					if (pin != null) {
+						additions.put(name, pin);
 					}
 					else {
 						additions.remove(name);

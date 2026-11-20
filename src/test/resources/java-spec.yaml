@@ -1703,6 +1703,28 @@ cases:
               return null;
           }
 
+          // an array a parameter holds is declared of its type or null, a long[]'s
+          // element read in arithmetic; the index and the value before the null
+          static int first(int[] a) {
+              return a[next()] + 1;
+          }
+
+          static long scaled(long[] a, int i) {
+              return a[i] * 3 + 1;
+          }
+
+          static int stored(int[] a, int i) {
+              a[i] = next();
+              return a.length;
+          }
+
+          static int counted;
+
+          static int next() {
+              counted++;
+              return 0;
+          }
+
           public static void main(String[] args) {
               RaisedPoint p = none();
               int[] xs = args.length > 5 ? new int[1] : null;
@@ -1746,6 +1768,11 @@ cases:
               attempt("format argument", () -> System.out.println(String.format("%s %s", "x")));
               attempt("divide", () -> System.out.println(7 / args.length));
               attempt("parse", () -> System.out.println(Integer.parseInt("7x")));
+              attempt("declared element", () -> System.out.println(first(xs)));
+              attempt("declared long element", () -> System.out.println(scaled(null, 0)));
+              attempt("declared long index", () -> System.out.println(scaled(new long[2], args.length + 5)));
+              attempt("declared store", () -> System.out.println(stored(xs, 0)));
+              System.out.println("indexes evaluated " + counted + " " + scaled(new long[] {1L << 60, 7}, 1));
               try {
                   System.out.println(xs[1]);
               } catch (IllegalStateException | NullPointerException e) {
@@ -1789,6 +1816,11 @@ cases:
       format argument: java.util.MissingFormatArgumentException: Format specifier '%s'
       divide: java.lang.ArithmeticException: / by zero
       parse: java.lang.NumberFormatException: For input string: "7x"
+      declared element: java.lang.NullPointerException true
+      declared long element: java.lang.NullPointerException true
+      declared long index: java.lang.ArrayIndexOutOfBoundsException: Index 5 out of bounds for length 2
+      declared store: java.lang.NullPointerException true
+      indexes evaluated 2 22
       multi-catch NullPointerException
   # try-with-resources is the statement the language specifies: the resources closed in
   # reverse, a null one skipped, an exception of close suppressed by the body's, a
@@ -11381,6 +11413,205 @@ cases:
       append range: java.lang.IndexOutOfBoundsException: Range [2, 5) out of bounds for length 3
       <am>nullulbxyqr<am>nullul<am>nullulo
       1 [97, -16, -97, -104, -128, 98] [-23, 63]
+  # java.net.URL: a protocol of the ones a JDK knows, an authority, a path, a query and a
+  # fragment, cut as a JDK's answers show -- the spaces around a text and a url: ahead of
+  # it dropped, a jar's !/, a port's sign and its refusals with their index, a host's
+  # characters, the authority's @, an empty authority written as none --; the two
+  # constructors of parts; equals and sameFile (the host's case and the default port
+  # told apart from nothing else, the user and the fragment), toURI and URI.toURL.
+  - name: a-url-is-cut-into-its-parts-as-a-jdk-cuts-it
+    main: Urls
+    source: |
+      class Urls {
+          static String shown(java.net.URL u) {
+              return u + " | " + u.getProtocol() + " " + u.getAuthority() + " " + u.getUserInfo() + " [" + u.getHost() + "] "
+                      + u.getPort() + " " + u.getDefaultPort() + " " + u.getPath() + " " + u.getFile() + " " + u.getQuery() + " "
+                      + u.getRef() + " " + u.toExternalForm().equals(u.toString());
+          }
+
+          static java.net.URL url(String spec) throws java.net.MalformedURLException {
+              return new java.net.URL(spec);
+          }
+
+          public static void main(String[] args) {
+              try {
+                  cut();
+              }
+              catch (Exception ex) {
+                  throw new IllegalStateException(ex);
+              }
+          }
+
+          static void cut() throws Exception {
+              String[] specs = { "http://example.com", "HTTP://Example.COM:8080/a/b?x=1#frag", "https://user:pw@host:443/p",
+                      "file:/tmp/x.txt", "file:///tmp/x.txt", "file://host/tmp/x", "file:x y.txt", "jar:file:/a.jar!/b/c.txt",
+                      "jar:file:/a.jar!/x?q#r", "jar:file:/a.jar", "jar:x!/y", "ftp://h/x;type=a", "mailto:a@b.c", "mailto:",
+                      "jrt:/java.base", "abc", "", "xyz:foo", "1http://x", "h ttp://x", "a+b.c-d://x", "http:", "http://",
+                      "http:///x", "http:x", "http://h:port/", "http://h:-1/", "http://h:-2/", "http://h:+5/", "http://h:08/",
+                      "http://h:99999999999/", "http://h:/x", "http://h:+/", "http://h:1:2/", "http://[::1]:80/x", "http://[::1/",
+                      "http://[::1]x/", "http://::1/", "http://u@h:1/", "http://@h/", "http://a@b@c/", "http://h /x",
+                      "http://h\\x", "http://h_x/", "http://h/a b", "http://h/é?ü#ö", "http://h?q", "http://h#r",
+                      "http://h/a#b#c", "http://h/a?b?c", "http://h/a?", "http://h/a#", " http://h/ ", "\thttp://h/\n",
+                      "url:http://h/x", "URL:http://h/", "url:x", "<URL:http://h/x>", "#r", "//h/x", "file:#x", "file:?x" };
+              for (String spec : specs) {
+                  String shownSpec = "[" + spec.replace("\t", "\\t").replace("\n", "\\n") + "] ";
+                  try {
+                      System.out.println(shownSpec + shown(url(spec)));
+                  }
+                  catch (java.net.MalformedURLException ex) {
+                      System.out.println(shownSpec + ex);
+                  }
+              }
+              String[][] parts = { { "http", "h", "80", "/x" }, { "HTTP", "h", "-1", "x" }, { "http", "h", "-2", "/x" },
+                      { "xyz", "h", "1", "/x" }, { "file", "", "-1", "/x" }, { "http", "::1", "8", "/x" },
+                      { "http", "h", "1", "/x?q#r" }, { "http", null, "-1", "/x" } };
+              for (String[] p : parts) {
+                  try {
+                      System.out.println(java.util.Arrays.toString(p) + " "
+                              + shown(new java.net.URL(p[0], p[1], Integer.parseInt(p[2]), p[3])));
+                  }
+                  catch (java.net.MalformedURLException ex) {
+                      System.out.println(java.util.Arrays.toString(p) + " " + ex);
+                  }
+                  try {
+                      System.out.println(java.util.Arrays.toString(p) + " " + shown(new java.net.URL(p[0], p[1], p[3])));
+                  }
+                  catch (java.net.MalformedURLException ex) {
+                      System.out.println(java.util.Arrays.toString(p) + " " + ex);
+                  }
+              }
+              String[][] pairs = { { "http://h/x", "http://h:80/x" }, { "http://H/x", "http://h/x" },
+                      { "http://h/x#a", "http://h/x#b" }, { "file:/x", "file:///x" }, { "http://h/x?a", "http://h/x?b" },
+                      { "http://u@h/x", "http://h/x" }, { "http://h/x", "https://h/x" }, { "http://h/X", "http://h/x" } };
+              for (String[] pair : pairs) {
+                  java.net.URL x = url(pair[0]);
+                  java.net.URL y = url(pair[1]);
+                  System.out.println(pair[0] + " " + pair[1] + " " + x.equals(y) + " " + x.sameFile(y) + " "
+                          + (x.equals(y) ? x.hashCode() == y.hashCode() : "-"));
+              }
+              for (String spec : new String[] { "http://h/a%20b?q#f", "file:x y.txt", "http:", "http://h/%zz", "jar:file:/a.jar!/x" }) {
+                  try {
+                      System.out.println(spec + " " + url(spec).toURI());
+                  }
+                  catch (java.net.URISyntaxException ex) {
+                      System.out.println(spec + " " + ex);
+                  }
+              }
+              for (String spec : new String[] { "http://h/x", "rel/x", "mailto:a@b", "xyz:/x", "file:///x", "urn:isbn:1" }) {
+                  try {
+                      System.out.println(spec + " " + shown(new java.net.URI(spec).toURL()));
+                  }
+                  catch (java.net.MalformedURLException | IllegalArgumentException ex) {
+                      System.out.println(spec + " " + ex);
+                  }
+              }
+              try {
+                  url(null);
+              }
+              catch (java.net.MalformedURLException ex) {
+                  System.out.println(ex.getMessage());
+              }
+          }
+      }
+    expected: |
+      [http://example.com] http://example.com | http example.com null [example.com] -1 80   null null true
+      [HTTP://Example.COM:8080/a/b?x=1#frag] http://Example.COM:8080/a/b?x=1#frag | http Example.COM:8080 null [Example.COM] 8080 80 /a/b /a/b?x=1 x=1 frag true
+      [https://user:pw@host:443/p] https://user:pw@host:443/p | https user:pw@host:443 user:pw [host] 443 443 /p /p null null true
+      [file:/tmp/x.txt] file:/tmp/x.txt | file null null [] -1 -1 /tmp/x.txt /tmp/x.txt null null true
+      [file:///tmp/x.txt] file:/tmp/x.txt | file  null [] -1 -1 /tmp/x.txt /tmp/x.txt null null true
+      [file://host/tmp/x] file://host/tmp/x | file host null [host] -1 -1 /tmp/x /tmp/x null null true
+      [file:x y.txt] file:x y.txt | file null null [] -1 -1 x y.txt x y.txt null null true
+      [jar:file:/a.jar!/b/c.txt] jar:file:/a.jar!/b/c.txt | jar null null [] -1 -1 file:/a.jar!/b/c.txt file:/a.jar!/b/c.txt null null true
+      [jar:file:/a.jar!/x?q#r] jar:file:/a.jar!/x?q#r | jar null null [] -1 -1 file:/a.jar!/x file:/a.jar!/x?q q r true
+      [jar:file:/a.jar] java.net.MalformedURLException: no !/ in spec
+      [jar:x!/y] java.net.MalformedURLException: invalid url:
+      [ftp://h/x;type=a] ftp://h/x;type=a | ftp h null [h] -1 21 /x;type=a /x;type=a null null true
+      [mailto:a@b.c] mailto:a@b.c | mailto null null [] -1 -1 a@b.c a@b.c null null true
+      [mailto:] java.net.MalformedURLException: No email address
+      [jrt:/java.base] jrt:/java.base | jrt null null [] -1 -1 /java.base /java.base null null true
+      [abc] java.net.MalformedURLException: no protocol: abc
+      [] java.net.MalformedURLException: no protocol: 
+      [xyz:foo] java.net.MalformedURLException: unknown protocol: xyz
+      [1http://x] java.net.MalformedURLException: no protocol: 1http://x
+      [h ttp://x] java.net.MalformedURLException: no protocol: h ttp://x
+      [a+b.c-d://x] java.net.MalformedURLException: unknown protocol: a+b.c-d
+      [http:] http: | http null null [] -1 80   null null true
+      [http://] http: | http  null [] -1 80   null null true
+      [http:///x] http:/x | http  null [] -1 80 /x /x null null true
+      [http:x] http:x | http null null [] -1 80 x x null null true
+      [http://h:port/] java.net.MalformedURLException: Error at index 0 in: "port"
+      [http://h:-1/] http://h:-1/ | http h:-1 null [h] -1 80 / / null null true
+      [http://h:-2/] java.net.MalformedURLException: Invalid port number :-2
+      [http://h:+5/] http://h:+5/ | http h:+5 null [h] 5 80 / / null null true
+      [http://h:08/] http://h:08/ | http h:08 null [h] 8 80 / / null null true
+      [http://h:99999999999/] java.net.MalformedURLException: Error at index 9 in: "99999999999"
+      [http://h:/x] http://h:/x | http h: null [h] -1 80 /x /x null null true
+      [http://h:+/] java.net.MalformedURLException: Error at index 1 in: "+"
+      [http://h:1:2/] java.net.MalformedURLException: Error at index 1 in: "1:2"
+      [http://[::1]:80/x] http://[::1]:80/x | http [::1]:80 null [[::1]] 80 80 /x /x null null true
+      [http://[::1/] java.net.MalformedURLException: Invalid authority field: [::1
+      [http://[::1]x/] java.net.MalformedURLException: Invalid authority field: [::1]x
+      [http://::1/] java.net.MalformedURLException: Error at index 0 in: ":1"
+      [http://u@h:1/] http://u@h:1/ | http u@h:1 u [h] 1 80 / / null null true
+      [http://@h/] http://@h/ | http @h  [h] -1 80 / / null null true
+      [http://a@b@c/] http://a@b@c/ | http a@b@c null [] -1 80 / / null null true
+      [http://h /x] java.net.MalformedURLException: Illegal character found in host: ' '
+      [http://h\x] java.net.MalformedURLException: Illegal character found in host: '\'
+      [http://h_x/] http://h_x/ | http h_x null [h_x] -1 80 / / null null true
+      [http://h/a b] http://h/a b | http h null [h] -1 80 /a b /a b null null true
+      [http://h/é?ü#ö] http://h/é?ü#ö | http h null [h] -1 80 /é /é?ü ü ö true
+      [http://h?q] http://h?q | http h null [h] -1 80  ?q q null true
+      [http://h#r] http://h#r | http h null [h] -1 80   null r true
+      [http://h/a#b#c] http://h/a#b#c | http h null [h] -1 80 /a /a null b#c true
+      [http://h/a?b?c] http://h/a?b?c | http h null [h] -1 80 /a /a?b?c b?c null true
+      [http://h/a?] http://h/a? | http h null [h] -1 80 /a /a?  null true
+      [http://h/a#] http://h/a# | http h null [h] -1 80 /a /a null  true
+      [ http://h/ ] http://h/ | http h null [h] -1 80 / / null null true
+      [\thttp://h/\n] http://h/ | http h null [h] -1 80 / / null null true
+      [url:http://h/x] http://h/x | http h null [h] -1 80 /x /x null null true
+      [URL:http://h/] http://h/ | http h null [h] -1 80 / / null null true
+      [url:x] java.net.MalformedURLException: no protocol: url:x
+      [<URL:http://h/x>] java.net.MalformedURLException: no protocol: <URL:http://h/x>
+      [#r] java.net.MalformedURLException: no protocol: #r
+      [//h/x] java.net.MalformedURLException: no protocol: //h/x
+      [file:#x] file:#x | file null null [] -1 -1   null x true
+      [file:?x] file:?x | file null null [] -1 -1  ?x x null true
+      [http, h, 80, /x] http://h:80/x | http h:80 null [h] 80 80 /x /x null null true
+      [http, h, 80, /x] http://h/x | http h null [h] -1 80 /x /x null null true
+      [HTTP, h, -1, x] http://hx | http h null [h] -1 80 x x null null true
+      [HTTP, h, -1, x] http://hx | http h null [h] -1 80 x x null null true
+      [http, h, -2, /x] java.net.MalformedURLException: Invalid port number :-2
+      [http, h, -2, /x] http://h/x | http h null [h] -1 80 /x /x null null true
+      [xyz, h, 1, /x] java.net.MalformedURLException: unknown protocol: xyz
+      [xyz, h, 1, /x] java.net.MalformedURLException: unknown protocol: xyz
+      [file, , -1, /x] file:/x | file  null [] -1 -1 /x /x null null true
+      [file, , -1, /x] file:/x | file  null [] -1 -1 /x /x null null true
+      [http, ::1, 8, /x] http://[::1]:8/x | http [::1]:8 null [[::1]] 8 80 /x /x null null true
+      [http, ::1, 8, /x] http://[::1]/x | http [::1] null [[::1]] -1 80 /x /x null null true
+      [http, h, 1, /x?q#r] http://h:1/x?q#r | http h:1 null [h] 1 80 /x /x?q q r true
+      [http, h, 1, /x?q#r] http://h/x?q#r | http h null [h] -1 80 /x /x?q q r true
+      [http, null, -1, /x] http:/x | http null null [null] -1 80 /x /x null null true
+      [http, null, -1, /x] http:/x | http null null [null] -1 80 /x /x null null true
+      http://h/x http://h:80/x true true true
+      http://H/x http://h/x true true true
+      http://h/x#a http://h/x#b false true -
+      file:/x file:///x true true true
+      http://h/x?a http://h/x?b false false -
+      http://u@h/x http://h/x true true true
+      http://h/x https://h/x false false -
+      http://h/X http://h/x false false -
+      http://h/a%20b?q#f http://h/a%20b?q#f
+      file:x y.txt java.net.URISyntaxException: Illegal character in opaque part at index 6: file:x y.txt
+      http: java.net.URISyntaxException: Expected scheme-specific part at index 5: http:
+      http://h/%zz java.net.URISyntaxException: Malformed escape pair at index 9: http://h/%zz
+      jar:file:/a.jar!/x jar:file:/a.jar!/x
+      http://h/x http://h/x | http h null [h] -1 80 /x /x null null true
+      rel/x java.lang.IllegalArgumentException: URI is not absolute
+      mailto:a@b mailto:a@b | mailto null null [] -1 -1 a@b a@b null null true
+      xyz:/x java.net.MalformedURLException: unknown protocol: xyz
+      file:///x file:/x | file  null [] -1 -1 /x /x null null true
+      urn:isbn:1 java.net.MalformedURLException: unknown protocol: urn
+      Cannot invoke "String.length()" because "spec" is null
 standalone:
   # What a compiler warns of as unchecked is printed on standard error before the
   # program runs, as a JDK prints it, by the interpreter and by a compile; a declaration
@@ -11741,7 +11972,8 @@ standalone:
   # with every class of the file found (Polygon, beside Square). Single-type, on-demand and
   # static imports; a sibling of the package found with no import; a call through an
   # interface whose classes stand in other files; a static initializer that runs where its
-  # class is first used; protected members reached from a subclass in another package.
+  # class is first used; protected members reached from a subclass in another package; a
+  # provider a services file of the tree names, the one maker of a Supplier the program has.
   - name: a-program-of-several-files-finds-its-classes-by-package
     file: app/Main.java
     source: |
@@ -11768,6 +12000,9 @@ standalone:
               System.out.println(Helper.count(shapes) + " " + new Pair("a", 1));
               System.out.println(util.Registry.size());
               System.out.println(util.Registry.size());
+              for (Shape shape : java.util.ServiceLoader.load(Shape.class)) {
+                  System.out.println("provided " + shape.name());
+              }
           }
       }
     files:
@@ -11824,6 +12059,16 @@ standalone:
                 return getClass().getSimpleName();
             }
         }
+      META-INF/services/shapes.Shape: |
+        shapes.Unit
+      shapes/Unit.java: |
+        package shapes;
+
+        public class Unit extends Circle {
+            public Unit() {
+                super(1);
+            }
+        }
       shapes/Circle.java: |
         package shapes;
 
@@ -11874,6 +12119,7 @@ standalone:
       registry ready
       1
       1
+      provided Unit
   # Across languages, a Common Lisp program (no JDK leg): it loads a Java file with no
   # main, which defines its classes and runs nothing, and calls their static methods by
   # their Lisp names, which carry the signature; a Java object is a structure it hands back,
@@ -16562,6 +16808,7 @@ standalone:
       import java.util.Locale;
       import java.util.MissingResourceException;
       import java.util.ResourceBundle;
+      import java.util.List;
       import java.util.ServiceConfigurationError;
       import java.util.ServiceLoader;
 
@@ -16623,6 +16870,19 @@ standalone:
 
               public String greet(String name) {
                   return name;
+              }
+          }
+
+          // bundles of a member class's name, and of a file named as one
+          public static class Words extends java.util.ListResourceBundle {
+              protected Object[][] getContents() {
+                  return new Object[][] { { "w", "member root" }, { "x", "member x" } };
+              }
+          }
+
+          public static class Words_en extends java.util.ListResourceBundle {
+              protected Object[][] getContents() {
+                  return new Object[][] { { "w", "member en" } };
               }
           }
 
@@ -16777,8 +17037,52 @@ standalone:
                       + " " + ServiceLoader.loadInstalled(Greeter.class).findFirst() + " " + Notes.greeters());
           }
 
+          // where a resource was found when the program was compiled, read back through its
+          // URL; every place holding a name; the loaders above the program's
+          static void urls() throws Exception {
+              java.net.URL data = Main.class.getResource(DATA);
+              java.net.URL named = Main.class.getResource(DATA.substring(0, 0) + DATA);
+              System.out.println(data.getProtocol() + " [" + data.getAuthority() + "] [" + data.getHost() + "] "
+                      + data.getPort() + " " + data.toString().endsWith("/tables/data.txt") + " "
+                      + data.getPath().endsWith("/tables/data.txt") + " " + read(data.openStream()) + " "
+                      + data.equals(named) + " " + read(named.openStream()) + " "
+                      + data.toURI().getPath().endsWith("/tables/data.txt") + " " + Main.class.getResource("missing.txt")
+                      + " " + Main.class.getResource(DATA.substring(0, 0) + "missing.txt"));
+              ClassLoader loader = Main.class.getClassLoader();
+              for (String name : new String[] { "tables/a b é.txt", "geo/l é.txt", "geo/note.txt", "top.txt" }) {
+                  java.net.URL found = loader.getResource(name);
+                  java.net.URL computed = loader.getResource(DATA.substring(0, 0) + name);
+                  List<java.net.URL> every = Collections.list(loader.getResources(name));
+                  List<java.net.URL> system = Collections.list(ClassLoader.getSystemResources(DATA.substring(0, 0) + name));
+                  System.out.println(name + ": " + found.toString().substring(found.toString().lastIndexOf('/') + 1) + " "
+                          + read(found.openStream()) + " " + found.equals(computed) + " " + every.size() + " "
+                          + every.get(0).equals(found) + " " + system.size() + " "
+                          + (ClassLoader.getSystemResource(name) == null ? "none" : read(ClassLoader.getSystemResource(name).openStream())));
+              }
+              ClassLoader platform = ClassLoader.getPlatformClassLoader();
+              System.out.println((loader.getParent() == ClassLoader.getSystemClassLoader()) + " "
+                      + (ClassLoader.getSystemClassLoader().getParent() == platform) + " " + platform.getParent() + " "
+                      + platform.getResource("geo/note.txt") + " " + platform.getResourceAsStream("geo/note.txt") + " "
+                      + platform.getResources("geo/note.txt").hasMoreElements() + " "
+                      + platform.getResource(DATA.substring(0, 0) + "geo/note.txt") + " "
+                      + ServiceLoader.load(Greeter.class, platform).findFirst());
+              try {
+                  ResourceBundle.getBundle("geo.texts", Locale.UK, platform);
+              }
+              catch (MissingResourceException ex) {
+                  System.out.println(ex.getMessage());
+              }
+          }
+
+          // a service told by a class object at run time
+          static <T> List<String> providers(Class<T> service) {
+              return ServiceLoader.load(service, ClassLoader.getSystemClassLoader()).stream()
+                  .map(provider -> provider.type().getName())
+                  .toList();
+          }
+
           @Label("where the program starts")
-          public static void main(String[] args) throws IOException {
+          public static void main(String[] args) throws Exception {
               Table<Shape> table = new Table<Shape>().column("name", Shape::name)
                   .column("corners", Shape::corners)
                   .column("area", Main::area);
@@ -16803,6 +17107,16 @@ standalone:
               computed();
               bundles();
               services();
+              urls();
+              Class<?> service = Greeter.class;
+              System.out.println(providers(Greeter.class) + " " + providers(Runnable.class) + " "
+                      + ServiceLoader.load(service).findFirst().map(Object::getClass).map(Class::getName) + " "
+                      + ServiceLoader.load(service, ClassLoader.getSystemClassLoader()).findFirst().get().getClass().getName());
+              for (Locale locale : new Locale[] { Locale.UK, Locale.CANADA, Locale.ROOT }) {
+                  ResourceBundle words = ResourceBundle.getBundle("tables.Main$Words", locale);
+                  System.out.println(words.getClass().getName() + " [" + words.getLocale() + "] " + words.getString("w") + " "
+                          + words.getString("x"));
+              }
               System.out.println(table.row(null));
           }
       }
@@ -16817,6 +17131,10 @@ standalone:
         program-note
       tables/unicode.txt: |
         é ∑ 😀
+      tables/a b é.txt: |
+        spaced
+      tables/Main$Words_en_GB.properties: |
+        w=member file en_GB
       geo/note.txt: |
         tree-note
       tables/msgs.properties: |
@@ -16877,6 +17195,8 @@ standalone:
     library:
       geo/note.txt: |
         library-note
+      geo/l é.txt: |
+        library spaced
       geo/texts.properties: |
         a=library root
       geo/texts_en.properties: |
@@ -17192,6 +17512,18 @@ standalone:
       Mine mine onefalse Hello hello onefalse stream: geo.Greeter: tables.Main not a subtype
       made Mine
       Optional[tables.Main$Mine] [Hello] Optional.empty hello lib
+      file [] [] -1 true true data true data true null null
+      tables/a b é.txt: a%20b%20%C3%A9.txt spaced true 1 true 0 none
+      geo/l é.txt: l%20%c3%a9.txt library spaced true 1 true 1 library spaced
+      geo/note.txt: note.txt tree-note true 2 true 1 library-note
+      top.txt: top.txt top true 1 true 0 none
+      true true null null null false null Optional.empty
+      Can't find bundle for base name geo.texts, locale en_GB
+      made Mine
+      [geo.Hello] [] Optional[tables.Main$Mine] geo.Hello
+      java.util.PropertyResourceBundle [en_GB] member file en_GB member x
+      tables.Main$Words_en [en] member en member x
+      tables.Main$Words [] member root member x
     error: "java.lang.IllegalArgumentException: no value for name | corners | area"
     at: "library-sources.jar!/geo/Table.java:52 in geo.Table.row(Object)"
   # java.math: a BigInteger is the host's integer held in a field, a BigDecimal one of

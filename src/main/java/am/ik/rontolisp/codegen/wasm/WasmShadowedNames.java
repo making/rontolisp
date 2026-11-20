@@ -24,7 +24,7 @@ import am.ik.rontolisp.compiler.DeclaredArrayTypes;
  */
 record WasmShadowedNames(Map<String, WasmIntFusionCompiler.RawLocal> rawLocals,
 		Map<String, WasmIntFusionCompiler.LocalIntLambda> localIntLambdas,
-		Map<String, WasmIntFusionCompiler.Range> declaredIntegers, Map<String, DeclaredArrayTypes.Kind> declaredArrays,
+		Map<String, WasmIntFusionCompiler.Range> declaredIntegers, Map<String, DeclaredArrayTypes.Pin> declaredArrays,
 		Set<String> arrayLocals, Set<String> boxedVars) {
 
 	/**
