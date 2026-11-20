@@ -4,7 +4,8 @@ Declarations are NOT pure no-ops: on wasm-GC a `(declare (type ...))` (or a `def
 `:type`) drives single-arm array-access EMISSION, and an integer range (or a `the` of one) a raw
 value with no fallback ("Declared integer ranges" below); on the JVM a `(declare (type double-float ...))`
 routes arithmetic onto the unboxed IEEE path
-([jvm-double-arithmetic.md](jvm-double-arithmetic.md)). A `special` declaration is semantics on
+([jvm-double-arithmetic.md](jvm-double-arithmetic.md)) and an integer range makes a fused leaf a
+cast with no bail ("Declared integer ranges", "On the JVM"). A `special` declaration is semantics on
 every backend but `--no-gc`, scoped as CLHS 3.3.4 scopes it
 ([dynamic-special-variables.md](dynamic-special-variables.md)); the interpreter and `--no-gc`
 ignore every other declaration.
@@ -16,7 +17,8 @@ representation meets the contradicting value, never a silently coerced or wrong 
 
 - wasm-GC: an uncatchable `ref.cast` TRAP at the access (a checked signal would cost the dispatch
   bytes the feature removes); for an integer range the cast or an `unreachable` where a boxed
-  value is taken raw, at an unbox or a store (below). JVM: a `checkcast java/lang/Double` failure, surfaced by the
+  value is taken raw, at an unbox or a store (below). JVM: a `checkcast java/lang/Double` failure
+  (`java/lang/Long` for an integer range, below), surfaced by the
   condition bridge as a CATCHABLE Lisp error -- catchability is a side effect, not a promise; one
   softening, an integer LITERAL assigned to a declared float variable widens at compile time.
   Interpreter and `--no-gc` are the oracle for CORRECTLY-declared programs only.
@@ -159,7 +161,7 @@ fields with `_seq_len` behind it (`.kb/length-runtime.md`), the generic call els
 - Emission at EVERY optimize level, in the generic (array, index, value) evaluation order; a false
   declaration may observe index/value side effects before the cast traps -- inside UB.
 
-## Declared integer ranges (wasm-GC, 2026-11-20, `.todo/k56`)
+## Declared integer ranges (wasm-GC, 2026-11-20, `.todo/k56`; the JVM, `.todo/k65`)
 **A variable or a `the` value a declaration gives an integer range within i64 is taken raw: a
 fused site unboxes it with no bail, so a site with nothing else to bail on has no fallback.**
 What the Java front end lowers every `int` and `long` operation to (`.kb/java-frontend.md`,
@@ -194,19 +196,59 @@ What the Java front end lowers every `int` and `long` operation to (`.kb/java-fr
   checks the range unless the stored value's range is within it (`emitStoreCheck`; the
   fallback's and an unfused value's always).
 - **A false declaration traps where the trusted value is taken** -- the unbox, the store --
-  and never yields a wrong value: no range is used before its check. The interpreter and the
-  JVM read none of these (the JVM's guard is one `instanceof Long` and its fused methods are
-  outlined and shared, `.kb/jvm-int-fusion.md`); the size level fuses nothing, so reads none.
+  and never yields a wrong value: no range is used before its check. The interpreter reads
+  none of these; the size level fuses nothing, so reads none.
 - **Measured** (wasm, base `e9313f180`; the Java programs of `.kb/java-frontend.md`,
   "Numbers"): of the variables a declaration made exact, keeping each one raw was better than
   none (Booking 1,143,837 -> 1,136,369 B) and the raw-use rule better still (1,133,686); every
   declared parameter raw was worse (1,143,772: one boxed back for each call it is passed to),
   by the rule better (Zone 175,349 -> 173,697).
 - Pins: `WasmLispCompilerIntegrationTest.fusedLocalFunctionsAndUnboxedLocalsMatchTheGenericPath`
-  (the `declared` program on P1 and the component, fixnum included; two false declarations that
-  trap), `.declaredArrayTypesEmitSingleArmAccessorsWithoutChangingResults` (the lambda that
-  shadows); ci-spec `declared-integer-ranges-answer-what-undeclared-code-answers` (the four
-  backends).
+  (`testsupport/DeclaredIntegerProgram` on P1 and the component, fixnum included; two false
+  declarations that trap), `.declaredArrayTypesEmitSingleArmAccessorsWithoutChangingResults` (the
+  lambda that shadows); `JvmLispCompilerTest.aDeclaredIntegerLeafIsCastAndAMethodWithNothingElseToBailOnHasNoFallback`
+  (the same program at both levels, a handler-case variable, a false declaration caught);
+  ci-spec `declared-integer-ranges-answer-what-undeclared-code-answers` (the four backends).
+
+### On the JVM (2026-11-20, `.todo/k65`)
+**A leaf the declarations prove an integer within `long` is a `Long`
+(`.kb/core-representation.md`): the fused method takes it with a cast, and a method with
+nothing else to bail on has no fallback, no `ArithmeticException` handler and no all-Double
+path.** The JVM uses no range, so it checks none: an integer outside its declared range is
+computed as undeclared code computes it (the false declaration diverges from wasm's trap); a
+non-integer fails the cast, a catchable `type-error` (nil: an error from the unbox).
+
+- **What is trusted** (`JvmIntFusionCompiler.declaredLong`): a variable whose declaration
+  (`compiler/DeclaredIntegerTypes`, read as on wasm: a defun's and a lambda's head through the
+  `block` wrap, `functionBody`; a `let`'s and an inline lambda's, bound and free) is its
+  binding's own -- `Ctx.declaredIntegers` maps the name to what a read of it resolved to when
+  declared (`bindingOf`: the raw local, the slot, the captured cell, the global), so a binder
+  that shadows the name without knowing the map (a handler-case variable) is untrusted; a
+  `(the spec X)` leaf, X read through when it is a variable. A trusted leaf adds no check to
+  an order boundary (`pendingGuard`, `LeafGuard`); a boundary left with none is dropped.
+- **The cast stands behind its own `instanceof`** (`emitTrustedCheck`): a bare `checkcast`
+  in the fused methods made `Sieve`'s sieve run 0.8 -> 1.5 s under the Graal JIT (the default
+  of Oracle GraalVM 25), with the branch the profile never takes 0.8 s; C2 runs either in
+  1.3-1.4 s, against 1.5-1.9 before.
+- **A store** of a fused tree into a declared raw local casts too: no dispatch on the value's
+  type (68 such stores in `Zone.class`, 2,228 B).
+- **Measured** (2026-11-20, base `30aca726b`, Xeon E5-2697A v4, Oracle GraalVM 25.0.5; a class
+  varies by some 150 B build to build): `Zone.class` (`ZonedDateTime.of(..,
+  ZoneId.of("Europe/Paris")).plusHours(1)`) 271,493 -> 260,065 B, its 196 `_fx$` methods' code
+  17,674 B with 196 handlers -> 207 methods, 13,294 B, 75 handlers; `Sieve.class` 42,346 -> 40,284; `Regions.jar`
+  (`.todo/artefacts/k42-java-time-the-rules-of-a-region/`) 218,960 -> 212,920. Every leaf
+  trusted, as an upper bound: `Zone.class` 255,581. Times within noise (load average 16-44):
+  `Sieve` 0.74-1.02 s wall before and 0.87-0.95 after, the walk 17.9 / 18.6 s best of two,
+  10 x 30,000,000 `int` steps 0.79-0.82 s both -- C2 and Graal already prune the cold
+  fallback and scalar-replace the boxes (no collection in that loop).
+- **Not taken, by the same measurement.** A declared local without its shadow and flag (one
+  `long` slot): what is left of the triple in `Zone.class` is 143 call sites, 52 methods'
+  parameters and 98 `_ubRead`s, some 2-3.5 KB with the frames, about 1%, for a change of every
+  emission that knows the representation. Range proofs that drop `Math.addExact` and the
+  other checks: the operations a declared Java program runs are wrapped, so the checked ones
+  left in `Zone.class` (14 `addExact`, 15 `subtractExact`, 2 `multiplyExact`, 3 `floorMod`,
+  6 `_fxAsh`; 15 `lrem` by a divisor that may be zero) are mostly library Lisp, and a range
+  used would need the range checked.
 
 ## makeTypeTest (shared type-specifier tests)
 `LispMacroExpander.makeTypeTest(value, spec)` builds a truthy test form; `makeTypecaseTest`

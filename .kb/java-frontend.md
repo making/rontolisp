@@ -3367,11 +3367,11 @@ class of a package of our own was needed (`deviations.md`, "The HTTP server").
   where it is read (a global no declaration covers), an `int` quotient as `(integer -2^31
   2^31)`: `MIN_VALUE / -1` is the one value past the type, which the wrap takes back. On
   wasm-GC that is a site with no fallback and a variable kept raw where it is read mostly raw
-  (`.kb/declarations-type-checks.md`, "Declared integer ranges"); the interpreter and the
-  JVM read none, the JVM's fused methods being outlined, shared by shape and guarded by one
-  `instanceof Long` (`.kb/jvm-int-fusion.md`). `JavaResumable` drops a `the` around an await.
+  (`.kb/declarations-type-checks.md`, "Declared integer ranges"); on the JVM a fused leaf cast
+  with no fallback where nothing else bails (k65: `Zone.class` 271,493 -> 260,065 B, times
+  unchanged); the interpreter reads none. `JavaResumable` drops a `the` around an await.
   A Common Lisp caller handing a method a value out of a parameter's range is a false
-  declaration (on wasm a trap; `doc/*/java/index.md`); a `native` method's integral result is
+  declaration (on wasm a trap, on the JVM an error for a non-integer alone; `doc/*/java/index.md`); a `native` method's integral result is
   wrapped to its type.
 - **Every integral wrap is `(%mask-signed-field w x)`** (`JavaForms.wrap`, `signed`). Until
   k56 `int` kept the unconditional mask `(- (logand (+ x 2^31) 2^32-1) 2^31)`: the masked

@@ -24,7 +24,10 @@ enclosing expression's pending operands.
 ## How exactness survives the raw path
 - **Per-leaf guard**: each leaf arrives as `Object`, unboxed behind `instanceof Long`. An integer
   in `long` range is always a `Long` here (`.kb/core-representation.md`), so that one test is the
-  whole tier check.
+  whole tier check. A leaf a declaration proves such an integer is cast instead, and a method
+  with nothing else to bail on has no fallback and no handler
+  ([declarations-type-checks.md](declarations-type-checks.md), "Declared integer ranges", "On
+  the JVM").
 - **Per-operation overflow check**: `Math.addExact`/`subtractExact`/`multiplyExact`,
   `Math.floorMod` (`mod`), `LREM` (`rem`), the emitted `_fxAsh(JJ)J` (`ash`, count narrowed to
   `int` first). The fast path sits in an `ArithmeticException` region whose handler IS the bail.
@@ -236,6 +239,7 @@ limit (`.kb/jvm-method-size-limits.md`) -- past 255 slots `astore 256/257/258` t
 
 ## Pinning tests
 `JvmLispCompilerTest.fusedIntegerExpressionTreesMatchTheGenericPath`,
+`.aDeclaredIntegerLeafIsCastAndAMethodWithNothingElseToBailOnHasNoFallback`,
 `.fusedArefLeavesReadTheGeneralArraysPackedShapeAndBailForEveryOther`,
 `.anArithmeticArefIndexIsComputedInsideTheFusedTree` (one `_fx$` call and no probe per site),
 `.compileAndRunArefChecksItsArraysRankAndItsSubscriptsType` (`ArefRankAndSubscriptChecksFixture`,

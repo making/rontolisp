@@ -23,6 +23,7 @@ import am.ik.rontolisp.PackageRegistry;
 import am.ik.rontolisp.LispVal;
 import am.ik.rontolisp.SourceProvenance;
 import am.ik.rontolisp.compiler.ArgumentOrder;
+import am.ik.rontolisp.compiler.DeclaredIntegerTypes;
 import am.ik.rontolisp.macro.LispMacroExpander;
 import org.jspecify.annotations.Nullable;
 
@@ -135,6 +136,13 @@ final class JvmIntFusionCompiler {
 		int longSlot = -1;
 
 		int dblSlot = -1;
+
+		/**
+		 * Whether a declaration proves the value an integer within {@code long}, so a
+		 * {@code Long}: the method casts it and never bails on it
+		 * ({@link #emitTrustedCheck}).
+		 */
+		boolean trusted;
 
 		ExprLeaf(LispVal expr) {
 			this.expr = expr;
@@ -275,6 +283,12 @@ final class JvmIntFusionCompiler {
 
 		int dblSlot = -1;
 
+		/**
+		 * Whether a declaration proves the shadow a {@code Long} (as
+		 * {@link ExprLeaf#trusted}).
+		 */
+		boolean trusted;
+
 		RawLeaf(RawLocal src) {
 			this.src = src;
 		}
@@ -356,6 +370,74 @@ final class JvmIntFusionCompiler {
 		boolean isField() {
 			return this.longField != null;
 		}
+	}
+
+	/**
+	 * Whether a declaration in scope gives the variable an integer range within
+	 * {@code long}, and so a {@code Long} value: the declaration is the binding's own --
+	 * the one a read of the name resolves to now is the one it was made over -- and the
+	 * name is not special.
+	 */
+	static boolean declaredLong(String name, JvmLispCompiler.Ctx ctx) {
+		Object binding = ctx.declaredIntegers.get(name);
+		return binding != null && !ctx.specialVars.contains(name) && binding.equals(bindingOf(name, ctx));
+	}
+
+	/**
+	 * What a read of the name resolves to, in {@link JvmExprCompiler#compileSymbolRef}'s
+	 * order: a raw local, a slot, a captured cell, else the global. A binder that shadows
+	 * the name without telling {@link JvmLispCompiler.Ctx#declaredIntegers} (a
+	 * handler-case variable) changes it, and the declaration stops answering.
+	 */
+	private static Object bindingOf(String name, JvmLispCompiler.Ctx ctx) {
+		RawLocal raw = ctx.rawLocals.get(name);
+		if (raw != null) {
+			return raw;
+		}
+		if (ctx.rawDoubleLocals.containsKey(name)) {
+			return "double";
+		}
+		Integer slot = ctx.locals.get(name);
+		if (slot != null) {
+			return "local " + slot;
+		}
+		Integer capture = ctx.captures.get(name);
+		return capture != null ? "capture " + capture : "global";
+	}
+
+	/**
+	 * The declared integers of a defun's or lambda's body head, over the bindings its
+	 * parameters already have in {@code ctx}
+	 * ({@link JvmLispCompiler.Ctx#declaredIntegers}).
+	 */
+	static Map<String, Object> functionBodyDeclaredIntegers(List<LispVal> bodyExprs, JvmLispCompiler.Ctx ctx) {
+		return declaredOver(Map.of(), List.of(),
+				DeclaredIntegerTypes.functionBody(bodyExprs, ctx.closRegistry).keySet(), ctx);
+	}
+
+	/**
+	 * The declared integers of a body that binds {@code bound} (a {@code let}, an inline
+	 * lambda), its bindings made in {@code ctx}: the outer ones less the names it binds,
+	 * plus its head's, bound and free.
+	 */
+	static Map<String, Object> bodyDeclaredIntegers(Map<String, Object> outer, java.util.Collection<String> bound,
+			List<LispVal> bodyExprs, JvmLispCompiler.Ctx ctx) {
+		return declaredOver(outer, bound, DeclaredIntegerTypes.declared(bodyExprs, ctx.closRegistry).keySet(), ctx);
+	}
+
+	private static Map<String, Object> declaredOver(Map<String, Object> outer, java.util.Collection<String> bound,
+			Set<String> declared, JvmLispCompiler.Ctx ctx) {
+		if (declared.isEmpty() && (outer.isEmpty() || bound.stream().noneMatch(outer::containsKey))) {
+			return outer;
+		}
+		Map<String, Object> names = new HashMap<>(outer);
+		bound.forEach(names::remove);
+		for (String name : declared) {
+			if (!ctx.specialVars.contains(name)) {
+				names.put(name, bindingOf(name, ctx));
+			}
+		}
+		return names.isEmpty() ? Map.of() : names;
 	}
 
 	/**
@@ -956,6 +1038,15 @@ final class JvmIntFusionCompiler {
 				}
 				pushLeaves(classified, lineFree, ctx, className);
 				ctx.body.invokestatic(ref);
+				if (ctx.declaredIntegers.containsValue(target)) {
+					// A declared variable holds a Long: the raw representation, cast.
+					JvmEmitHelper.unboxLong(ctx);
+					emitRawSlotStore(target, ctx);
+					if (step != null) {
+						ctx.body.labelBinding(step[1]);
+					}
+					return;
+				}
 				// Dispatch on the VALUE's type, not on which path computed it: a Long
 				// is the raw representation whichever path answered it.
 				int tmp = ctx.allocTemp();
@@ -1306,6 +1397,7 @@ final class JvmIntFusionCompiler {
 				// is a defensive bail, not a reachable path.
 				return null;
 			}
+			boolean declared = declaredLong(sym.name(), ctx);
 			RawLocal raw = resolveRaw(sym.name(), ctx);
 			if (raw != null) {
 				if (!site.assignedNames.contains(sym.name())) {
@@ -1317,10 +1409,16 @@ final class JvmIntFusionCompiler {
 						site.sharedRawLeaves.put(sym.name(), shared);
 						registerLeaf(shared, site);
 					}
+					shared.trusted |= declared;
 					return shared;
 				}
-				return registerLeaf(new RawLeaf(raw), site);
+				RawLeaf leaf = new RawLeaf(raw);
+				leaf.trusted = declared;
+				return registerLeaf(leaf, site);
 			}
+			ExprLeaf leaf = new ExprLeaf(expr);
+			leaf.trusted = declared;
+			return registerLeaf(leaf, site);
 		}
 		if (!(expr instanceof LispCons cons) || !cons.isProperList() || !(cons.car() instanceof LispSymbol sym)) {
 			return registerLeaf(new ExprLeaf(expr), site);
@@ -1328,6 +1426,26 @@ final class JvmIntFusionCompiler {
 		List<LispVal> parts = cons.toList();
 		int arity = parts.size() - 1;
 		String op = sym.name();
+		if (LispNames.THE.equals(op) && arity == 2 && DeclaredIntegerTypes.of(parts.get(1), ctx.closRegistry) != null) {
+			// (the <integer range within long> x): x holds a Long. A variable is read
+			// as one; any other form is a leaf the call site evaluates through the
+			// expansion of the.
+			if (parts.get(2) instanceof LispSymbol) {
+				Node read = classifyHere(parts.get(2), ctx, env, site, depth);
+				if (read instanceof ExprLeaf leaf) {
+					leaf.trusted = true;
+				}
+				else if (read instanceof RawLeaf leaf) {
+					leaf.trusted = true;
+				}
+				return read;
+			}
+			if (env.isEmpty()) {
+				ExprLeaf leaf = new ExprLeaf(expr);
+				leaf.trusted = true;
+				return registerLeaf(leaf, site);
+			}
+		}
 		if (LispNames.AREF.equals(op) && arity == 2 && env.isEmpty() && ctx.usesArrays) {
 			// A rank-1 aref where a packed representation can exist: the fast path
 			// reads the long[] element raw. Inside an inlined body (env non-empty) the
@@ -1855,7 +1973,7 @@ final class JvmIntFusionCompiler {
 				}
 				sb.append(')');
 			}
-			case ExprLeaf leaf -> sb.append('e').append(leafIndex(leaf, leaves));
+			case ExprLeaf leaf -> sb.append(leaf.trusted ? 'E' : 'e').append(leafIndex(leaf, leaves));
 			case ArefLeaf leaf -> {
 				sb.append('a').append(leafIndex(leaf, leaves));
 				if (leaf.site != 0) {
@@ -1869,7 +1987,7 @@ final class JvmIntFusionCompiler {
 				.append(leafIndex(leaf, leaves))
 				.append(leaf.limitExpr == null ? "#" + leaf.limitConst : "")
 				.append(leaf.site == 0 ? "" : "@" + leaf.site);
-			case RawLeaf leaf -> sb.append('r').append(leafIndex(leaf, leaves));
+			case RawLeaf leaf -> sb.append(leaf.trusted ? 'R' : 'r').append(leafIndex(leaf, leaves));
 			case CelledCall call -> {
 				Integer seen = calls.get(call);
 				sb.append('c').append(seen == null ? calls.size() : seen);
@@ -2040,6 +2158,13 @@ final class JvmIntFusionCompiler {
 			List<Node> roots = maximal(pending);
 			PendingGuard guard = pendingGuard(roots);
 			if (guard != null) {
+				if (!guard.never() && guard.integers().isEmpty() && guard.nonZero().isEmpty()
+						&& guard.counts().isEmpty()) {
+					// Over trusted leaves, with literal divisors and counts: nothing
+					// pending can signal, so there is nothing to check.
+					pending.clear();
+					continue;
+				}
 				boundaries.put(event.node(), new Boundary(roots, guard));
 				checks += guard.integers().size() + guard.nonZero().size() + guard.counts().size();
 				pending.clear();
@@ -2048,8 +2173,12 @@ final class JvmIntFusionCompiler {
 			List<String> variables = ArgumentOrder.integerArithmeticVariables(evaluated,
 					name -> JvmArithCompiler.isQuietVariable(name, ctx));
 			if (variables != null && pending.stream().noneMatch(RandomLeaf.class::isInstance)) {
-				boundaries.put(event.node(), new Boundary(roots, new LeafGuard(variables)));
-				checks += variables.size();
+				// A declared variable holds a Long: no check of its own.
+				List<String> checked = variables.stream().filter(name -> !declaredLong(name, ctx)).toList();
+				if (!checked.isEmpty()) {
+					boundaries.put(event.node(), new Boundary(roots, new LeafGuard(checked)));
+					checks += checked.size();
+				}
 				continue;
 			}
 			// No check stands in for these: an aref read sees what the leaf may store, a
@@ -2209,8 +2338,16 @@ final class JvmIntFusionCompiler {
 		boolean never = false;
 		for (Node node : nodes) {
 			switch (node) {
-				case ExprLeaf ignored -> integers.add(node);
-				case RawLeaf ignored -> integers.add(node);
+				case ExprLeaf leaf -> {
+					if (!leaf.trusted) {
+						integers.add(node);
+					}
+				}
+				case RawLeaf leaf -> {
+					if (!leaf.trusted) {
+						integers.add(node);
+					}
+				}
 				case ArefLeaf ignored -> {
 					return null;
 				}
@@ -2532,7 +2669,12 @@ final class JvmIntFusionCompiler {
 		for (Node leaf : pending.leaves()) {
 			switch (leaf) {
 				case ExprLeaf l -> {
-					ctx.body.aload(l.paramSlot).instanceOf(ctx.longClass).ifeq(bails);
+					if (!l.trusted) {
+						ctx.body.aload(l.paramSlot).instanceOf(ctx.longClass).ifeq(bails);
+					}
+					else {
+						emitTrustedCheck(l.paramSlot, ctx);
+					}
 					ctx.body.aload(l.paramSlot);
 					JvmEmitHelper.unboxLong(ctx);
 					l.longSlot = ctx.allocTemp();
@@ -2546,7 +2688,12 @@ final class JvmIntFusionCompiler {
 					ctx.body.iload(l.flagParam);
 					MethodCode.Label isRaw = ctx.body.newLabel();
 					ctx.body.ifne(isRaw);
-					ctx.body.aload(l.shadowParam).instanceOf(ctx.longClass).ifeq(bails);
+					if (!l.trusted) {
+						ctx.body.aload(l.shadowParam).instanceOf(ctx.longClass).ifeq(bails);
+					}
+					else {
+						emitTrustedCheck(l.shadowParam, ctx);
+					}
 					ctx.body.aload(l.shadowParam);
 					JvmEmitHelper.unboxLong(ctx);
 					ctx.body.lstore(l.rawParam);
@@ -2601,6 +2748,11 @@ final class JvmIntFusionCompiler {
 			ctx.body.areturn();
 		}
 		MethodCode.Label tryEnd = ctx.body.newBoundLabel();
+		if (!canBail(pending)) {
+			// Nothing above can leave the fast path but a trusted leaf's failed cast,
+			// which is an error, not a bail: no fallback, no handler.
+			return;
+		}
 		// The IEEE double fast path: the same tree over leaves that are all Doubles,
 		// tried when the Long guards fail. It sits OUTSIDE the checked region -- an
 		// overflow means the exact integer result did not fit, which the fallback owns,
@@ -2634,6 +2786,21 @@ final class JvmIntFusionCompiler {
 			fallbackBails = doubleBails;
 		}
 		emitBailAndFallback(pending, ctx, state, fallbackBails, tryStart, tryEnd, className);
+	}
+
+	/**
+	 * A trusted leaf's check: anything but a {@code Long} fails the cast, an error
+	 * ({@code .kb/declarations-type-checks.md}, "The false-declaration policy"), never a
+	 * bail.
+	 * The cast stands behind its own {@code instanceof}: under the Graal JIT a bare
+	 * {@code checkcast} in a fused method made the sieve of {@code Sieve} run 0.8 s ->
+	 * 1.5 s, the branch the profile never takes back to 0.8 (C2 is indifferent, 1.4 s).
+	 */
+	private static void emitTrustedCheck(int slot, JvmLispCompiler.Ctx ctx) {
+		MethodCode.Label isLong = ctx.body.newLabel();
+		ctx.body.aload(slot).instanceOf(ctx.longClass).ifne(isLong);
+		ctx.body.aload(slot).checkcast(ctx.longClass).pop();
+		ctx.body.labelBinding(isLong);
 	}
 
 	/**
@@ -2926,7 +3093,8 @@ final class JvmIntFusionCompiler {
 	 */
 	private static boolean doubleEligible(Node root, List<Node> leaves) {
 		for (Node leaf : leaves) {
-			if (!(leaf instanceof ExprLeaf) && !(leaf instanceof RawLeaf)) {
+			// A trusted leaf is never a Double: past its cast the double path is dead.
+			if (!(leaf instanceof ExprLeaf e && !e.trusted) && !(leaf instanceof RawLeaf r && !r.trusted)) {
 				return false;
 			}
 		}
@@ -3181,6 +3349,85 @@ final class JvmIntFusionCompiler {
 				}
 			}
 		}
+	}
+
+	/**
+	 * Whether the method needs its fallback: a leaf it guards, an array read, a draw over
+	 * a computed limit, a substituted name's cell, or an operation of the fast path that
+	 * can throw (mirroring {@link #emitFast} and {@link #emitFastWrapped}).
+	 */
+	private static boolean canBail(Pending pending) {
+		for (Node leaf : pending.leaves()) {
+			boolean guarded = switch (leaf) {
+				case ExprLeaf l -> !l.trusted;
+				case RawLeaf l -> !l.trusted;
+				case RandomLeaf l -> l.limitExpr != null;
+				default -> true;
+			};
+			if (guarded) {
+				return true;
+			}
+		}
+		return fastThrows(pending.root());
+	}
+
+	private static boolean fastThrows(Node node) {
+		if (node instanceof CelledCall) {
+			return true;
+		}
+		if (!(node instanceof OpNode op)) {
+			return false;
+		}
+		String name = op.op();
+		List<Node> args = op.args();
+		if (LispNames.MASK_SIGNED_FIELD.equals(name)) {
+			return wrappedThrows(args.get(1));
+		}
+		if (LispNames.MOD.equals(name) && args.get(1) instanceof ConstLeaf c && c.value() > 0
+				&& Long.bitCount(c.value()) == 1) {
+			return wrappedThrows(args.get(0));
+		}
+		if (LispNames.ASH.equals(name) && args.get(1) instanceof ConstLeaf c && c.value() <= 0) {
+			return fastThrows(args.get(0));
+		}
+		if (LispNames.LOGAND.equals(name) && args.size() == 2) {
+			if (args.get(1) instanceof ConstLeaf m && m.value() >= 0) {
+				return wrappedThrows(args.get(0));
+			}
+			if (args.get(0) instanceof ConstLeaf m && m.value() >= 0) {
+				return wrappedThrows(args.get(1));
+			}
+		}
+		switch (name) {
+			case LispNames.LOGAND, LispNames.LOGIOR, LispNames.LOGXOR, LispNames.LOGNOT, CMP_ROOT -> {
+			}
+			// LREM throws for a zero divisor alone (MIN_VALUE % -1 is 0).
+			case LispNames.REM -> {
+				for (int i = 1; i < args.size(); i++) {
+					if (!(args.get(i) instanceof ConstLeaf c && c.value() != 0)) {
+						return true;
+					}
+				}
+			}
+			default -> {
+				return true;
+			}
+		}
+		return args.stream().anyMatch(JvmIntFusionCompiler::fastThrows);
+	}
+
+	private static boolean wrappedThrows(Node node) {
+		if (!(node instanceof OpNode op)) {
+			return fastThrows(node);
+		}
+		return switch (op.op()) {
+			case LispNames.ADD, LispNames.SUB, LispNames.MUL, LispNames.LOGAND, LispNames.LOGIOR, LispNames.LOGXOR,
+					LispNames.LOGNOT ->
+				op.args().stream().anyMatch(JvmIntFusionCompiler::wrappedThrows);
+			case LispNames.ASH -> op.args().get(1) instanceof ConstLeaf c && c.value() > 0 && c.value() < 64
+					? wrappedThrows(op.args().get(0)) : fastThrows(node);
+			default -> fastThrows(node);
+		};
 	}
 
 	private static void emitLongLoad(int slot, JvmLispCompiler.Ctx ctx) {

@@ -278,7 +278,7 @@ or `NIL`. A number is a number, a string a string, `null` is `NIL`, an object of
 structure, an `Object[]` a vector. A Common Lisp list is no `List`: hand a Java method a vector.
 An integer handed to an `int`, `long`, `short`, `byte` or `char` parameter must be one of the
 type's values: the compiled program takes it as that type declares (on wasm an integer past the
-type's range traps). An integer a `native` method answers for an `int`, `long`, `short` or
+type's range traps; on the JVM a value that is no integer is an error). An integer a `native` method answers for an `int`, `long`, `short` or
 `byte` is cut to the type's width, its low bits, as a value of the type is.
 
 ## The tools
