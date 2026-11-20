@@ -2791,8 +2791,7 @@ final class JvmIntFusionCompiler {
 	/**
 	 * A trusted leaf's check: anything but a {@code Long} fails the cast, an error
 	 * ({@code .kb/declarations-type-checks.md}, "The false-declaration policy"), never a
-	 * bail.
-	 * The cast stands behind its own {@code instanceof}: under the Graal JIT a bare
+	 * bail. The cast stands behind its own {@code instanceof}: under the Graal JIT a bare
 	 * {@code checkcast} in a fused method made the sieve of {@code Sieve} run 0.8 s ->
 	 * 1.5 s, the branch the profile never takes back to 0.8 (C2 is indifferent, 1.4 s).
 	 */
