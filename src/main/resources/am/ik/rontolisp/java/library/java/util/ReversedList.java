@@ -218,8 +218,9 @@ class ReversedList<E> extends AbstractList<E> {
     }
 
     public List<E> subList(int from, int to) {
-        Objects.checkFromToIndex(from, to, list.size());
-        return new AbstractList.SubList<>(this, from, to - from);
+        int size = list.size();
+        Objects.checkFromToIndex(from, to, size);
+        return new ReversedList<>(list.subList(size - to, size - from), changing);
     }
 
     public Spliterator<E> spliterator() {

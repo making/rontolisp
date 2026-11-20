@@ -32,8 +32,6 @@ public class LinkedList<E> extends AbstractSequentialList<E> implements List<E>,
 
     private int count;
 
-    private int changes;
-
     public LinkedList() {
     }
 
@@ -51,7 +49,7 @@ public class LinkedList<E> extends AbstractSequentialList<E> implements List<E>,
         }
         first = cell;
         count++;
-        changes++;
+        modCount++;
     }
 
     private void linkLast(E e) {
@@ -64,7 +62,7 @@ public class LinkedList<E> extends AbstractSequentialList<E> implements List<E>,
         }
         last = cell;
         count++;
-        changes++;
+        modCount++;
     }
 
     private void linkBefore(E e, Cell<E> place) {
@@ -78,7 +76,7 @@ public class LinkedList<E> extends AbstractSequentialList<E> implements List<E>,
             before.after = cell;
         }
         count++;
-        changes++;
+        modCount++;
     }
 
     private E unlink(Cell<E> cell) {
@@ -97,7 +95,7 @@ public class LinkedList<E> extends AbstractSequentialList<E> implements List<E>,
             after.before = before;
         }
         count--;
-        changes++;
+        modCount++;
         return cell.item;
     }
 
@@ -245,7 +243,7 @@ public class LinkedList<E> extends AbstractSequentialList<E> implements List<E>,
         first = null;
         last = null;
         count = 0;
-        changes++;
+        modCount++;
     }
 
     public void addFirst(E e) {
@@ -519,6 +517,10 @@ public class LinkedList<E> extends AbstractSequentialList<E> implements List<E>,
             return view.listIterator(index);
         }
 
+        public List<E> subList(int from, int to) {
+            return view.subList(from, to);
+        }
+
         public Iterator<E> descendingIterator() {
             return list.iterator();
         }
@@ -558,11 +560,11 @@ public class LinkedList<E> extends AbstractSequentialList<E> implements List<E>,
             this.list = list;
             this.ahead = index == list.count ? null : list.cell(index);
             this.index = index;
-            this.expected = list.changes;
+            this.expected = list.modCount;
         }
 
         private void unchanged() {
-            if (list.changes != expected) {
+            if (list.modCount != expected) {
                 throw new ConcurrentModificationException();
             }
         }
@@ -619,7 +621,7 @@ public class LinkedList<E> extends AbstractSequentialList<E> implements List<E>,
                 index--;
             }
             last = null;
-            expected = list.changes;
+            expected = list.modCount;
         }
 
         public void set(E e) {
@@ -640,7 +642,7 @@ public class LinkedList<E> extends AbstractSequentialList<E> implements List<E>,
                 list.linkBefore(e, ahead);
             }
             index++;
-            expected = list.changes;
+            expected = list.modCount;
         }
     }
 

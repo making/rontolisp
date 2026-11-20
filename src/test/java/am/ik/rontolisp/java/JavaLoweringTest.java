@@ -453,7 +453,7 @@ class JavaLoweringTest {
 		assertThat(forms).contains(
 				"(DEFSTRUCT (|java.util.ArrayList| (:INCLUDE |java.util.AbstractList|) (:CONC-NAME |java.util.ArrayList.|) "
 						+ "(:CONSTRUCTOR |%make-java.util.ArrayList| NIL) (:PREDICATE |java.util.ArrayList?|) (:COPIER "
-						+ "NIL)) (|items| NIL) (|count| 0) (|changes| 0))",
+						+ "NIL)) (|items| NIL) (|count| 0))",
 				"(DEFUN |Bag.iterator()| (|this|) (|java.util.ArrayList.iterator()| (OR (|Bag.items| |this|) "
 						+ "(RONTOLISP::%JAVA-NPE))))",
 				"(DEFUN |L4.main(String[])| (|args|) (LET ((|bag| (|Bag.new()|))) "
