@@ -526,6 +526,21 @@ algorithm came from, and the answer goes in the file's header.
   where a refused token leaves it, what a `hasNext` keeps and what drops it, the match each
   operation leaves, a scanner's text, `CharBuffer.hashCode`. The answers are lines of
   `java-spec.yaml`, which the JDK leg asks again.
+- **A `CopyOnWriteArrayList`'s part, what a stale part answers and `removeRange` (k74,
+  2026-11-21).** Written from the API documentation (what `subList`, `clear` and `removeRange`
+  state, that a copy-on-write list's iterator is a snapshot) and JDK 25's answers to probes
+  (`.todo/artefacts/k74-java-library-a-copy-on-write-list-s-sublist-and-a-stale-part-s-answers/probes/`:
+  `Cow.java` and `Cow2.java`, some 220 lines asking every member of a part after each change
+  that may or may not put another array in the list's place, the order of an index and the
+  refusal, the words; `Range.java`, `removeRange` of an `ArrayList`, a program's list and
+  their parts, which of `clear()` and a part's `clear()` reach it and in what order they
+  remove; k62's `Sub.java` and `Sub2.java` asked again). Nobody opened OpenJDK's source, and
+  the shape is its own: a part holds the array it saw and compares it by reference, where
+  the answers only say which changes leave a part fresh. What the documentation does not
+  state was read off the answers: those changes, the order of the refusals, that a part of a
+  part is as stale as a sibling is, the `removeRange` an `ArrayList` calls from a part and
+  its one change of the count. The answers are lines of `java-spec.yaml`, which the JDK leg
+  asks again.
 - **Computed resource names, `Properties`, `ResourceBundle`, `ServiceLoader` (k58,
   2026-11-20).** Written from the API documentation (`Properties.load`'s grammar and
   `store`'s escapes and order of keys, `ResourceBundle.getBundle`'s lookup with its

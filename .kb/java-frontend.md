@@ -2361,8 +2361,9 @@ order of an index error and the refusal, the iterators, `ArrayList`'s own count)
 
 - **A walk** (`IndexIterator`, `IndexWalk`) holds the count it saw and compares at `next`,
   `previous`, `remove`, `set` and `add`, re-reading it after its own change (`set` too: a
-  program's `set` may count); `hasNext` is `cursor != size()` as a JDK's, so a removal that
-  leaves the cursor past the end is a refusal at `next` and not a silent stop.
+  program's `set` may count); `hasNext` is `cursor != walkEnd()` (the list's size, a part's own
+  length: below), so a removal that leaves the cursor past the end is a refusal at `next` and
+  not a silent stop.
 - **A part** (`SubList`) keeps the root list (the part of a part has the same one) and the
   count it saw last in its own `modCount`; `size`, `get`, `set`, `add`, `remove`, `iterator`
   and `spliterator` compare it with the root's, after the index check for `get`, `set`,
@@ -2387,18 +2388,83 @@ order of an index error and the refusal, the iterators, `ArrayList`'s own count)
   128,183), of a program's own `AbstractList` and a walk 86,870 -> 88,385
   (`ConcurrentModificationException` itself is some 1 KB), with a part `SzSub` 140,055 ->
   141,754, `SzOwn` 90,896 -> 93,493; the sorted and hash maps and `Fo` unchanged. Measured
-  and not made: a `hasNext` that reads the part's own size so that a stale part does not
-  refuse there (`list instanceof SubList` in each walk) 800 B in `FlatOnly` and
-  `SzRemoveAll`; a part's own `subList` (the range checked before the change, shared with
-  `AbstractList`'s) with its iterator as the walk both ways: `SzOwn` 96,089 against 93,493
-  without them (a program iterating a part needs only `IndexIterator`).
-- **Left** (`deviations.md`, `.todo/k74`): `CopyOnWriteArrayList`'s part; what a stale part
-  answers where a JDK's differs (`hasNext`, `estimateSize`, the range errors, the part of a
-  `LinkedList` or a program's list); `removeRange`; the class name of a part.
+  and not made then: a `hasNext` that reads the part's own size by `list instanceof SubList`
+  in each walk (800 B in `FlatOnly` and `SzRemoveAll`; k74 made it as a method of
+  `AbstractList` the part overrides, below), and a part's own iterator as the walk both ways
+  (`SzOwn` 96,089 against 93,493 without it: a program iterating a part needs only
+  `IndexIterator`).
+- **What a stale part answers (k74, 2026-11-21)**, each a JDK 25's answer to a probe
+  (`.todo/artefacts/k74-java-library-a-copy-on-write-list-s-sublist-and-a-stale-part-s-answers/probes/`:
+  `Cow.java` 160 lines and `Cow2.java` 60 over a `CopyOnWriteArrayList`'s part, `Range.java`
+  over `removeRange`; `Sub.java` and `Sub2.java` of k62 asked again):
+  - **`hasNext` of a walk of a part** is `cursor != list.walkEnd()`, `walkEnd()` being
+    `size()` in `AbstractList` and the part's own length in `SubList`: a change behind the
+    part does not move it, so a walk past a removal at the tail stops (`false`) and one at a
+    stale part says `true`, and `next()` then refuses. No `instanceof`: `SzWalk` (a program's
+    own `AbstractList` and a walk) is the same size as before.
+  - **`subList` and `addAll(int, ..)` of a part** check the range against the part's own
+    length BEFORE the change is looked at (`toIndex = 9`, `fromIndex(2) > toIndex(1)`,
+    `Index: 9, Size: 2`); `subList` of a stale part then MAKES a part, which refuses when
+    it is used (a JDK's `ArrayList` part: the child's use is the refusal; its construction
+    is not); `addAll(i, nothing)` of a part answers `false` unchecked. `AbstractList.partRange`
+    is the one range check.
+  - **A part's spliterator** knows its size from when it was made
+    (`Splits.counted(c, marks, size)`: `estimateSize()` does not take the iterator), the
+    iterator at its first element, where a stale list refuses.
+  - **Measured**: `SzSub` 142,241 -> 142,587 (+346), `SzOwn` 93,420 -> 93,837 (+417), a
+    program of a `Vector` +21, of an `ArrayList` or `LinkedList` or an `AbstractList` with a
+    walk nothing.
+- **`removeRange` and `clear`**: `AbstractList.removeRange(from, to)` (protected) is
+  `remove(from)` repeated, after `Index: from, Size: n` for a `from` outside the list;
+  `AbstractList.clear()` is `removeRange(0, size())`, so it removes from the FRONT, a JDK's
+  order (a program's list logging its `remove(int)` shows it); a part's `removeRange` is
+  its parent's over the offset range, so `part.clear()` calls the ROOT's `removeRange` once
+  with the range of the whole (`range(2,4)` for a part of a part), and a class of the program
+  overriding it sees every clear. `ArrayList.removeRange` closes the gap in one move and is
+  one change of `modCount` (also for an empty range), `From Index: 3 > To Index: 1` for a
+  reversed one; it is not called by `ArrayList.clear()`, as a JDK's is not. A part's
+  `clear()` of an `ArrayList` is now one `arraycopy` where it was `remove(i)` per element.
+  Not the same: a range past the end of a program's list ends in that list's own refusal
+  where a JDK's is a `NoSuchElementException` with the list's as its cause. Measured:
+  `SzSubClear` (`list.subList(1, 4).clear()`) 140,177 -> 143,104, `SzOwnClear` (an
+  `AbstractList` of the program, a walk and `clear()`) 133,859 -> 135,355. A first draft
+  removed through `listIterator(from)` as the specification describes it and cost 9.7 KB and
+  7.7 KB: `listIterator` is a virtual call, and every walk of the program and the library
+  came with it.
+- **`CopyOnWriteArrayList`'s part** (`COWSubList`, the name and `RandomAccess` a JDK's):
+  the list, an offset, a size and the ARRAY the list had when the part was made or last
+  changed the list; every member but the ones through the iterator first compares the list's
+  array with it (`!=`), so a part of a part, a sibling and the parent refuse once one of them
+  changes the list (a JDK's parts are all flat over the list), and a change that leaves the
+  array as it was leaves the parts fresh: `addAll` and `removeIf` of nothing, `set` of the
+  element that is there (a reference comparison), `remove(Object)` of a missing one,
+  `retainAll` of everything, `addIfAbsent` of a present one, `clear()` of an empty list; and
+  one that always puts another array in its place does not (`sort`, `replaceAll`, a part's
+  `clear()` even of nothing). Its walks (`iterator`, `listIterator`, `spliterator`) are over
+  a copy of the part's range of the array there was, so `for (x : part) part.add(0, x)` runs
+  twice, as under a JDK, and change nothing. The order of the refusals is a JDK's: an index
+  of `get`, `set`, `remove` and `addAll(i, ..)` first (`Index: 9, Size: 2`), the change
+  first for `add(i, ..)`, `subList`, `listIterator` and `addAll(i, nothing)`. The list's own
+  `addAll(int, ..)` is one new array (it was a loop of `add`), `listIterator(9)` says
+  `Index: 9, Size: 6`. Measured: `SzCow` (a list, an add, a walk) 130,351 -> 130,372,
+  `SzCowSub` 140,930 -> 141,799 (the old part was `AbstractList`'s). A first draft gave the
+  list's walk a `lo` and a `hi` for the part: +499 B in every program holding the list.
+- **Left** (`deviations.md`): the part of a `LinkedList` or a program's list, which a JDK
+  builds from the ROOT's iterator, so its `subList` of a stale part makes a part that works,
+  its `next()` past the end is a `NoSuchElementException`, its `remove()` before `next()` a
+  `ConcurrentModificationException` (the `LinkedList`'s own iterator checks first). Those
+  and the class name are one cause: a JDK has two part classes (`ArrayList$SubList` and
+  `AbstractList$SubList`, with a `RandomAccessSubList` for a list that is `RandomAccess`) and
+  here there is one, `java.util.AbstractList$SubList`, `RandomAccess` kept by a flag. Not
+  made: a second class costs every program holding a part, and shows a program only
+  `getClass()` and answers of a part that is stale, which a JDK's program does not rely on.
+  A `CopyOnWriteArrayList` part's `trySplit` answers `null`, as no spliterator of the subset
+  splits.
 - Pins: java-spec `a-collection-is-java-source-and-a-program-s-class-can-be-one` (a walk
-  over a part of three lists, the count of a program's class, `ArrayList`'s moves),
-  `JavaLoweringTest#theLibraryIsJavaSourceLoweredAsFarAsTheProgramReaches` (`ArrayList`'s
-  struct holds no `changes`).
+  over a part of three lists, the count of a program's class, `ArrayList`'s moves, a
+  `CopyOnWriteArrayList`'s parts, a stale `ArrayList` part's answers, `removeRange` through
+  `clear()`), `JavaLoweringTest#theLibraryIsJavaSourceLoweredAsFarAsTheProgramReaches`
+  (`ArrayList`'s struct holds no `changes`).
 
 ## java.math (2026-11-20, k31)
 

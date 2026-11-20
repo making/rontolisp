@@ -150,6 +150,20 @@ public class ArrayList<E> extends AbstractList<E> implements RandomAccess {
         modCount++;
     }
 
+    // the elements from..to closed over in one move, which counts as one change
+    protected void removeRange(int from, int to) {
+        if (from > to) {
+            throw new IndexOutOfBoundsException("From Index: " + from + " > To Index: " + to);
+        }
+        modCount++;
+        System.arraycopy(items, to, items, from, count - to);
+        int kept = count - (to - from);
+        for (int i = kept; i < count; i++) {
+            items[i] = null;
+        }
+        count = kept;
+    }
+
     public boolean addAll(Collection<? extends E> c) {
         Object[] added = c.toArray();
         modCount++;

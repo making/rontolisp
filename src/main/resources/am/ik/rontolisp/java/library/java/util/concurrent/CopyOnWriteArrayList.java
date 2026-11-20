@@ -8,6 +8,7 @@ import java.util.Arrays;
 import java.util.Collection;
 import java.util.Collections;
 import java.util.Comparator;
+import java.util.ConcurrentModificationException;
 import java.util.Iterator;
 import java.util.List;
 import java.util.ListIterator;
@@ -72,10 +73,13 @@ public class CopyOnWriteArrayList<E> extends AbstractList<E> implements RandomAc
 
     @SuppressWarnings("unchecked")
     public synchronized E set(int index, E element) {
-        Object[] changed = this.items.clone();
-        Object old = changed[index];
-        changed[index] = element;
-        this.items = changed;
+        Object[] held = this.items;
+        Object old = held[index];
+        if (old != element) {
+            Object[] changed = held.clone();
+            changed[index] = element;
+            this.items = changed;
+        }
         return (E) old;
     }
 
@@ -125,6 +129,37 @@ public class CopyOnWriteArrayList<E> extends AbstractList<E> implements RandomAc
         System.arraycopy(more, 0, longer, held.length, more.length);
         this.items = longer;
         return true;
+    }
+
+    public synchronized boolean addAll(int index, Collection<? extends E> c) {
+        Object[] held = this.items;
+        if (index < 0 || index > held.length) {
+            throw new IndexOutOfBoundsException("Index: " + index + ", Size: " + held.length);
+        }
+        Object[] more = c.toArray();
+        if (more.length == 0) {
+            return false;
+        }
+        insertAt(index, more);
+        return true;
+    }
+
+    private synchronized void insertAt(int index, Object[] more) {
+        Object[] held = this.items;
+        Object[] longer = new Object[held.length + more.length];
+        System.arraycopy(held, 0, longer, 0, index);
+        System.arraycopy(more, 0, longer, index, more.length);
+        System.arraycopy(held, index, longer, index + more.length, held.length - index);
+        this.items = longer;
+    }
+
+    // the elements from..to closed over, in a new array whether or not there are any
+    private synchronized void dropRange(int from, int to) {
+        Object[] held = this.items;
+        Object[] shorter = new Object[held.length - (to - from)];
+        System.arraycopy(held, 0, shorter, 0, from);
+        System.arraycopy(held, to, shorter, from, held.length - to);
+        this.items = shorter;
     }
 
     @SuppressWarnings("unchecked")
@@ -179,7 +214,7 @@ public class CopyOnWriteArrayList<E> extends AbstractList<E> implements RandomAc
         if (from < 0 || to > size() || from > to) {
             throw new IndexOutOfBoundsException();
         }
-        return super.subList(from, to);
+        return new COWSubList<>(this, from, to - from);
     }
 
     @SuppressWarnings("unchecked")
@@ -199,7 +234,9 @@ public class CopyOnWriteArrayList<E> extends AbstractList<E> implements RandomAc
     }
 
     public synchronized void clear() {
-        this.items = new Object[0];
+        if (this.items.length > 0) {
+            this.items = new Object[0];
+        }
     }
 
     public Object[] toArray() {
@@ -234,7 +271,7 @@ public class CopyOnWriteArrayList<E> extends AbstractList<E> implements RandomAc
     public ListIterator<E> listIterator(int index) {
         Object[] held = this.items;
         if (index < 0 || index > held.length) {
-            throw new IndexOutOfBoundsException("Index: " + index);
+            throw new IndexOutOfBoundsException("Index: " + index + ", Size: " + held.length);
         }
         return new Snapshot<>(held, index);
     }
@@ -499,6 +536,229 @@ public class CopyOnWriteArrayList<E> extends AbstractList<E> implements RandomAc
 
         public void add(E e) {
             throw new UnsupportedOperationException();
+        }
+    }
+
+    // A part of the list, over the array the list had when the part was made or last changed
+    // it: a change made to the list any other way, through another part included, puts another
+    // array in its place and the part refuses with ConcurrentModificationException. Its
+    // walks are of the array there was.
+    private static final class COWSubList<E> extends AbstractList<E> implements RandomAccess {
+
+        private final CopyOnWriteArrayList<E> list;
+
+        private final int offset;
+
+        private int size;
+
+        private Object[] expected;
+
+        COWSubList(CopyOnWriteArrayList<E> list, int offset, int size) {
+            this.list = list;
+            this.offset = offset;
+            this.size = size;
+            this.expected = list.items;
+        }
+
+        private void fresh() {
+            if (list.items != expected) {
+                throw new ConcurrentModificationException();
+            }
+        }
+
+        private void inside(int index) {
+            if (index < 0 || index >= size) {
+                throw new IndexOutOfBoundsException("Index: " + index + ", Size: " + size);
+            }
+        }
+
+        private void insideOrEnd(int index) {
+            if (index < 0 || index > size) {
+                throw new IndexOutOfBoundsException("Index: " + index + ", Size: " + size);
+            }
+        }
+
+        public int size() {
+            synchronized (list) {
+                fresh();
+                return size;
+            }
+        }
+
+        public E get(int index) {
+            synchronized (list) {
+                inside(index);
+                fresh();
+                return list.get(offset + index);
+            }
+        }
+
+        public E set(int index, E element) {
+            synchronized (list) {
+                inside(index);
+                fresh();
+                E old = list.set(offset + index, element);
+                expected = list.items;
+                return old;
+            }
+        }
+
+        public void add(int index, E element) {
+            synchronized (list) {
+                fresh();
+                insideOrEnd(index);
+                list.add(offset + index, element);
+                expected = list.items;
+                size++;
+            }
+        }
+
+        public boolean addAll(Collection<? extends E> c) {
+            return addAll(size(), c);
+        }
+
+        public boolean addAll(int index, Collection<? extends E> c) {
+            synchronized (list) {
+                insideOrEnd(index);
+                Object[] more = c.toArray();
+                fresh();
+                if (more.length == 0) {
+                    return false;
+                }
+                list.insertAt(offset + index, more);
+                expected = list.items;
+                size += more.length;
+                return true;
+            }
+        }
+
+        public E remove(int index) {
+            synchronized (list) {
+                inside(index);
+                fresh();
+                E old = list.remove(offset + index);
+                expected = list.items;
+                size--;
+                return old;
+            }
+        }
+
+        public boolean remove(Object o) {
+            synchronized (list) {
+                int index = indexOf(o);
+                if (index < 0) {
+                    return false;
+                }
+                remove(index);
+                return true;
+            }
+        }
+
+        public void clear() {
+            synchronized (list) {
+                fresh();
+                list.dropRange(offset, offset + size);
+                expected = list.items;
+                size = 0;
+            }
+        }
+
+        @SuppressWarnings("unchecked")
+        public boolean removeIf(Predicate<? super E> filter) {
+            Objects.requireNonNull(filter);
+            synchronized (list) {
+                fresh();
+                Object[] held = list.items;
+                Object[] kept = new Object[size];
+                int count = 0;
+                for (int i = 0; i < size; i++) {
+                    Object each = held[offset + i];
+                    if (!filter.test((E) each)) {
+                        kept[count++] = each;
+                    }
+                }
+                if (count == size) {
+                    return false;
+                }
+                Object[] shorter = new Object[held.length - (size - count)];
+                System.arraycopy(held, 0, shorter, 0, offset);
+                System.arraycopy(kept, 0, shorter, offset, count);
+                System.arraycopy(held, offset + size, shorter, offset + count, held.length - offset - size);
+                list.items = shorter;
+                expected = shorter;
+                size = count;
+                return true;
+            }
+        }
+
+        public boolean removeAll(Collection<?> c) {
+            Objects.requireNonNull(c);
+            return removeIf(e -> c.contains(e));
+        }
+
+        public boolean retainAll(Collection<?> c) {
+            Objects.requireNonNull(c);
+            return removeIf(e -> !c.contains(e));
+        }
+
+        @SuppressWarnings("unchecked")
+        public void replaceAll(UnaryOperator<E> operator) {
+            Objects.requireNonNull(operator);
+            synchronized (list) {
+                fresh();
+                Object[] changed = list.items.clone();
+                for (int i = offset; i < offset + size; i++) {
+                    changed[i] = operator.apply((E) changed[i]);
+                }
+                list.items = changed;
+                expected = changed;
+            }
+        }
+
+        @SuppressWarnings("unchecked")
+        public void sort(Comparator<? super E> c) {
+            synchronized (list) {
+                fresh();
+                Object[] sorted = list.items.clone();
+                Arrays.sort((E[]) sorted, offset, offset + size, c);
+                list.items = sorted;
+                expected = sorted;
+            }
+        }
+
+        public List<E> subList(int from, int to) {
+            synchronized (list) {
+                fresh();
+                if (from < 0 || to > size || from > to) {
+                    throw new IndexOutOfBoundsException();
+                }
+                return new COWSubList<>(list, offset + from, to - from);
+            }
+        }
+
+        public Iterator<E> iterator() {
+            return listIterator(0);
+        }
+
+        public ListIterator<E> listIterator() {
+            return listIterator(0);
+        }
+
+        public ListIterator<E> listIterator(int index) {
+            synchronized (list) {
+                fresh();
+                insideOrEnd(index);
+                return new Snapshot<>(Arrays.copyOfRange(expected, offset, offset + size), index);
+            }
+        }
+
+        public Spliterator<E> spliterator() {
+            synchronized (list) {
+                fresh();
+                int marks = Spliterator.ORDERED | Spliterator.SIZED | Spliterator.IMMUTABLE | Spliterator.SUBSIZED;
+                Object[] range = Arrays.copyOfRange(expected, offset, offset + size);
+                return new Splits<E>(null, new Snapshot<>(range, 0), size, marks, true);
+            }
         }
     }
 }

@@ -257,16 +257,14 @@ JDK のメッセージは `remove` です。`List.of()`、`Set.of()`、`Map.of()
 更新し、`AbstractList` を継承するプログラムのクラスは、拒んでほしいときに自分で更新します。
 リストが別の経路で変更された一部は、そのメンバーで `ConcurrentModificationException` を
 投げます。背後で変更されたリストのイテレータも同じです。
-このような一部の答えのうち、JDK と異なるものがあります。リストが変更された一部では、JDK が
-答える `hasNext`、`estimateSize()`、スプリッテレータの `forEachRemaining` も拒みます。範囲外の範囲や
-添字（`subList`、添字を指定する `addAll`）は、範囲の誤りではなく変更の拒否になります。
-`LinkedList` の一部やプログラムのリストの一部は、JDK なら部分リストを作れる `subList` を拒みます。
-そのような一部のイテレータは、末尾を越えた `next()` で `ConcurrentModificationException` を
-投げます。JDK は `NoSuchElementException` です。`LinkedList` の一部のイテレータは `next()` 前の
-`remove()` で `IllegalStateException` を投げます。JDK は `ConcurrentModificationException` です。
-一部のクラスは
-`java.util.AbstractList$SubList` です。`CopyOnWriteArrayList` の一部は何も拒まず、そのイテレータは
-追加された要素を見ます。JDK では背後の変更を拒み、手元にあった要素を歩きます。
+`LinkedList` の一部やプログラムのリストの一部は、答えが JDK と異なる点があります。変更された
+一部の `subList` は、JDK なら部分リストを作れるところで拒みます。そのような一部のイテレータは、
+末尾を越えた `next()` で `ConcurrentModificationException` を投げます。JDK は
+`NoSuchElementException` です。`LinkedList` の一部のイテレータは `next()` 前の `remove()` で
+`IllegalStateException` を投げます。JDK は `ConcurrentModificationException` です。
+一部のクラスは `java.util.AbstractList$SubList` です。JDK の `ArrayList` の一部は
+`java.util.ArrayList$SubList` です。`CopyOnWriteArrayList` の一部は、JDK と同じく作られた
+ときの配列と比べて背後の変更を拒み、そのイテレータは手元にあった配列を歩きます。
 
 **`Math` の関数は `StrictMath` の関数です。** そのため、結果はどのバックエンドとプロセッサでも
 同じです。JDK の `Math.sin`、`Math.exp` などは、最後の桁がこれと異なることがあります。

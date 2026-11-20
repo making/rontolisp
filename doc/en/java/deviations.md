@@ -258,16 +258,14 @@ as a JDK's do, through the count `AbstractList.modCount` which `ArrayList`, `Lin
 `Vector` keep and a class of the program under `AbstractList` keeps up if it wants them to.
 A part of a list that was changed some other way refuses its members with
 `ConcurrentModificationException`, and so does an iterator of a list after a change made
-behind it. A few answers of such a part differ from a JDK's: `hasNext`, `estimateSize()` and the
-spliterator's `forEachRemaining` of a part whose list changed refuse where a JDK's answer; a
-range or an index outside such a part (`subList`, `addAll` at an index) is refused as the
-change is; the part of a `LinkedList` or of a program's list refuses `subList` where a JDK's
-makes one; the iterator of such a part throws `ConcurrentModificationException` for a `next()`
-past the end where a JDK's throws `NoSuchElementException`, and that of a `LinkedList`'s part
-`IllegalStateException` for a `remove()` before `next()` where a JDK's throws
-`ConcurrentModificationException`; the class of a part is `java.util.AbstractList$SubList`. A part of a
-`CopyOnWriteArrayList` refuses nothing and its iterator sees what is added, where a JDK's
-refuses a change made behind it and walks the elements it had.
+behind it. A part of a `LinkedList` or of a program's list differs from a JDK's in a few
+answers: a changed part refuses `subList` where a JDK's makes one, the iterator of such a
+part throws `ConcurrentModificationException` for a `next()` past the end where a JDK's
+throws `NoSuchElementException`, and that of a `LinkedList`'s part `IllegalStateException`
+for a `remove()` before `next()` where a JDK's throws `ConcurrentModificationException`.
+The class of a part is `java.util.AbstractList$SubList`, where a JDK's part of an
+`ArrayList` is `java.util.ArrayList$SubList`. A part of a `CopyOnWriteArrayList` compares
+the array it was made over, as a JDK's does, and its iterator walks the array there was.
 
 **The functions of `Math` are those of `StrictMath`**, so a result is the same on every
 backend and processor. A JDK's `Math.sin`, `Math.exp` and the like may differ from it in

@@ -4610,6 +4610,33 @@ cases:
           }
       }
 
+      class SourceListsRanges extends SourceListsLog {
+          final StringBuilder calls = new StringBuilder();
+
+          public Integer remove(int index) {
+              calls.append("remove(" + index + ") ");
+              return super.remove(index);
+          }
+
+          protected void removeRange(int from, int to) {
+              calls.append("range(" + from + "," + to + ") ");
+              super.removeRange(from, to);
+          }
+      }
+
+      class SourceListsShelf extends ArrayList<Integer> {
+          final StringBuilder calls = new StringBuilder();
+
+          protected void removeRange(int from, int to) {
+              calls.append("range(" + from + "," + to + ") ");
+              super.removeRange(from, to);
+          }
+
+          void cut(int from, int to) {
+              removeRange(from, to);
+          }
+      }
+
       class SourceLists {
           static String outcome(Runnable action) {
               try {
@@ -4617,6 +4644,15 @@ cases:
                   return "ok";
               } catch (RuntimeException e) {
                   return e.getClass().getSimpleName();
+              }
+          }
+
+          static String words(Runnable action) {
+              try {
+                  action.run();
+                  return "ok";
+              } catch (RuntimeException e) {
+                  return e.getClass().getSimpleName() + ": " + e.getMessage();
               }
           }
 
@@ -4708,6 +4744,47 @@ cases:
                   moved.append(outcome(walk::next)).append(' ');
               }
               System.out.println(moved.toString().trim());
+              // a CopyOnWriteArrayList's part compares the array it was made over, and its walk is of the array it had
+              java.util.concurrent.CopyOnWriteArrayList<Integer> cow = new java.util.concurrent.CopyOnWriteArrayList<>(List.of(0, 1, 2, 3, 4, 5));
+              List<Integer> cowPart = cow.subList(1, 3);
+              int[] cowSteps = {0};
+              for (Integer x : cowPart) {
+                  cowPart.add(0, x);
+                  cowSteps[0]++;
+              }
+              System.out.println(cowSteps[0] + " " + cow + " " + cowPart + " " + cowPart.getClass().getSimpleName() + " " + (cowPart instanceof RandomAccess));
+              List<Consumer<java.util.concurrent.CopyOnWriteArrayList<Integer>>> cowMoves = List.of(c -> c.add(9), c -> c.addAll(List.of()), c -> c.set(1, 1), c -> c.set(1, 7), c -> c.remove((Object) 99), c -> c.removeIf(x -> false), c -> c.removeIf(x -> x == 5), c -> c.sort(null), c -> c.clear(), c -> c.subList(1, 3).clear(), c -> c.subList(1, 3).addAll(1, List.of()), c -> c.subList(1, 3).set(0, 1));
+              StringBuilder cowSeen = new StringBuilder();
+              for (Consumer<java.util.concurrent.CopyOnWriteArrayList<Integer>> move : cowMoves) {
+                  java.util.concurrent.CopyOnWriteArrayList<Integer> c = new java.util.concurrent.CopyOnWriteArrayList<>(List.of(0, 1, 2, 3, 4, 5));
+                  List<Integer> p = c.subList(1, 4);
+                  move.accept(c);
+                  cowSeen.append(outcome(p::size).charAt(0));
+              }
+              Iterator<Integer> cowWalk = cowPart.iterator();
+              cow.add(7);
+              System.out.println(cowSeen + " " + cowWalk.hasNext() + cowWalk.next() + " " + words(() -> cowPart.get(9)) + " | " + words(() -> cowPart.add(9, 1)) + " | " + words(() -> cowPart.addAll(9, List.of(1))) + " | " + words(() -> cowPart.addAll(1, List.of())) + " | " + words(() -> cowPart.listIterator(9)));
+              List<Integer> cowFresh = cow.subList(0, 2);
+              System.out.println(words(() -> cowFresh.get(9)) + " | " + words(() -> cowFresh.add(9, 1)) + " | " + words(() -> cowFresh.listIterator(9)) + " | " + words(() -> cow.listIterator(99)) + " | " + words(() -> cowFresh.subList(1, 0)) + " | " + words(() -> cowFresh.iterator().remove()));
+              // a stale part of an ArrayList: what a JDK's still answers
+              ArrayList<Integer> al = new ArrayList<>(List.of(0, 1, 2, 3, 4, 5));
+              List<Integer> alPart = al.subList(1, 3);
+              Iterator<Integer> alWalk = alPart.iterator();
+              Spliterator<Integer> alSplit = alPart.spliterator();
+              alWalk.next();
+              alWalk.next();
+              al.remove(0);
+              al.add(9);
+              System.out.println(alWalk.hasNext() + " " + alSplit.estimateSize() + " " + words(() -> alPart.subList(0, 9)) + " | " + words(() -> alPart.subList(2, 1)) + " | " + words(() -> alPart.subList(0, 1)) + " | " + words(() -> alPart.addAll(9, List.of(1))) + " | " + words(() -> alPart.addAll(1, List.of())));
+              // clear is removeRange of the list, which a class of the program can change
+              SourceListsRanges ranges = new SourceListsRanges();
+              ranges.subList(1, 4).subList(0, 2).clear();
+              ranges.clear();
+              SourceListsShelf shelf = new SourceListsShelf();
+              shelf.addAll(List.of(0, 1, 2, 3, 4, 5));
+              shelf.subList(1, 5).subList(1, 3).clear();
+              shelf.subList(0, 1).clear();
+              System.out.println(ranges.calls.toString().trim() + " " + ranges + " " + ranges.changes() + " | " + shelf.calls.toString().trim() + " " + shelf + " " + words(() -> shelf.cut(3, 1)));
           }
       }
     expected: |
@@ -4727,6 +4804,11 @@ cases:
       SourceListsLog ConcurrentModificationException ConcurrentModificationException ConcurrentModificationException ConcurrentModificationException IndexOutOfBoundsException IndexOutOfBoundsException ConcurrentModificationException ConcurrentModificationException ok
       2 [9, 0, 1, 1, 2, 3]
       ok ok ok ConcurrentModificationException ConcurrentModificationException ConcurrentModificationException ConcurrentModificationException ConcurrentModificationException
+      2 [0, 2, 1, 1, 2, 3, 4, 5] [2, 1, 1, 2] COWSubList true
+      CooCooCCCCoo true2 IndexOutOfBoundsException: Index: 9, Size: 4 | ConcurrentModificationException: null | IndexOutOfBoundsException: Index: 9, Size: 4 | ConcurrentModificationException: null | ConcurrentModificationException: null
+      IndexOutOfBoundsException: Index: 9, Size: 2 | IndexOutOfBoundsException: Index: 9, Size: 2 | IndexOutOfBoundsException: Index: 9, Size: 2 | IndexOutOfBoundsException: Index: 99, Size: 9 | IndexOutOfBoundsException: null | UnsupportedOperationException: null
+      false 2 IndexOutOfBoundsException: toIndex = 9 | IllegalArgumentException: fromIndex(2) > toIndex(1) | ok | IndexOutOfBoundsException: Index: 9, Size: 2 | ok
+      range(1,3) remove(1) remove(1) range(0,2) remove(0) remove(0) [] 4 | range(2,4) range(0,1) [1, 4, 5] IndexOutOfBoundsException: From Index: 3 > To Index: 1
   # A HashMap finds a key by its hashCode and equals, a class of the program included,
   # and walks its table in the order the JDK's does: the folded hash, a table that
   # doubles, chains in the order put (compute and merge put ahead), and the lengths a

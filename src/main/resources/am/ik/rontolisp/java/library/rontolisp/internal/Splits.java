@@ -31,6 +31,9 @@ public final class Splits<T> implements Spliterator<T> {
     // the order a SORTED one reports: null for the elements' own
     private Comparator<? super T> order;
 
+    // a size taken when it was made: asking for it does not take the iterator
+    private boolean known;
+
     // size: -1 for the source's size when the iterator is taken
     public Splits(Collection<? extends T> source, Iterator<? extends T> each, long size, int marks, boolean counted) {
         this.source = source;
@@ -46,6 +49,14 @@ public final class Splits<T> implements Spliterator<T> {
 
     public static <T> Spliterator<T> counted(Collection<? extends T> source, int marks) {
         return new Splits<>(source, null, -1, marks, true);
+    }
+
+    // a counted one whose size is the one it has now, and which takes the collection's
+    // iterator only at its first element
+    public static <T> Spliterator<T> counted(Collection<? extends T> source, int marks, long size) {
+        Splits<T> split = new Splits<>(source, null, size, marks, true);
+        split.known = true;
+        return split;
     }
 
     // a collection that does not know its size without walking it (a concurrent queue)
@@ -100,7 +111,9 @@ public final class Splits<T> implements Spliterator<T> {
     }
 
     public long estimateSize() {
-        bound();
+        if (!known) {
+            bound();
+        }
         return size;
     }
 

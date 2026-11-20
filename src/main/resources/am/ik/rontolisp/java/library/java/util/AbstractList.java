@@ -72,8 +72,17 @@ public abstract class AbstractList<E> extends AbstractCollection<E> implements L
     }
 
     public void clear() {
-        for (int i = size() - 1; i >= 0; i--) {
-            remove(i);
+        removeRange(0, size());
+    }
+
+    // what clear() and the clear of a part call: the elements from..to removed, each by
+    // remove(from)
+    protected void removeRange(int from, int to) {
+        if (from < 0 || from > size()) {
+            throw new IndexOutOfBoundsException("Index: " + from + ", Size: " + size());
+        }
+        for (int i = to - from; i > 0; i--) {
+            remove(from);
         }
     }
 
@@ -93,16 +102,25 @@ public abstract class AbstractList<E> extends AbstractCollection<E> implements L
     }
 
     public List<E> subList(int from, int to) {
+        partRange(from, to, size());
+        return new SubList<>(this, from, to - from);
+    }
+
+    static void partRange(int from, int to, int size) {
         if (from < 0) {
             throw new IndexOutOfBoundsException("fromIndex = " + from);
         }
-        if (to > size()) {
+        if (to > size) {
             throw new IndexOutOfBoundsException("toIndex = " + to);
         }
         if (from > to) {
             throw new IllegalArgumentException("fromIndex(" + from + ") > toIndex(" + to + ")");
         }
-        return new SubList<>(this, from, to - from);
+    }
+
+    // the size a walk of this list stops at: a part's own, which a change behind it does not move
+    int walkEnd() {
+        return size();
     }
 
     public boolean equals(Object o) {
@@ -150,7 +168,7 @@ public abstract class AbstractList<E> extends AbstractCollection<E> implements L
         }
 
         public boolean hasNext() {
-            return cursor != list.size();
+            return cursor != list.walkEnd();
         }
 
         public E next() {
@@ -203,7 +221,7 @@ public abstract class AbstractList<E> extends AbstractCollection<E> implements L
         }
 
         public boolean hasNext() {
-            return cursor != list.size();
+            return cursor != list.walkEnd();
         }
 
         public E next() {
@@ -304,12 +322,39 @@ public abstract class AbstractList<E> extends AbstractCollection<E> implements L
         public Spliterator<E> spliterator() {
             fresh();
             int marks = Spliterator.ORDERED | Spliterator.SIZED | Spliterator.SUBSIZED;
-            return random ? Splits.counted(this, marks) : Splits.of(this, marks);
+            // the size it has now, which a change made after answers no differently
+            return random ? Splits.counted(this, marks, length) : Splits.of(this, marks);
         }
 
         public int size() {
             fresh();
             return length;
+        }
+
+        int walkEnd() {
+            return length;
+        }
+
+        public List<E> subList(int from, int to) {
+            partRange(from, to, length);
+            return new SubList<>(this, from, to - from);
+        }
+
+        public boolean addAll(int index, Collection<? extends E> c) {
+            if (index < 0 || index > length) {
+                throw new IndexOutOfBoundsException("Index: " + index + ", Size: " + length);
+            }
+            if (c.isEmpty()) {
+                return false;
+            }
+            return super.addAll(index, c);
+        }
+
+        protected void removeRange(int from, int to) {
+            fresh();
+            whole.removeRange(offset + from, offset + to);
+            modCount = root.modCount;
+            length -= to - from;
         }
 
         public Iterator<E> iterator() {
