@@ -3563,15 +3563,16 @@ class of a package of our own was needed (`deviations.md`, "The HTTP server").
   do (`.kb/wasm-int-fusion.md`, "Ranges, and sites with nothing to bail on"). A Common Lisp vector of
   another representation handed to a parameter is a false declaration (`doc/*/java/index.md`).
 - **Measured** (k64, base `303deba92`; bytes of wasm, CPU seconds best of 2-4 on a loaded
-  64-core box): the zone reader 13,217 -> 12,765 (`region` 7,012 -> 6,975, `find` 3,046 ->
+  64-core box; the programs and the script in
+  `.todo/artefacts/k64-java-wasm-an-array-the-types-prove-takes-the-generic-dispatch/`): the zone reader 13,217 -> 12,765 (`region` 7,012 -> 6,975, `find` 3,046 ->
   2,779, `rule` 2,355 -> 2,208), its instance methods `placed` 5,166 -> 2,793 and `ruled` 4,829
   -> 3,028; `ZonedDateTime.of(.., ZoneId.of("Europe/Paris")).plusHours(1)` 173,105 -> 166,183;
   `Sieve` 21,305 -> 19,699; `SieveLoop` 18,402 -> 16,797, its time 8.2-9.0 -> 7.6-8.3 s (a
   sieve of 50,000,000 bound by memory); YAVI `Booking.java` 1,128,428 -> 1,125,245,
   `Member.java` 648,210 -> 646,545; 2,000,000 offsets of an instant and a local date-time in
   Europe/Paris 4.83 -> 2.59 s; a `long[1000]` summed 10^5 times 93.8 -> 1.44 s
-  (`.kb/wasm-int-fusion.md`). The JVM (65,079 -> 65,003 B, the times) and the interpreter are
-  unchanged. **The premise was the dispatch's bytes, and it held only where nothing had pinned
+  (`.kb/wasm-int-fusion.md`). The JVM (that offsets program's jar 65,079 -> 65,003 B, both
+  times) and the interpreter are unchanged. **The premise was the dispatch's bytes, and it held only where nothing had pinned
   the array**: the type-test fold had already cut each undeclared site of the reader to the
   general arm, `region`'s arrays were general by their `make-array` inits, and a general
   array's `length` at the speed levels is a 57 B arm where the call is 3 (nine in `region`).
