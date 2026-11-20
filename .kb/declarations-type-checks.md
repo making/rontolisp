@@ -174,7 +174,9 @@ What the Java front end lowers every `int` and `long` operation to (`.kb/java-fr
   as for arrays): a defun's and a lambda's head (`functionBodyDeclaredIntegers`, through a sole
   `block` wrap) and a `let`'s, bound and free names, into `Ctx.declaredIntegers`, scoped and
   shadowed as `Ctx.declaredArrays` is (an inline `((lambda (v) ..) x)` shadows both since
-  2026-11-20: a declared array of the same name around it trapped on the cast). `let*` puts
+  2026-11-20: a declared array of the same name around it trapped on the cast; a
+  `handler-case` variable and a counted `dotimes` one too, every binder but
+  `let` through `WasmShadowedNames`). `let*` puts
   every declaration in its innermost `let`, so an outer binding's is free there, its reads
   trusted and its slot not kept raw. Specials are left out; nothing at top level or in an
   async body.

@@ -1617,6 +1617,9 @@ class WasmLispCompilerIntegrationTest {
 		// are taken raw with no fallback; a fixnum alone proves no bound, so loose
 		// doubles a bignum. Java's int and long arithmetic, which is what the front end
 		// lowers to; the interpreter's output, and a JDK's for the hash and the shifts.
+		// A handler-case clause's variable is no outer binding of its name: not hc's raw
+		// e, not its celled k, not nd's declared n (each read the outer one until
+		// 2026-11-20).
 		String declared = """
 				(deftype int32 () '(signed-byte 32))
 				(defun step32 (h c)
@@ -1642,18 +1645,32 @@ class WasmLispCompilerIntegrationTest {
 				(defun loose (n)
 				  (declare (type fixnum n))
 				  (+ n n))
+				(defun hc (n)
+				  (let ((e 0) (k n))
+				    (dotimes (i n) (setq e (logand (+ e i) 255)))
+				    (let ((f (lambda () k)))
+				      (list (handler-case (error "boom") (error (e) (princ-to-string e)))
+				            (handler-case (list e) (:no-error (e) e))
+				            (handler-case (error "cell") (error (k) (list (princ-to-string k) (funcall f))))))))
+				(defun nd (n)
+				  (declare (type (integer 0 100) n))
+				  (handler-case (expt 2 n) (:no-error (n) (+ n 1))))
 				(print (hash32 "the quick brown fox jumps over the lazy dog"))
 				(print (lanes 9223372036854775807 3))
 				(print (lanes -9223372036854775808 63))
 				(print (mapcar #'digit '(48 57 65 70)))
 				(print (loose (expt 2 70)))
+				(print (hc 5))
+				(print (nd 70))
 				""";
 		String declaredExpected = """
 				-2082818701
 				(2859235813007982803 357404476625997850 4427142430354310808 2859235813007982803 T)
 				(-9223372036854775808 -1 0 -18446744073709551616 NIL)
 				(0 9 10 15)
-				2361183241434822606848""";
+				2361183241434822606848
+				("boom" (10) ("cell" 5))
+				1180591620717411303425""";
 		assertThat(compileAndRun(declared)).isEqualTo(declaredExpected);
 		assertThat(compileComponentAndRun(declared)).isEqualTo(declaredExpected);
 		// A false declaration is a trap where the trusted value meets it, never a wrong
@@ -2326,7 +2343,9 @@ class WasmLispCompilerIntegrationTest {
 		// its length honours the fill pointer inline, before and after a push grows the
 		// storage. A lambda's parameter is no declared variable of the same name around
 		// it: shadowed's inner v is a string (it trapped on the u8 cast until
-		// 2026-11-20). Both optimize levels must agree with each other and with the
+		// 2026-11-20), and neither is a handler-case variable or a dotimes counter, nor
+		// a lambda's w the array the outer w holds (each trapped until 2026-11-20). Both
+		// optimize levels must agree with each other and with the
 		// interpreter/JVM text.
 		String program = """
 				(deftype octet-vec (&optional length)
@@ -2361,7 +2380,12 @@ class WasmLispCompilerIntegrationTest {
 				  (+ (aref v 0) (length v)))
 				(defun shadowed (v)
 				  (declare (type (simple-array (unsigned-byte 8) (*)) v))
-				  (+ (aref v 0) ((lambda (v) (length v)) "abcde")))
+				  (let ((w (make-array (length v) :element-type '(unsigned-byte 8))))
+				    (list (+ (aref v 0) ((lambda (v) (length v)) "abcde"))
+				          (handler-case "abc" (:no-error (v) (length v)))
+				          (handler-case (dotimes (v 1) (length v)) (error () :err))
+				          ((lambda (w) (fill w 0)) (list 1 2))
+				          (length w))))
 				(let ((u32 (make-array 3 :element-type '(unsigned-byte 32)))
 				      (f (make-array 2 :element-type 'double-float :initial-element 0.5d0))
 				      (gen (make-array 2)))
@@ -2422,7 +2446,7 @@ class WasmLispCompilerIntegrationTest {
 				T
 				900
 				5
-				12""");
+				(12 3 :ERR (0 0) 2)""");
 	}
 
 	@Test

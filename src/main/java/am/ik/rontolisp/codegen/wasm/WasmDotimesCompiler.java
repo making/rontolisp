@@ -2,7 +2,6 @@ package am.ik.rontolisp.codegen.wasm;
 
 import java.util.ArrayList;
 import java.util.HashMap;
-import java.util.HashSet;
 import java.util.List;
 import java.util.Map;
 import java.util.Set;
@@ -126,26 +125,16 @@ final class WasmDotimesCompiler {
 
 		int slot = ctx.allocI64Temp();
 		Map<String, Integer> savedLocals = ctx.locals;
-		Map<String, WasmIntFusionCompiler.RawLocal> savedRawLocals = ctx.rawLocals;
-		Map<String, WasmIntFusionCompiler.LocalIntLambda> savedLocalLambdas = ctx.localIntLambdas;
-		Set<String> savedBoxed = ctx.boxedVars;
 		int savedNextI64Local = ctx.nextI64Local;
 		// The binding SHADOWS whatever the name meant outside, in every representation
 		// the reader compilers consult (WasmExprCompiler.compileSymbolRef order: raw
-		// locals, ordinary locals, captures, module globals).
+		// locals, ordinary locals, captures, module globals) and every declared fact.
 		ctx.locals = new HashMap<>(savedLocals);
 		ctx.locals.remove(name);
-		Map<String, WasmIntFusionCompiler.RawLocal> rawLocals = new HashMap<>(savedRawLocals);
+		WasmShadowedNames outer = WasmShadowedNames.shadow(List.of(name), ctx);
+		Map<String, WasmIntFusionCompiler.RawLocal> rawLocals = new HashMap<>(ctx.rawLocals);
 		rawLocals.put(name, WasmIntFusionCompiler.RawLocal.counted(slot, 0, count.value()));
 		ctx.rawLocals = rawLocals;
-		if (savedLocalLambdas.containsKey(name)) {
-			ctx.localIntLambdas = new HashMap<>(savedLocalLambdas);
-			ctx.localIntLambdas.remove(name);
-		}
-		if (savedBoxed.contains(name)) {
-			ctx.boxedVars = new HashSet<>(savedBoxed);
-			ctx.boxedVars.remove(name);
-		}
 
 		// The %block boundary dotimes wraps its expansion in: a bare (return v) inside
 		// the body exits the whole form carrying v.
@@ -200,10 +189,8 @@ final class WasmDotimesCompiler {
 		ctx.wasmCtrlDepth--;
 		ctx.writer.write(Instruction.END); // %block
 
-		ctx.boxedVars = savedBoxed;
 		ctx.locals = savedLocals;
-		ctx.localIntLambdas = savedLocalLambdas;
-		ctx.rawLocals = savedRawLocals;
+		outer.restore(ctx);
 		ctx.nextI64Local = savedNextI64Local;
 		return true;
 	}

@@ -45,7 +45,10 @@ shadow, INCLUDING nil". Sentinel: a private `TYPE_CELL` in an immutable module g
   heuristic; precision affects performance only, since `compileRawStore` boxes what does not
   classify.
 - Scoping mirrors `ctx.locals`. A name in `rawLocals` is never in `ctx.locals`
-  (`WasmDefvarCompiler` checks both).
+  (`WasmDefvarCompiler` checks both). **Every binder removes the names it binds from `rawLocals`
+  and the other name-keyed facts** (`WasmShadowedNames`: an inline lambda, a `handler-case`
+  clause, a counted `dotimes`; `WasmLetCompiler` inline), since a reader asks `rawLocals` first:
+  a `handler-case` variable read the outer raw local of its name until 2026-11-20.
 
 ## The exact flavour (`RawLocal.exact`, 2026-11-09)
 
