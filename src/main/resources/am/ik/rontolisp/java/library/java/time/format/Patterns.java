@@ -5,10 +5,11 @@
 // A pattern's letters made the parts of a formatter, as the API documentation's table of
 // letters and counts gives them. The refusals and their order (a count is refused before
 // a letter the subset lacks) are a JDK 25's answers. The letters of weeks, quarters, the
-// modified Julian day, a zone's name in words and a day's period make their parts only in
-// a program whose patterns can name them: the compiler notes the letters of each pattern
-// it sees, all of them for one computed where the program runs, and z for a localized
-// form whose time can be full or long (weeks(), quarters(), julian(), zones(), periods()).
+// modified Julian day, a zone's name in words, a day's period and an offset as GMT and its
+// hours make their parts only in a program whose patterns can name them: the compiler
+// notes the letters of each pattern it sees, all of them for one computed where the
+// program runs, and z for a localized form whose time can be full or long (weeks(),
+// quarters(), julian(), zones(), periods(), localizedOffsets()).
 package java.time.format;
 
 import java.time.LocalDate;
@@ -40,6 +41,9 @@ final class Patterns {
 
     /** Whether one can name a period of the day: B. */
     static native boolean periods();
+
+    /** Whether one can name an offset as GMT and its hours: O, or Z four times. */
+    static native boolean localizedOffsets();
 
     static void read(DateTimeFormatterBuilder builder, String pattern) {
         for (int at = 0; at < pattern.length(); at++) {
@@ -272,8 +276,11 @@ final class Patterns {
                 if (count != 1 && count != 4) {
                     throw new IllegalArgumentException("Pattern letter count must be 1 or 4: " + c);
                 }
-                builder.appendLocalizedOffset(count == 4 ? TextStyle.FULL : TextStyle.SHORT);
-                return;
+                if (localizedOffsets()) {
+                    builder.appendLocalizedOffset(count == 4 ? TextStyle.FULL : TextStyle.SHORT);
+                    return;
+                }
+                throw unsupported(c);
             case 'X':
             case 'x':
                 if (count > 5) {
@@ -286,9 +293,13 @@ final class Patterns {
                     throw tooMany(c);
                 }
                 if (count == 4) {
-                    builder.appendLocalizedOffset(TextStyle.FULL);
+                    if (localizedOffsets()) {
+                        builder.appendLocalizedOffset(TextStyle.FULL);
+                        return;
+                    }
+                    throw unsupported(c);
                 }
-                else if (count == 5) {
+                if (count == 5) {
                     builder.appendOffset("+HH:MM:ss", "Z");
                 }
                 else {

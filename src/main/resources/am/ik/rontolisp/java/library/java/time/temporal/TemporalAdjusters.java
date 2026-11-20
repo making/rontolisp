@@ -93,9 +93,18 @@ public final class TemporalAdjusters {
         return back(dayOfWeek, true);
     }
 
+    /** A day of the week's value; a null one refused in a JDK 25's words. */
+    private static int value(DayOfWeek dayOfWeek) {
+        if (dayOfWeek == null) {
+            throw new NullPointerException(
+                    "Cannot invoke \"java.time.DayOfWeek.getValue()\" because \"dayOfWeek\" is null");
+        }
+        return dayOfWeek.getValue();
+    }
+
     /** The days forward to a day of the week: up to seven, none where same and it is that day. */
     private static TemporalAdjuster forward(DayOfWeek dayOfWeek, boolean same) {
-        int wanted = dayOfWeek.getValue();
+        int wanted = value(dayOfWeek);
         return temporal -> {
             int days = Math.floorMod(wanted - temporal.get(ChronoField.DAY_OF_WEEK), 7);
             if (days == 0) {
@@ -106,7 +115,7 @@ public final class TemporalAdjusters {
     }
 
     private static TemporalAdjuster back(DayOfWeek dayOfWeek, boolean same) {
-        int wanted = dayOfWeek.getValue();
+        int wanted = value(dayOfWeek);
         return temporal -> {
             int days = Math.floorMod(temporal.get(ChronoField.DAY_OF_WEEK) - wanted, 7);
             if (days == 0) {

@@ -14,6 +14,7 @@ import java.time.temporal.TemporalField;
 import java.time.temporal.TemporalQueries;
 import java.time.temporal.UnsupportedTemporalTypeException;
 import java.time.zone.ZoneRules;
+import java.util.Objects;
 
 public final class ZoneOffset extends ZoneId implements TemporalAccessor, TemporalAdjuster, Comparable<ZoneOffset> {
 
@@ -132,6 +133,7 @@ public final class ZoneOffset extends ZoneId implements TemporalAccessor, Tempor
     }
 
     public static ZoneOffset from(TemporalAccessor temporal) {
+        Objects.requireNonNull(temporal, "temporal");
         if (temporal instanceof ZoneOffset offset) {
             return offset;
         }

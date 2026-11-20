@@ -18735,6 +18735,229 @@ standalone:
       in the evening: 19:30
       15 in the morning: Text '15 in the morning' could not be parsed: Conflict found: Resolved time 15:00 conflicts with DayPeriod(00:00-12:00) @0
       strictly: {},ISO
+  - name: a-formatters-decimal-style-a-reading-from-a-position-the-fields-it-resolves-and-a-calendars-map
+    file: Decimals.java
+    source: |
+      import java.text.FieldPosition;
+      import java.text.Format;
+      import java.text.ParseException;
+      import java.text.ParsePosition;
+      import java.time.*;
+      import java.time.chrono.*;
+      import java.time.format.*;
+      import java.time.temporal.*;
+      import java.util.*;
+      import java.util.function.Supplier;
+
+      public class Decimals {
+          static String shown(Object value) {
+              String text = String.valueOf(value);
+              StringBuilder sorted = new StringBuilder();
+              int at = 0;
+              while (true) {
+                  int open = text.indexOf('{', at);
+                  int close = open < 0 ? -1 : text.indexOf('}', open + 1);
+                  if (close < 0) {
+                      return sorted.append(text.substring(at)).toString();
+                  }
+                  String[] fields = text.substring(open + 1, close).split(", ");
+                  Arrays.sort(fields);
+                  sorted.append(text, at, open + 1).append(String.join(", ", fields)).append('}');
+                  at = close + 1;
+              }
+          }
+
+          static void attempt(String what, Supplier<Object> made) {
+              try {
+                  System.out.println(what + ": " + shown(made.get()));
+              }
+              catch (DateTimeParseException e) {
+                  System.out.println(what + ": " + shown(e.getMessage()) + " @" + e.getErrorIndex());
+              }
+              catch (RuntimeException e) {
+                  System.out.println(what + ": " + shown(e));
+              }
+          }
+
+          interface Call {
+              Object call() throws Exception;
+          }
+
+          static void checked(String what, Call made) {
+              try {
+                  System.out.println(what + ": " + shown(made.call()));
+              }
+              catch (ParseException e) {
+                  System.out.println(what + ": " + e.getMessage() + " offset " + e.getErrorOffset() + " cause " + e.getCause());
+              }
+              catch (Exception e) {
+                  System.out.println(what + ": " + e);
+              }
+          }
+
+          // a calendar of the program's own, over ISO's dates
+          static final class Thin extends AbstractChronology {
+              public String getId() { return "Thin"; }
+              public String getCalendarType() { return "thin"; }
+              public ChronoLocalDate date(int prolepticYear, int month, int dayOfMonth) { return LocalDate.of(prolepticYear, month, dayOfMonth); }
+              public ChronoLocalDate dateYearDay(int prolepticYear, int dayOfYear) { return LocalDate.ofYearDay(prolepticYear, dayOfYear); }
+              public ChronoLocalDate dateEpochDay(long epochDay) { return LocalDate.ofEpochDay(epochDay); }
+              public ChronoLocalDate date(TemporalAccessor temporal) { return LocalDate.from(temporal); }
+              public boolean isLeapYear(long prolepticYear) { return Year.isLeap(prolepticYear); }
+              public int prolepticYear(Era era, int yearOfEra) { return era == IsoEra.CE ? yearOfEra : 1 - yearOfEra; }
+              public Era eraOf(int eraValue) { return IsoEra.of(eraValue); }
+              public List<Era> eras() { return List.of(IsoEra.BCE, IsoEra.CE); }
+              public ValueRange range(ChronoField field) { return field.range(); }
+          }
+
+          static String resolved(Chronology chronology, ResolverStyle style, Object... pairs) {
+              Map<TemporalField, Long> map = new HashMap<>();
+              for (int i = 0; i < pairs.length; i += 2) {
+                  map.put((TemporalField) pairs[i], ((Number) pairs[i + 1]).longValue());
+              }
+              String date;
+              try {
+                  date = String.valueOf(chronology.resolveDate(map, style));
+              }
+              catch (RuntimeException e) {
+                  date = e.getMessage();
+              }
+              List<String> left = new ArrayList<>();
+              for (Map.Entry<TemporalField, Long> entry : map.entrySet()) {
+                  left.add(entry.getKey() + "=" + entry.getValue());
+              }
+              Collections.sort(left);
+              return date + " " + left;
+          }
+
+          public static void main(String[] args) {
+              // the characters of the numbers: written and read in a decimal style of the program's
+              DecimalStyle style = DecimalStyle.STANDARD.withZeroDigit('a').withPositiveSign('p').withNegativeSign('n')
+                  .withDecimalSeparator(',');
+              System.out.println(DecimalStyle.STANDARD + " " + DecimalStyle.STANDARD.hashCode() + " " + style + " " + style.hashCode()
+                  + " " + (DecimalStyle.of(Locale.UK) == DecimalStyle.STANDARD) + " " + style.equals(DecimalStyle.STANDARD));
+              DateTimeFormatter numbers = DateTimeFormatter.ofPattern("uuuu-MM-dd HH:mm:ss.SSS xxx", Locale.US).withDecimalStyle(style);
+              OffsetDateTime when = OffsetDateTime.of(-2026, 3, 7, 9, 5, 4, 120000000, ZoneOffset.ofHours(9));
+              String written = numbers.format(when);
+              System.out.println(written + " " + numbers.parse(written, OffsetDateTime::from) + " " + numbers.getDecimalStyle());
+              System.out.println(DateTimeFormatter.ISO_INSTANT.withDecimalStyle(style).format(when) + " "
+                  + DateTimeFormatter.ofPattern("OOOO D", Locale.US).withDecimalStyle(style).format(when));
+              attempt("ASCII digits", () -> numbers.parse("2026-03-07 09:05:04.120 +09:00"));
+              attempt("by the UK", () -> numbers.localizedBy(Locale.UK).getDecimalStyle() + " " + numbers.withLocale(Locale.UK).getDecimalStyle());
+              // a reading from a position, resolved or not
+              DateTimeFormatter dates = DateTimeFormatter.ofPattern("uuuu-MM-dd");
+              for (int start : new int[] {4, 9, 30}) {
+                  ParsePosition position = new ParsePosition(start);
+                  attempt("unresolved from " + start, () -> dates.parseUnresolved("abc 2026-13-07 tail", position) + " " + position);
+                  ParsePosition again = new ParsePosition(start);
+                  attempt("resolved from " + start, () -> dates.parse("abc 2026-03-07 tail", again) + " " + again);
+              }
+              attempt("resolved refused", () -> dates.parse("abc 2026-13-07 tail", new ParsePosition(4)));
+              attempt("an index error inside", () -> DateTimeFormatter.ofPattern("OOOO").parse("GMT+1", new ParsePosition(0)));
+              attempt("the same, read whole", () -> DateTimeFormatter.ofPattern("OOOO").parse("GMT+1"));
+              // a formatter as a java.text.Format
+              Format format = dates.toFormat();
+              checked("format", () -> format.format(LocalDate.of(2026, 3, 7)) + " " + format.getClass().getName());
+              checked("format a time", () -> format.format(LocalTime.NOON));
+              StringBuffer buffer = new StringBuffer(">");
+              FieldPosition field = new FieldPosition(0);
+              field.setBeginIndex(3);
+              checked("format to a buffer", () -> format.format(LocalDate.of(2026, 3, 7), buffer, field) + " " + field + " " + field.hashCode());
+              for (String text : new String[] {"2026-03-07", "2026-13-07", "2026-03"}) {
+                  checked("parseObject " + text, () -> format.parseObject(text));
+                  checked("query " + text, () -> dates.toFormat(LocalDate::from).parseObject(text));
+                  ParsePosition position = new ParsePosition(0);
+                  checked("parseObject at " + text, () -> format.parseObject(text + " tail", position) + " " + position + " "
+                      + position.hashCode());
+              }
+              // the fields resolved
+              DateTimeFormatter days = DateTimeFormatter.ofPattern("uuuu-MM-dd D").withResolverFields(ChronoField.YEAR, ChronoField.DAY_OF_YEAR);
+              attempt("a year and its day", () -> days.parse("2026-03-07 067", LocalDate::from) + " "
+                  + new TreeSet<>(days.getResolverFields().stream().map(String::valueOf).toList()) + " "
+                  + (days.withResolverFields(ChronoField.DAY_OF_YEAR, ChronoField.YEAR) == days));
+              attempt("no field", () -> dates.withResolverFields().parse("2026-03-07"));
+              // the date fields over a map, in ISO's calendar and one of the program's own
+              Thin thin = new Thin();
+              for (ResolverStyle resolver : ResolverStyle.values()) {
+                  System.out.println(resolver + " " + resolved(IsoChronology.INSTANCE, resolver, ChronoField.YEAR, 2026,
+                      ChronoField.MONTH_OF_YEAR, 2, ChronoField.DAY_OF_MONTH, 30, ChronoField.DAY_OF_WEEK, 1) + " | "
+                      + resolved(IsoChronology.INSTANCE, resolver, ChronoField.YEAR, 2026, ChronoField.MONTH_OF_YEAR, 13,
+                          ChronoField.DAY_OF_MONTH, 7) + " | "
+                      + resolved(IsoChronology.INSTANCE, resolver, ChronoField.YEAR_OF_ERA, 2026, ChronoField.ERA, 2) + " | "
+                      + resolved(thin, resolver, ChronoField.YEAR_OF_ERA, 2026, ChronoField.ERA, 2) + " | "
+                      + resolved(IsoChronology.INSTANCE, resolver, ChronoField.YEAR, 2026, ChronoField.ALIGNED_WEEK_OF_YEAR, 53,
+                          ChronoField.DAY_OF_WEEK, 7));
+              }
+              DateTimeFormatter weeks = new DateTimeFormatterBuilder().appendValue(ChronoField.YEAR).appendLiteral(' ')
+                  .appendValue(ChronoField.ALIGNED_WEEK_OF_YEAR).appendLiteral(' ').appendValue(ChronoField.DAY_OF_WEEK)
+                  .toFormatter().withResolverStyle(ResolverStyle.LENIENT);
+              attempt("leniently the day before", () -> LocalDate.parse("2026 53 7", weeks) + " " + LocalDate.parse("2026 0 3", weeks));
+              attempt("and refused", () -> LocalDate.parse("2026 1 -6", weeks));
+              System.out.println(thin + " " + thin.equals(new Thin()) + " " + thin.compareTo(IsoChronology.INSTANCE) + " "
+                  + (IsoChronology.INSTANCE instanceof AbstractChronology) + " " + thin.date(IsoEra.BCE, 5, 3, 7) + " "
+                  + thin.epochSecond(2026, 3, 7, 10, 15, 30, ZoneOffset.UTC));
+              attempt("its hour first", () -> thin.epochSecond(2026, 13, 7, 24, 0, 0, ZoneOffset.UTC));
+              // what the formatter read otherwise than a JDK before
+              DateTimeFormatter eras = new DateTimeFormatterBuilder().parseLenient().appendPattern("G uuuu").toFormatter(Locale.US);
+              attempt("CE leniently", () -> eras.parseUnresolved("CE 2026", new ParsePosition(0)) + " "
+                  + eras.parseUnresolved("BCE 2026", new ParsePosition(0)));
+              for (String text : new String[] {"GMT+01:60", "GMT+01:00:", "GMT+01:", "GMT+x"}) {
+                  attempt(text, () -> DateTimeFormatter.ofPattern("OOOO").parseUnresolved(text, new ParsePosition(0)));
+              }
+              Instant instant = Instant.parse("2026-03-07T10:15:30Z");
+              System.out.println(Clock.systemUTC().hashCode() + " " + Clock.fixed(instant, ZoneOffset.UTC).hashCode() + " "
+                  + Clock.offset(Clock.systemUTC(), Duration.ofHours(1)).hashCode() + " " + Clock.tickMinutes(ZoneOffset.UTC).hashCode()
+                  + " " + Clock.tickSeconds(ZoneOffset.UTC).equals(Clock.tick(Clock.systemUTC(), Duration.ofSeconds(1))));
+              attempt("a null field", () -> new DateTimeFormatterBuilder().appendFraction(null, 0, 9, true));
+              attempt("a null day", () -> TemporalAdjusters.next(null));
+              attempt("from null", () -> ZonedDateTime.from(null));
+          }
+      }
+    stdout: |
+      DecimalStyle[0+-.] 182 DecimalStyle[apn,] 363 true false
+      ncacg-ad-ah aj:af:ae.bca +09:00 -2026-03-07T09:05:04.120+09:00 DecimalStyle[apn,]
+      -2026-03-07T00:05:04.120Z GMT+09:00 gg
+      ASCII digits: Text '2026-03-07 09:05:04.120 +09:00' could not be parsed at index 0 @0
+      by the UK: DecimalStyle[0+-.] DecimalStyle[apn,]
+      unresolved from 4: {DayOfMonth=7, MonthOfYear=13, Year=2026},null java.text.ParsePosition[index=14,errorIndex=-1]
+      resolved from 4: {},ISO resolved to 2026-03-07 java.text.ParsePosition[index=14,errorIndex=-1]
+      unresolved from 9: null java.text.ParsePosition[index=9,errorIndex=9]
+      resolved from 9: Text 'abc 2026-03-07 tail' could not be parsed at index 9 @9
+      unresolved from 30: java.lang.StringIndexOutOfBoundsException: Index 30 out of bounds for length 19
+      resolved from 30: java.lang.StringIndexOutOfBoundsException: Index 30 out of bounds for length 19
+      resolved refused: Text 'abc 2026-13-07 tail' could not be parsed: Invalid value for MonthOfYear (valid values 1 - 12): 13 @0
+      an index error inside: java.lang.StringIndexOutOfBoundsException: Index 5 out of bounds for length 5
+      the same, read whole: Text 'GMT+1' could not be parsed: Index 5 out of bounds for length 5 @0
+      format: 2026-03-07 java.time.format.DateTimeFormatter$ClassicFormat
+      format a time: java.lang.IllegalArgumentException: Unsupported field: Year
+      format to a buffer: >2026-03-07 java.text.FieldPosition[field=0,attribute=null,beginIndex=0,endIndex=0] 0
+      parseObject 2026-03-07: {},ISO resolved to 2026-03-07
+      query 2026-03-07: 2026-03-07
+      parseObject at 2026-03-07: {},ISO resolved to 2026-03-07 java.text.ParsePosition[index=10,errorIndex=-1] -65526
+      parseObject 2026-13-07: Invalid value for MonthOfYear (valid values 1 - 12): 13 offset 0 cause java.time.DateTimeException: Invalid value for MonthOfYear (valid values 1 - 12): 13
+      query 2026-13-07: Text '2026-13-07' could not be parsed: Invalid value for MonthOfYear (valid values 1 - 12): 13 offset 0 cause null
+      parseObject at 2026-13-07: null java.text.ParsePosition[index=10,errorIndex=0] 10
+      parseObject 2026-03: Text '2026-03' could not be parsed at index 7 offset 7 cause null
+      query 2026-03: Text '2026-03' could not be parsed at index 7 offset 7 cause null
+      parseObject at 2026-03: null java.text.ParsePosition[index=0,errorIndex=7] 458752
+      a year and its day: 2026-03-08 [DayOfYear, Year] true
+      no field: {},ISO
+      STRICT Invalid date 'FEBRUARY 30' [DayOfWeek=1] | Invalid value for MonthOfYear (valid values 1 - 12): 13 [DayOfMonth=7] | Invalid value for era: 2 [] | Invalid value for Era (valid values 0 - 1): 2 [] | Strict mode rejected resolved date as it is in a different year []
+      SMART 2026-02-28 [DayOfWeek=1] | Invalid value for MonthOfYear (valid values 1 - 12): 13 [DayOfMonth=7] | Invalid value for era: 2 [] | Invalid value for Era (valid values 0 - 1): 2 [] | 2027-01-03 []
+      LENIENT 2026-03-02 [DayOfWeek=1] | 2027-01-07 [] | Invalid value for era: 2 [] | Invalid value for Era (valid values 0 - 1): 2 [] | 2027-01-02 []
+      leniently the day before: 2027-01-02 2025-12-30
+      and refused: Text '2026 1 -6' could not be parsed: Invalid value for DayOfWeek: 0 @0
+      Thin true 11 true -0004-03-07 1772878530
+      its hour first: java.time.DateTimeException: Invalid value for HourOfDay (valid values 0 - 23): 24
+      CE leniently: {Era=1, Year=2026},null null
+      GMT+01:60: {OffsetSeconds=7200},null
+      GMT+01:00:: {OffsetSeconds=3600},null
+      GMT+01:: java.lang.StringIndexOutOfBoundsException: Index 7 out of bounds for length 7
+      GMT+x: java.lang.StringIndexOutOfBoundsException: Index 5 out of bounds for length 5
+      1 1772878530 3601 -129542132 true
+      a null field: java.lang.NullPointerException: Cannot invoke "java.time.temporal.TemporalField.range()" because "field" is null
+      a null day: java.lang.NullPointerException: Cannot invoke "java.time.DayOfWeek.getValue()" because "dayOfWeek" is null
+      from null: java.lang.NullPointerException: Cannot invoke "java.time.temporal.TemporalAccessor.query(java.time.temporal.TemporalQuery)" because "temporal" is null
 refused:
   scaffold: |
     class Refused {

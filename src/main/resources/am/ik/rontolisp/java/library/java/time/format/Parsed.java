@@ -164,10 +164,46 @@ final class Parsed implements TemporalAccessor {
      */
     static native boolean others();
 
-    void resolve(ResolverStyle style, ZoneId override) {
+    /**
+     * Whether the program can name the fields to resolve: answered by whether it reaches
+     * DateTimeFormatter.withResolverFields, so that a program that cannot has nothing of
+     * cutting them.
+     */
+    static native boolean filtered();
+
+    /**
+     * Whether a formatter of the program can resolve leniently: answered by whether it
+     * reaches DateTimeFormatter.withResolverStyle, the one way to a lenient one.
+     */
+    static native boolean lenients();
+
+    /** Where a field stands among the first of some fields, compared by equals, or -1. */
+    static int among(TemporalField field, TemporalField[] fields, int count) {
+        for (int i = 0; i < count; i++) {
+            if (field == null ? fields[i] == null : field.equals(fields[i])) {
+                return i;
+            }
+        }
+        return -1;
+    }
+
+    /** Resolves the fields read: of the fields given only those, or all of them where none are. */
+    void resolve(ResolverStyle style, ZoneId override, TemporalField[] resolverFields) {
         this.style = style;
         if (zone == null) {
             zone = override;
+        }
+        if (filtered()) {
+            if (resolverFields != null) {
+                for (int i = 0; i < count;) {
+                    if (among(fields[i], resolverFields, resolverFields.length) >= 0) {
+                        i++;
+                    }
+                    else {
+                        remove(fields[i]);
+                    }
+                }
+            }
         }
         resolveDate();
         if (others()) {
@@ -380,15 +416,32 @@ final class Parsed implements TemporalAccessor {
 
     /**
      * The day of a week that starts at a date: the aligned day counted from it, or the day
-     * of the week on or after it (leniently, the one of its week of the calendar, a day
-     * earlier: a JDK's answer).
+     * of the week on or after it. Leniently that is the day before the one asked, a whole
+     * week further for each seven past the last: a JDK 25's answers, the rule
+     * AbstractChronology's map resolving follows too (one algorithm twice: this one over
+     * the arrays, which a program reading a date pays 56 KB less of wasm for).
      */
     private static LocalDate weekDay(LocalDate start, long day, boolean aligned, boolean lenient) {
         if (aligned) {
             return start.plusDays(Math.subtractExact(day, 1));
         }
-        long from = start.getDayOfWeek().getValue();
-        return lenient ? start.plusDays(day - from - 1) : start.plusDays(Math.floorMod(day - from, 7L));
+        LocalDate date = start;
+        long asked = day;
+        if (lenients()) {
+            if (lenient) {
+                asked = Math.subtractExact(day, 1);
+                if (asked > 7) {
+                    date = date.plusWeeks((asked - 1) / 7);
+                    asked = (asked - 1) % 7 + 1;
+                }
+                else if (asked < 1) {
+                    date = date.plusWeeks(Math.subtractExact(asked, 7) / 7);
+                    asked = (asked + 6) % 7 + 1;
+                }
+                asked = java.time.DayOfWeek.of((int) asked).getValue();
+            }
+        }
+        return date.plusDays(Math.floorMod(asked - date.getDayOfWeek().getValue(), 7L));
     }
 
     private void resolveTimeFields() {
@@ -712,7 +765,8 @@ final class Parsed implements TemporalAccessor {
         }
         if (calendars()) {
             if (query == TemporalQueries.chronology()) {
-                return (R) IsoChronology.INSTANCE;
+                // none before the fields are resolved
+                return (R) (style == null ? null : IsoChronology.INSTANCE);
             }
         }
         return query.queryFrom(this);
@@ -777,7 +831,8 @@ final class Parsed implements TemporalAccessor {
             }
             text.append(fields[i].toString()).append('=').append(values[i]);
         }
-        text.append("},ISO");
+        // the calendar, which fields not yet resolved have none of
+        text.append(style == null ? "},null" : "},ISO");
         if (zone != null) {
             text.append(',').append(zone.getId()).append(',').append(zoneTime);
         }

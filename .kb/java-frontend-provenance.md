@@ -413,6 +413,25 @@ algorithm came from, and the answer goes in the file's header.
   CLDR's as a running JDK writes them, under the Unicode entry of
   `THIRD-PARTY-NOTICES.txt`. The answers are lines of `java-spec.yaml`, which the JDK leg
   asks again.
+- **What k57 left of `java.time` (k70, 2026-11-21).** `DecimalStyle`, a formatter's
+  reading from a `ParsePosition` and its `java.text.Format`, `Format`, `FieldPosition`,
+  `ParsePosition`, `ParseException`, `withResolverFields`, `Chronology.resolveDate` and
+  `AbstractChronology` were written from the API documentation (the combinations of date
+  fields `resolveDate` lists and what each resolver style does with them; what each member
+  takes and answers) and JDK 25's answers to probes (`Grid.java` of
+  `.todo/artefacts/k70-java-time-what-k57-left/`, 998 lines). Nobody opened OpenJDK's source,
+  and the shape is its own: a formatter keeps null for the standard decimal style and an array
+  for the fields it resolves, a number's text is rewritten after it is written, and the date
+  fields are resolved twice -- over a map in `AbstractChronology` and over `Parsed`'s arrays,
+  each held to the same answers. What the documentation does not state was read off the
+  answers: which parts write and read in the decimal style (an instant read in it, written in
+  ASCII), the hash codes of the style and the two positions, what each `parse` member and the
+  `Format` throw, wrap or note in a position, the order the fields leave the map and the two
+  places ISO's calendar answers otherwise, that leniently a day of the week in an aligned week
+  is the day before the one asked (136,518 answers), where a JDK reads a full localized offset
+  past a text's end, the era `CE` it reads leniently in English, the order a program's own
+  calendar's `epochSecond` refuses in and the words of the null refusals. The answers are lines
+  of `java-spec.yaml`, which the JDK leg asks again.
 - **`java.util.Date` and `java.sql` (k37, 2026-11-20).** Written from the API
   documentation (which states `Date.hashCode`, `equals` and the text forms) and JDK 25's
   answers to probes (`Grid.java`, 2,095 lines; `Gap.java`, the wall times four zones skip

@@ -217,6 +217,13 @@ final class JavaClasses {
 	boolean everyLetter;
 
 	/**
+	 * The methods of the library some pass reached that a question of the library is
+	 * answered by ({@code JavaIntrinsics.reaches}), as class and name: until a pass finds
+	 * one, what it decides is not lowered.
+	 */
+	final Set<String> reachedMembers = new java.util.TreeSet<>();
+
+	/**
 	 * The static fields of the library some pass read whose initializers ask whether they
 	 * are wanted: a constant no program reads is not made (a formatter's ISO forms).
 	 */

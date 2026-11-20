@@ -94,6 +94,7 @@ public final class LocalTime implements Temporal, TemporalAdjuster, Comparable<L
     }
 
     public static LocalTime from(TemporalAccessor temporal) {
+        Objects.requireNonNull(temporal, "temporal");
         if (temporal instanceof LocalTime time) {
             return time;
         }

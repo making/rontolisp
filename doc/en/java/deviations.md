@@ -359,25 +359,27 @@ does not hold is read as the region it holds that writes the name, or not at all
 that has written a zone's names for `ENGLISH` writes some of that zone's names for `UK`
 and `CANADA` as `ENGLISH` has them from then on (`Abidjan Daylight Time` where it wrote
 `Abidjan Daylight Saving Time` for `CANADA`); the names here are the ones it writes before
-that. `DecimalStyle`, `toFormat`, `parseUnresolved`, a `parse` at a `ParsePosition`,
-`withResolverFields` and `ofLocalizedPattern` are refused by name. In the text of a
-formatter, `parseDefaulting` shows as `Default(field,value)`, where a JDK shows the identity
-of an object. Where a JDK fails with an index error inside a full localized offset (`OOOO`
-reading `GMT+1`), the text is refused at its start; read leniently, a JDK takes `CE` for an
-era and places a day of the week in an aligned week of the year by a rule that is not
-followed here. The fields that are no `ChronoField` -- of weeks, quarters, Julian days or
+that. The `DecimalStyle` of each of these locales is the standard one, and
+`DecimalStyle.getAvailableLocales()` holds the five. `ofLocalizedPattern`, and
+`appendLocalized` and `getLocalizedDateTimePattern` of a requested template, are refused by
+name; the `Format` of `toFormat` has no `clone` (the subset has no `Cloneable`). In the text
+of a formatter, `parseDefaulting` shows as `Default(field,value)`, where a JDK shows the
+identity of an object. The fields that are no `ChronoField` -- of weeks, quarters, Julian days or
 the program's own -- are resolved in the order they were read, where a JDK's order changes
 from run to run: it shows only where a text gives a day of the week twice (by its name and
 by its number in the locale's week), or two such fields make two dates or two times.
 
 **`java.time` has the ISO calendar alone.** `Chronology.of` knows no other calendar and
-`getAvailableChronologies()` holds ISO's alone; `IsoChronology.resolveDate`,
-`AbstractChronology` and `Duration.dividedBy` are refused by name. The message of a text whose fields make no value lists them in one order
+`getAvailableChronologies()` holds ISO's alone; `Duration.dividedBy` is refused by name. A
+calendar of the program's own extends `AbstractChronology` and makes its dates of a map of
+fields as a JDK's does, but its date-times, zoned date-times and periods (`localDateTime`,
+`zonedDateTime`, `period`) are refused with an `UnsupportedOperationException`, and a
+formatter reads and writes in ISO's calendar whatever `withChronology` names. The message of a text whose fields make no value lists them in one order
 (`{Year=2020, MonthOfYear=13}`), and of several fields of a time with no hour out of range
 the same one is refused first; a JDK's order changes from run to run. A `ValueRange`, a
-`ZoneRules`, a `ZoneOffsetTransition`, a `ZoneOffsetTransitionRule` and a `Clock` have hash
-codes of their own, and `IsoChronology` hashes as an object, as a JDK's does by the
-identity of a class.
+`ZoneRules`, a `ZoneOffsetTransition` and a `ZoneOffsetTransitionRule` have hash codes of
+their own, and `IsoChronology` and `InstantSource.system()` hash as objects, as a JDK's do by
+the identity of a class or an object.
 
 **`Normalizer` reads the Unicode data of JDK 25.** A character whose data a later JDK's
 Unicode adds or changes is normalized as JDK 25 does it. `normalize` of a text already in

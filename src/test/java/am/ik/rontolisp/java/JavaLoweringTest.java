@@ -122,7 +122,7 @@ class JavaLoweringTest {
 							+ "NIL) (:PREDICATE |Circle?|) (:COPIER NIL)) (|r| 0.0))",
 					"(DEFSTRUCT (|j%L1| (:CONC-NAME L1.) (:CONSTRUCTOR |%make-L1| NIL) (:PREDICATE |j%L1?|) (:COPIER "
 							+ "NIL)))",
-					"(DEFVAR |Base.count|)",
+					"(DEFVAR |Base.count| 0)",
 					"(DEFUN |Base.<init>(String)| (|this| |label|) (PROGN (SETF (|Base.label| |this|) \"b\") (SETF "
 							+ "(|Base.label| |this|) |label|) (SETQ |Base.count| (%MASK-SIGNED-FIELD 32 (+ (THE "
 							+ "(SIGNED-BYTE 32) |Base.count|) 1)))))",
@@ -343,7 +343,8 @@ class JavaLoweringTest {
 					"(DEFUN |%initialization| NIL (PROGN (SETQ |Level.LOW| (|Level.new(String,int)| \"LOW\" 0)) (SETQ "
 							+ "|Level.HIGH| (|Level.new(String,int)| \"HIGH\" 1)) (SETQ |Level.$VALUES| (VECTOR |Level.LOW| "
 							+ "|Level.HIGH|)) (SETQ |Level.ALL| (|Level.values()|))))")
-			.containsSubsequence("(SETQ |Level.$VALUES| NIL)", "(SETQ |Log.lines| 0)", "(SETQ |Log.<clinit>%done| NIL)",
+			.contains("(DEFVAR |Level.$VALUES| NIL)", "(DEFVAR |Log.lines| 0)", "(DEFVAR |Log.<clinit>%done| NIL)")
+			.containsSubsequence(
 					"(%REPORTING-UNCAUGHT #'RONTOLISP::%JAVA-UNCAUGHT-LINE (%HOST-EXIT 1) (|%initialization|) "
 							+ "(|L2.main(String[])| (VECTOR)))");
 	}
@@ -594,18 +595,34 @@ class JavaLoweringTest {
 				    }
 				}
 				""";
+		// The same for an offset as GMT and its hours (O, ZZZZ); and a formatter's
+		// decimal
+		// style, the fields it resolves and resolving leniently are in a program that
+		// reaches withDecimalStyle, withResolverFields and withResolverStyle.
 		assertThat(lower(patterned.formatted("\"uuuu'Y'\"", ""), "L15.java"))
 			.noneMatch(form -> form.contains("WeekFields") || form.contains("IsoFields")
 					|| form.contains("JulianFields") || form.contains("Parsed.resolveOthers")
 					|| form.contains("IsoChronology") || form.contains("ZoneNames") || form.contains("Step.DayPeriod")
-					|| form.contains("OfPeriod()|"));
+					|| form.contains("OfPeriod()|") || form.contains("Step.GmtOffset") || form.contains("getZeroDigit")
+					|| form.contains("Parsed.among") || form.startsWith("(DEFUN |java.time.format.Parsed.weekDay(")
+							&& form.contains("java.time.DayOfWeek.of(int)"));
 		assertThat(lower(patterned.formatted("args[0]", ".query(TemporalQueries.chronology())"), "L15.java"))
 			.anyMatch(form -> form.startsWith("(DEFUN |java.time.temporal.WeekFields.of(java.time.DayOfWeek,int)| "))
 			.anyMatch(form -> form.startsWith("(DEFUN |java.time.format.Parsed.resolveOthers()| "))
 			.anyMatch(form -> form.startsWith("(DEFUN |java.time.format.Parsed.query(")
 					&& form.contains("java.time.chrono.IsoChronology.INSTANCE"))
 			.anyMatch(form -> form.startsWith("(DEFUN |java.time.format.ZoneNames.read(java.time.format.Reading,"))
-			.anyMatch(form -> form.startsWith("(DEFUN |java.time.format.Parsed.middleOfPeriod()| "));
+			.anyMatch(form -> form.startsWith("(DEFUN |java.time.format.Parsed.middleOfPeriod()| "))
+			.anyMatch(form -> form.startsWith("(DEFUN |java.time.format.Step.GmtOffset.parse("));
+		assertThat(lower(patterned.formatted("\"uuuu'Y'\").withDecimalStyle(java.time.format.DecimalStyle.STANDARD)"
+				+ ".withResolverFields(java.time.temporal.ChronoField.YEAR)"
+				+ ".withResolverStyle(java.time.format.ResolverStyle.LENIENT", ""), "L15.java"))
+			.anyMatch(form -> form.startsWith("(DEFUN |java.time.format.Reading.numeral(int)| ")
+					&& form.contains("getZeroDigit"))
+			.anyMatch(form -> form.startsWith("(DEFUN |java.time.format.Parsed.resolve(")
+					&& form.contains("Parsed.among"))
+			.anyMatch(form -> form.startsWith("(DEFUN |java.time.format.Parsed.weekDay(")
+					&& form.contains("java.time.DayOfWeek.of(int)"));
 		String localized = """
 				import java.time.LocalTime;
 				import java.time.format.*;
@@ -809,7 +826,7 @@ class JavaLoweringTest {
 				}
 				""", "L12.java");
 		String made = "(|Class.new(String,String,String,int,Class,Class[],Class,Object,Object)| ";
-		assertThat(classes).contains("(DEFVAR |Kept%class|)",
+		assertThat(classes).contains("(DEFVAR |Kept%class| NIL)",
 				"(DEFUN |Kept%class-of| (|%o|) (COND ((|Kept?| |%o|) |Kept%class|) (T (RONTOLISP::%JAVA-NO-CLASS |%o|))))",
 				"(DEFUN |L12.main(String[])| (|args|) (DECLARE (TYPE (OR NULL (SIMPLE-ARRAY T (*))) |args|)) "
 						+ "(LET ((|kept| (|Kept.new()|))) (LET ((|held| (|Kept%class-of| "

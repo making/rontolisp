@@ -354,26 +354,28 @@ rontolisp でコンパイルし直すとプログラムに反映されます。`
 JDK は、あるゾーンの名前を `ENGLISH` について書いたあと、同じゾーンの `UK` と `CANADA` の名前の
 一部を `ENGLISH` のものとして書きます（`CANADA` で `Abidjan Daylight Saving Time` と書いていた
 ものを `Abidjan Daylight Time` と書く）。ここで書く名前は、その前に JDK が書くものです。
-`DecimalStyle`、`toFormat`、`parseUnresolved`、`ParsePosition` から読む `parse`、
-`withResolverFields`、`ofLocalizedPattern` は、名前を示して拒否されます。フォーマッターの
-文字列表現では、`parseDefaulting` は `Default(field,value)` と表示されます。JDK はオブジェクトの
-識別子を表示します。完全な形式の地域化オフセット（`OOOO` で `GMT+1` を読む場合など）の
-読み取り中に JDK がインデックスの例外で失敗する文字列は、先頭の位置で拒否します。また、寛容な
-読み取りで JDK は `CE` を紀元として読み、年の整列週の中の曜日をここでは従っていない規則で
-決めます。`ChronoField` でないフィールド（週、四半期、ユリウス日、プログラムが書いたもの）は
+これらのロケールの `DecimalStyle` はどれも標準のもので、`DecimalStyle.getAvailableLocales()`
+はこの 5 つを返します。`ofLocalizedPattern` と、要求テンプレートを取る `appendLocalized` と
+`getLocalizedDateTimePattern` は、名前を示して拒否されます。`toFormat` の `Format` には `clone`
+がありません（サブセットに `Cloneable` がないため）。フォーマッターの文字列表現では、
+`parseDefaulting` は `Default(field,value)` と表示されます。JDK はオブジェクトの識別子を表示します。
+`ChronoField` でないフィールド（週、四半期、ユリウス日、プログラムが書いたもの）は
 読んだ順に解決します。JDK の順序は実行のたびに変わります。違いが現れるのは、文字列が曜日を
 2 度（名前とロケールの週の中の番号で）与える場合と、そうしたフィールドが 2 つの日付または
 2 つの時刻になる場合だけです。
 
 **`java.time` の暦は ISO だけです。** `Chronology.of` はほかの暦を知らず、
-`getAvailableChronologies()` は ISO だけを返します。`IsoChronology.resolveDate`、
-`AbstractChronology`、`Duration.dividedBy` は、名前を示して拒否されます。
+`getAvailableChronologies()` は ISO だけを返します。`Duration.dividedBy` は、名前を示して
+拒否されます。プログラム独自の暦は `AbstractChronology` を継承でき、フィールドの対応表から JDK と
+同じく日付を作ります。ただし、その暦の日時、ゾーン付き日時、期間（`localDateTime`、
+`zonedDateTime`、`period`）は `UnsupportedOperationException` で拒否します。また、フォーマッターは
+`withChronology` で何を指定しても ISO 暦で読み書きします。
 フィールドから値を作れなかった文字列のメッセージは、フィールドを決まった順で並べます
 （`{Year=2020, MonthOfYear=13}`）。時のない時刻の複数のフィールドが範囲外のときも、決まった
 フィールドを先に拒否します。JDK ではどちらの順序も実行のたびに変わります。`ValueRange`、
-`ZoneRules`、`ZoneOffsetTransition`、`ZoneOffsetTransitionRule`、`Clock` のハッシュコードは
-JDK と異なり、`IsoChronology` はオブジェクトとしてハッシュします（JDK もクラスの識別子から
-作ります）。
+`ZoneRules`、`ZoneOffsetTransition`、`ZoneOffsetTransitionRule` のハッシュコードは JDK と
+異なります。`IsoChronology` と `InstantSource.system()` はオブジェクトとしてハッシュします
+（JDK もクラスまたはオブジェクトの識別子から作ります）。
 
 **`Normalizer` は JDK 25 の Unicode データを使います。** それより新しい JDK の Unicode で
 追加または変更された文字も、JDK 25 と同じ結果になります。すでにその形式になっている文字列を

@@ -103,6 +103,7 @@ public final class LocalDate implements Temporal, TemporalAdjuster, ChronoLocalD
     }
 
     public static LocalDate from(TemporalAccessor temporal) {
+        Objects.requireNonNull(temporal, "temporal");
         if (temporal instanceof LocalDate date) {
             return date;
         }
