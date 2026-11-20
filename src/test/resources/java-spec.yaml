@@ -5500,6 +5500,9 @@ cases:
               System.out.println(Arrays.toString(boxed) + Arrays.toString(words) + Arrays.toString(ds) + Arrays.toString(ints) + Arrays.toString(copy) + Arrays.toString(filled) + Arrays.equals(copy, filled) + Arrays.binarySearch(new int[] {1, 3, 5}, 3) + Arrays.toString(Arrays.copyOfRange(words, 1, 3)) + Arrays.asList(1, 2) + Arrays.hashCode(new int[] {1, 2}) + Arrays.toString(longs) + Arrays.toString(letters) + Arrays.toString(new boolean[2]) + Arrays.asList(words).indexOf("fig"));
               Random random = new Random(42);
               System.out.println(random.nextInt(100) + " " + random.nextInt() + " " + random.nextDouble() + " " + random.nextBoolean() + " " + random.nextLong() + " " + random.nextGaussian() + " " + random.nextInt(16) + " " + random.nextGaussian() + " " + (new Random().nextInt(7) < 7));
+              byte[] drawnBytes = new byte[6];
+              random.nextBytes(drawnBytes);
+              System.out.println(Arrays.toString(drawnBytes) + " " + random.nextFloat() + " " + random.nextInt(-5, 5) + " " + random.nextLong(1000) + " " + random.nextLong(-3, 3) + " " + random.nextDouble(2.5) + " " + random.nextDouble(-1, 1) + " " + random.nextFloat(4f) + " " + random.nextFloat(-1f, 1f) + " " + new Random(1).nextDouble(-Double.MAX_VALUE, Double.MAX_VALUE));
               Collections.shuffle(nums, new Random(7));
               System.out.println(nums);
               List<String> walked = new ArrayList<>(List.of("b", "d", "f"));
@@ -5608,6 +5611,7 @@ cases:
       [1, 5, 3, 9] 9 1 [z, y] [ab, ab, ab][][1]2[1, 5, 3, 9]{}
       [3, 2, 1][apple, fig, pear][-1.0, 0.0, 2.5][9, 3, 7, 1][1, 2, 3, 0, 0][7, 7, 7]false1[fig, pear][1, 2]994[1, 3][a, b, c][false, false]1
       30 234785527 0.6832234717598454 false -1068554554583376509 0.2669736057242196 7 -0.5252767454241688 true
+      [-103, -114, 104, 94, -120, 92] 0.275748 -3 146 0 2.298319457171792 -0.1270180511534269 2.9996245 0.8612623 8.300962768334769E307
       [1, 5, 9, 3]
       [a, c, D, e, f] 4f3e2D1c0a 334 2 -3 1
       ConcurrentModificationException null

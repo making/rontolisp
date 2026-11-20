@@ -1137,7 +1137,7 @@ measured programs.
   the forms name. A program's own classes are lowered whole, as before. A local or anonymous
   class of the library is lowered where its method is.
 - **A missing member of a library class is refused by name**, source or intrinsic
-  (`Random.nextBytes(byte[])`), never `cannot find symbol`.
+  (`Random.nextExponential()`), never `cannot find symbol`.
 - **`HashMap` keeps the order a program sees** (the JDK 25 running the corpus is the oracle,
   `a-hash-map-finds-a-key-by-equals-and-keeps-the-order-a-program-sees`): hash folded with its
   upper half, masked by a power of two that doubles past three quarters, the table made at the
@@ -2412,6 +2412,13 @@ the probes are `.todo/artefacts/k12-java-front-end-what-the-time-limits-and-dura
   bound where rounding reaches it). For an int no documentation says which; of
   `nextInt(width) + origin` and the long's draws over `nextInt`, the second gave a
   JDK 25's numbers on all 2,891 seeded ranges, the first on 2,414 (`Rand.java`).
+  **`nextInt`, `nextLong`, `nextDouble` and `nextFloat` of bounds** (k47) are those
+  draws (a JDK's numbers on every seeded range of k47's `Rand.java` and `Wide.java`);
+  bounds too far apart for a `double` or a `float`, which `nextDouble(origin, bound)`
+  takes and a stream refuses, are halved and the draw doubled (14,000 doubles and
+  10,000 floats a JDK's, where scaling by each bound gave 7,417 doubles).
+  `nextBytes` and `nextFloat()` are the documentation's: a `nextInt()` each four bytes,
+  lowest first; 24 bits over 2^24.
 - **The collectors of a concurrent map** (k26) are `groupingBy` / `toMap` over a
   `ConcurrentHashMap` with two more marks (`Collectors.grouped`, `once`, `merged`):
   `CONCURRENT`, `UNORDERED`, and `IDENTITY_FINISH` where the downstream has it. A JDK

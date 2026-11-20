@@ -33,6 +33,14 @@ Results are in `.kb/java-frontend.md`, "The sorted collections". Each probe is r
     an unmodifiable map says `not supported`, the iterator of an unmodifiable set, of a key
     set and of a singleton `remove`, where a JDK's say nothing.
   - `TreeOrder`, `SplitRows`: the corpus case and the spliterator rows, as files.
+  - `Rand`, `Rand2`: `Random`'s bytes, floats and draws between bounds against the streams'
+    draws of the same seed (2,500 ints, 1,500 longs, 1,250 longs of a bound, 2,000 doubles,
+    all the same) and the refusals; `nextGaussian(mean, stddev)` and `nextExponential`, a
+    JDK's own algorithm, stay refused: with their two lines taken out, one line differs (an
+    NPE's message).
+  - `Wide`: bounds too far apart for a `double` or a `float`, against five candidate
+    formulas over 2,000 seeds: halving the bounds and doubling the draw gives a JDK's bits
+    on 14,000 doubles and 10,000 floats, scaling the draw by each bound 7,417 doubles.
 - `sizes/` -- wasm bytes by `size.sh` of `.todo/artefacts/k26-java-front-end-what-the-streams-slice-left/sizes/`
   (`BEFORE=<exec jar of 17ddb5e21>`): `SzTree` 136,456, `SzHash` 143,443, `SzTreeSet`
   142,364, `SzNav` 140,539, `SzSkip` 164,996, `SzRemoveAll` 156,880 -> 157,547, `SzUnmod`
