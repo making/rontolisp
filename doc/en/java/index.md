@@ -293,7 +293,13 @@ or `NIL`. A number is a number, a string a string, `null` is `NIL`, an object of
 structure, an `Object[]` a vector. A Common Lisp list is no `List`: hand a Java method a vector.
 An integer handed to an `int`, `long`, `short`, `byte` or `char` parameter must be one of the
 type's values: the compiled program takes it as that type declares (on wasm an integer past the
-type's range traps; on the JVM a value that is no integer is an error). An integer a `native` method answers for an `int`, `long`, `short` or
+type's range traps; on the JVM a value that is no integer is an error). So must an array
+handed to a parameter of an array type be the vector its type makes, holding values of its
+element type: `(make-array n :element-type '(unsigned-byte 32))` for an `int[]`,
+`'(unsigned-byte 8)` a `byte[]`, `'(unsigned-byte 16)` a `char[]` or `short[]`,
+`'double-float` a `double[]`, `'single-float` a `float[]`, `'bit` a `boolean[]`, a vector of
+no element type any other (on wasm another traps where it is read). An integer a `native`
+method answers for an `int`, `long`, `short` or
 `byte` is cut to the type's width, its low bits, as a value of the type is.
 
 ## The tools

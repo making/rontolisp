@@ -164,12 +164,30 @@ fast path alone, with no `block $bail` and no fallback: in `tryCompile`, `tryCom
   declaration or a constant (below) does not bail: the declaration's `ref.cast` (a false one
   traps, as the unfused declared read does, `.kb/declarations-type-checks.md`), a bound refused
   through the one `_idx_ref` call (`WasmArrayCompiler.emitIndexReport`, EH mode) and
-  `unreachable`; a constant's array is tested and a miss reported the same way. Only when no
-  operation of the site can signal over integers (a `mod`/`rem` by other than a non-zero
-  literal, an `ash` by a computed count): then the first thing to go wrong in the
-  interpreter's order is the read itself -- leaf guards and cell checks run before any read and
-  still bail. A pinned read in a site that keeps its fallback tests ONE width
+  `unreachable`; a constant's array, and one a declaration lets nil stand in for
+  (`ArefLeaf.orNull`), is tested and a miss reported the same way, by the one report the bound
+  calls too. Only when no operation the interpreter applies before the read can signal over
+  integers (a `mod`/`rem` by other than a non-zero literal, an `ash` by a computed count) but one
+  its own index computes, which the fast path computes before the read too (`markDirectReads`,
+  2026-11-20; until then any such operation in the site): then the first thing to go wrong in
+  the interpreter's order is the read itself -- leaf guards and cell checks run before any read
+  and still bail. A pinned read in a site that keeps its fallback tests ONE width
   (`ArefLeaf.packedType`), not three; an index whose range is a fixnum skips the i31 test.
+- **A general array's integer elements** (`ArefLeaf.elements`, `emitGeneralArefRead`,
+  2026-11-20, k64): a read of an array a declaration pins to the general kind whose elements
+  it makes integers (`.kb/declarations-type-checks.md`, "Declaration-driven array emission"),
+  or that a `(the spec (aref ..))` asserts, takes the element off the vector's storage when the
+  cell names it and the index is in its bound, and unboxes it in that range as a declared leaf
+  is (`emitTrustedUnbox`, a trap on what contradicts it). Anything else bails, or in a direct
+  read is the generic read of the general array -- one `_idx_ref` of rank 1, then `_arr_get` --
+  so nil, a view and an index out of the bound report what they report anywhere. A Java
+  `long[]` is such an array; its read was an aref leaf that bailed every time. `LongSum`
+  (`s += a[i] * 31 + (a[i] >>> 7)` over a `long[1000]`, 10^5 rounds) was 93.8 s on wasm, the
+  generic 64-bit masks over `TYPE_BIGINT` limbs, and is 1.44 s (the JVM 0.45 s).
+- **A declared leaf in the i31 range has one arm**: an integer there is never a `TYPE_BIGNUM`
+  ([wasm-bignum.md](wasm-bignum.md)), so `emitTrustedUnbox` casts to i31 and checks the range
+  (a `char`'s, a `byte`'s, a bit's) where it tested and checked both tiers. With the one
+  report of a direct read above, YAVI `Booking.java` 1,128,044 -> 1,125,245 B of wasm.
 - **Constant arrays** (`WasmArrayCompiler.constantArrays`, `Ctx.constantArrays`). A top-level
   `(defconstant name V)`, V a packed vector the front end built (`LispIntVector`) or a literal
   packed `make-array`, whose name appears nowhere but as the array of a rank-1 `aref` and has

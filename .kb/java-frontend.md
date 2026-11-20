@@ -3629,9 +3629,38 @@ class of a package of our own was needed (`deviations.md`, "The HTTP server").
   the walk 31 / 16.5 s of wall time before and after, its lines' strings, and on the
   interpreter 6.9 -> 6.4 min (the masked field one call); 50,000,000 steps of the sieve loop
   9.0 s before and after; 200 walks of `Sieve`'s tree 4.2 -> 4.0 / 1.8 s; 30,000,000 `int`
-  and 10,000,000 `long` steps 0.164 -> 0.110 / 0.50 s. What is left of the reader is its array accesses: a
-  `long[]` read is the generic dispatch, the arrays of a program being undeclared (a null
-  array raises `NullPointerException` where it is read).
+  and 10,000,000 `long` steps 0.164 -> 0.110 / 0.50 s.
+- **An array the types prove is declared of its vector or nil** (2026-11-20, k64): a
+  parameter, a local, a loop and a lambda's variable of an array type is declared `(or null
+  (simple-array E (*)))` (`JavaForms.arrayType`, `declaredType`; E the element type a read
+  answers: `(unsigned-byte 32)` an `int[]` as its vector holds it, `(signed-byte 64)` a
+  `long[]`, `bit` a `boolean[]`, `t` an array of references), a static field's read is
+  asserted with `the` of the same, and an element access through any other form -- an instance
+  field, a call, a row of an array of arrays -- too (`knownArray`); `.length` and the enhanced
+  `for` take `(the (simple-array E (*)) (or a (%java-npe)))` (`vector`), no nil. A null array is
+  read as before: the access evaluates its index (and a store its value) and the backends'
+  check raises what `%java-exception-of` makes `NullPointerException` (wasm keeps that order:
+  `.kb/declarations-type-checks.md`, "Declaration-driven array emission"). The interpreter
+  and the JVM read no array declaration; the wasm kinds and a general array's integer elements
+  do (`.kb/wasm-int-fusion.md`, "Ranges, and sites with nothing to bail on"). A Common Lisp vector of
+  another representation handed to a parameter is a false declaration (`doc/*/java/index.md`).
+- **Measured** (k64, base `303deba92`; bytes of wasm, CPU seconds best of 2-4 on a loaded
+  64-core box; the programs and the script in
+  `.todo/artefacts/k64-java-wasm-an-array-the-types-prove-takes-the-generic-dispatch/`): the zone reader 13,217 -> 12,765 (`region` 7,012 -> 6,975, `find` 3,046 ->
+  2,779, `rule` 2,355 -> 2,208), its instance methods `placed` 5,166 -> 2,793 and `ruled` 4,829
+  -> 3,028; `ZonedDateTime.of(.., ZoneId.of("Europe/Paris")).plusHours(1)` 173,105 -> 166,183;
+  `Sieve` 21,305 -> 19,699; `SieveLoop` 18,402 -> 16,797, its time 8.2-9.0 -> 7.6-8.3 s (a
+  sieve of 50,000,000 bound by memory); YAVI `Booking.java` 1,128,428 -> 1,125,245,
+  `Member.java` 648,210 -> 646,545; 2,000,000 offsets of an instant and a local date-time in
+  Europe/Paris 4.83 -> 2.59 s; a `long[1000]` summed 10^5 times 93.8 -> 1.44 s
+  (`.kb/wasm-int-fusion.md`). The JVM (that offsets program's jar 65,079 -> 65,003 B, both
+  times) and the interpreter are unchanged. **The premise was the dispatch's bytes, and it held only where nothing had pinned
+  the array**: the type-test fold had already cut each undeclared site of the reader to the
+  general arm, `region`'s arrays were general by their `make-array` inits, and a general
+  array's `length` at the speed levels is a 57 B arm where the call is 3 (nine in `region`).
+  What is left of the reader: five `make-array`s of a computed size (some 150 B each: the dims
+  of any rank, `_vec_sync`), three generic divisions of declared integers and the checks of
+  what the inline arms refuse.
 - **`byte` and `short`** are integers an operator promotes to `int` and an assignment of a
   constant that fits, a cast or a compound assignment narrows (`JavaForms.signed`).
   **`float` is the double of its value** -- every binary32 is a binary64 -- and each operation's

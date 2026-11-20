@@ -1703,6 +1703,28 @@ cases:
               return null;
           }
 
+          // an array a parameter holds is declared of its type or null, a long[]'s
+          // element read in arithmetic; the index and the value before the null
+          static int first(int[] a) {
+              return a[next()] + 1;
+          }
+
+          static long scaled(long[] a, int i) {
+              return a[i] * 3 + 1;
+          }
+
+          static int stored(int[] a, int i) {
+              a[i] = next();
+              return a.length;
+          }
+
+          static int counted;
+
+          static int next() {
+              counted++;
+              return 0;
+          }
+
           public static void main(String[] args) {
               RaisedPoint p = none();
               int[] xs = args.length > 5 ? new int[1] : null;
@@ -1746,6 +1768,11 @@ cases:
               attempt("format argument", () -> System.out.println(String.format("%s %s", "x")));
               attempt("divide", () -> System.out.println(7 / args.length));
               attempt("parse", () -> System.out.println(Integer.parseInt("7x")));
+              attempt("declared element", () -> System.out.println(first(xs)));
+              attempt("declared long element", () -> System.out.println(scaled(null, 0)));
+              attempt("declared long index", () -> System.out.println(scaled(new long[2], args.length + 5)));
+              attempt("declared store", () -> System.out.println(stored(xs, 0)));
+              System.out.println("indexes evaluated " + counted + " " + scaled(new long[] {1L << 60, 7}, 1));
               try {
                   System.out.println(xs[1]);
               } catch (IllegalStateException | NullPointerException e) {
@@ -1789,6 +1816,11 @@ cases:
       format argument: java.util.MissingFormatArgumentException: Format specifier '%s'
       divide: java.lang.ArithmeticException: / by zero
       parse: java.lang.NumberFormatException: For input string: "7x"
+      declared element: java.lang.NullPointerException true
+      declared long element: java.lang.NullPointerException true
+      declared long index: java.lang.ArrayIndexOutOfBoundsException: Index 5 out of bounds for length 2
+      declared store: java.lang.NullPointerException true
+      indexes evaluated 2 22
       multi-catch NullPointerException
   # try-with-resources is the statement the language specifies: the resources closed in
   # reverse, a null one skipped, an exception of close suppressed by the body's, a

@@ -150,14 +150,51 @@ final class JavaForms {
 	}
 
 	/**
-	 * {@code (declare (type spec var...) ...)} for the variables of an integral type, or
-	 * {@code null} when none is.
+	 * The Common Lisp type of the arrays of an array type -- the vector {@code new} makes
+	 * of it, {@code (simple-array (unsigned-byte 32) (*))} for an {@code int[]}, whose
+	 * element type is also what each element read answers, {@code (signed-byte 64)} for a
+	 * {@code long[]} -- or {@code null} for any other type.
 	 */
-	static @Nullable LispVal integerDeclaration(List<LispSymbol> variables, List<JavaType> types) {
+	static @Nullable LispVal arrayType(JavaType type) {
+		if (!(type instanceof JavaType.ArrayType array)) {
+			return null;
+		}
+		LispVal element = array.element() instanceof JavaType.Primitive primitive ? switch (primitive) {
+			case INT -> list(cl("unsigned-byte"), integer(32));
+			case BYTE -> list(cl("unsigned-byte"), integer(8));
+			case SHORT, CHAR -> list(cl("unsigned-byte"), integer(16));
+			case LONG -> list(cl("signed-byte"), integer(64));
+			case FLOAT -> cl("single-float");
+			case DOUBLE -> cl("double-float");
+			case BOOLEAN -> cl("bit");
+			default -> T;
+		} : T;
+		return list(cl("simple-array"), element, list(cl("*")));
+	}
+
+	/**
+	 * What a variable of a type is declared of: an integral type's range
+	 * ({@link #integerType}), or an array type's vector or {@code nil}
+	 * ({@link #arrayType}); {@code null} for any other type.
+	 */
+	static @Nullable LispVal declaredType(JavaType type) {
+		LispVal integer = integerType(type);
+		if (integer != null) {
+			return integer;
+		}
+		LispVal array = arrayType(type);
+		return array == null ? null : list(cl("or"), cl("null"), array);
+	}
+
+	/**
+	 * {@code (declare (type spec var...) ...)} for the variables of an integral or an
+	 * array type ({@link #declaredType}), or {@code null} when none is.
+	 */
+	static @Nullable LispVal typeDeclaration(List<LispSymbol> variables, List<JavaType> types) {
 		java.util.Map<String, List<LispVal>> byType = new java.util.LinkedHashMap<>();
 		java.util.Map<String, LispVal> specs = new java.util.HashMap<>();
 		for (int i = 0; i < variables.size(); i++) {
-			LispVal spec = integerType(types.get(i));
+			LispVal spec = declaredType(types.get(i));
 			if (spec != null) {
 				specs.putIfAbsent(spec.print(), spec);
 				byType.computeIfAbsent(spec.print(), key -> new ArrayList<>()).add(variables.get(i));
@@ -195,9 +232,35 @@ final class JavaForms {
 		};
 	}
 
-	/** {@code (the spec form)} of a value of an integral type; any other as it is. */
+	/**
+	 * An array whose element is read or stored: asserted of its type
+	 * ({@link #declaredType}, {@code nil} included) where the form does not tell it -- a
+	 * field, a call, an element of an array of arrays -- and as it is where it does: a
+	 * variable, declared where it is bound, a static field's read, asserted where it is
+	 * read.
+	 */
+	static LispVal knownArray(JavaType type, LispVal form) {
+		if (!(form instanceof LispCons cons) || cons.car().equals(cl("the"))) {
+			return form;
+		}
+		return asserted(type, form);
+	}
+
+	/**
+	 * An array that is no {@code null} -- tested where the form is, which raises
+	 * {@code NullPointerException} -- asserted of its vector ({@link #arrayType}).
+	 */
+	static LispVal vector(JavaType type, LispVal form) {
+		LispVal spec = arrayType(type);
+		return spec == null ? form : list(cl("the"), spec, form);
+	}
+
+	/**
+	 * {@code (the spec form)} of a value of an integral or an array type
+	 * ({@link #declaredType}); any other as it is.
+	 */
 	static LispVal asserted(JavaType type, LispVal form) {
-		LispVal spec = integerType(type);
+		LispVal spec = declaredType(type);
 		return spec == null ? form : list(cl("the"), spec, form);
 	}
 
