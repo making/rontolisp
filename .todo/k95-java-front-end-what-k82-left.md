@@ -190,8 +190,9 @@ checked exception, and a line that differs from a JDK by decision can be in no c
   the host's integers is the other way). A JDK's answers are `Div.java` / `Div.jdk.txt` of
   the k82 artefacts: toward zero; `Cannot divide by zero`, `Exceeds capacity of Duration: `
   and the nanoseconds; of a `Duration` `Division by zero` / `Division undefined` (0 by 0),
-  `Overflow`, a null `divisor`. `CompletableFuture.orTimeout` /
-  `completeOnTimeout`, the older `Calendar`. What is left of `java.time` is `.todo/k77` .. `k80`.
+  `Overflow`, a null `divisor`. Met beside it: `CompletableFuture.orTimeout` /
+  `completeOnTimeout`, the older `Calendar`. What is left of `java.time` is `.todo/k92` ..
+  `k94`.
 - **`"ß".toUpperCase()` is `ß`**; a JDK answers `SS` (the host's upcase is one character to
   one).
 - **`java.util.regex`**: `Matcher.usePattern`, `namedGroups`; `\N{name}` (no name table is
