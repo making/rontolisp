@@ -26,7 +26,7 @@
 		-->
 		<maven-resources-plugin.version>3.4.0</maven-resources-plugin.version>
 		<maven-compiler-plugin.version>3.16.0</maven-compiler-plugin.version>
-		<maven-install-plugin.version>3.1.4</maven-install-plugin.version>
+		<maven-install-plugin.version>3.2.0</maven-install-plugin.version>
 		<!-- The native executable output's precompile shim and runner stub
 		     (.kb/native-output.md): build them with rontolisp-native/build.sh during
 		     generate-resources when cargo is found (-Pnative turns this on), and fail
