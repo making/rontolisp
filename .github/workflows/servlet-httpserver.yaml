@@ -1,0 +1,38 @@
+name: servlet-httpserver
+
+# The Servlet container on the JDK HTTP server is a Maven project of its own, outside the
+# root reactor and independent of rontolisp (.kb/servlet-httpserver.md): only a change to it
+# runs its tests, beside Tomcat and Jetty.
+on:
+  push:
+    branches:
+    - develop
+    - main
+    paths:
+    - servlet-httpserver/**
+    - .github/workflows/servlet-httpserver.yaml
+  pull_request:
+    branches:
+    - develop
+    - main
+    paths:
+    - servlet-httpserver/**
+    - .github/workflows/servlet-httpserver.yaml
+  workflow_dispatch: {}
+
+permissions:
+  contents: read
+
+jobs:
+  test:
+    runs-on: ubuntu-latest
+    steps:
+    - uses: actions/checkout@v7
+    - name: Set up JDK 25
+      uses: actions/setup-java@v6
+      with:
+        java-version: '25'
+        distribution: 'liberica'
+        cache: maven
+    - name: Test
+      run: ./mvnw -V --no-transfer-progress -f servlet-httpserver/pom.xml test

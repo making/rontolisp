@@ -26,3 +26,18 @@ as a WAR to a servlet container through Java.
 - Size: report the component's size; a program using one servlet should not hold the whole
   API (pay only for what you use).
 - Docs: `doc/en|ja/java/` page for "a Servlet application on rontolisp", deviations if any.
+
+## Where k96 left it (2026-11-21, `.kb/servlet-httpserver.md`, "What the rontolisp side needs")
+
+The measurement asked for above was taken once, on `f485c352e`, with scratch copies patched
+past each refusal: **seven refusals, and with them worked around the hello world serves on
+the interpreter and as a component under `wasmtime serve`** (961,157 B; a wider program with a
+filter, a listener, cookies and dispatches 1,191,534 B). The table in the note names each
+refusal, its file and what reaches it. Six are in the API's sources -- `transient`,
+`java.util.EventObject`, `java.util.EventListener`, `java.lang.reflect.Method` in
+`HttpServlet.doOptions` (the one needing a decision, `.todo/k89`), `java.io.CharConversionException`,
+`Cloneable` / `clone()` in `Cookie` (`.todo/k16`) -- and one in the container
+(`Locale.forLanguageTag`). So this item is those seven, the JVM and `--native` legs (not
+run), the E2E, the size breakdown, and the docs. Use the source path form for the API:
+`--java-source-path servlet-httpserver/src/main/java:<the API's sources jar>` (the goal above
+says `--java-dep`, which is class files for the host's class loader).

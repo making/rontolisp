@@ -8,6 +8,7 @@
 ./mvnw -f docs-tool/pom.xml test               # the documentation site generator
 ./mvnw -f rontolisp-maven-plugin/pom.xml test  # the compile-src/main/lisp plugin
 rontolisp-native/build.sh --test               # Cargo workspace (rustc >= 1.96): host shim + stub, then the Rust tests
+./mvnw -f servlet-httpserver/pom.xml test      # the Servlet container (.kb/servlet-httpserver.md): no rontolisp at all
 ```
 
 `rontolisp-maven-plugin` depends on the rontolisp artifact by coordinates, so a SNAPSHOT build
