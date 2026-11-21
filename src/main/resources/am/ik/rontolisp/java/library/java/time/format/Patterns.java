@@ -9,7 +9,10 @@
 // hours make their parts only in a program whose patterns can name them: the compiler
 // notes the letters of each pattern it sees, all of them for one computed where the
 // program runs, and z for a localized form whose time can be full or long (weeks(),
-// quarters(), julian(), zones(), periods(), localizedOffsets()).
+// quarters(), julian(), zones(), periods(), localizedOffsets()). So do words, a year of
+// two digits, a fraction, a zone's id, an offset, a pad and an optional section, which a
+// localized form's patterns may hold too (words(), reduced(), fractions(), zoneIds(),
+// offsets(), pads(), optionals(), localizes()).
 package java.time.format;
 
 import java.time.LocalDate;
@@ -45,6 +48,33 @@ final class Patterns {
     /** Whether one can name an offset as GMT and its hours: O, or Z four times. */
     static native boolean localizedOffsets();
 
+    /** Whether one can name words: G, E, a, three or more of M, L, e, c. */
+    static native boolean words();
+
+    /** Whether one can name a year of two digits: uu, yy. */
+    static native boolean reduced();
+
+    /** Whether one can name a fraction of a second: S. */
+    static native boolean fractions();
+
+    /** Whether one can name a zone's id: V. */
+    static native boolean zoneIds();
+
+    /** Whether one can name an offset: X, x, Z. */
+    static native boolean offsets();
+
+    /** Whether one can name a pad: p. */
+    static native boolean pads();
+
+    /** Whether one can open an optional section: [. */
+    static native boolean optionals();
+
+    /**
+     * Whether the program makes a localized form or a formatter of a requested template,
+     * whose patterns, read where it runs, may hold any of the letters above.
+     */
+    static native boolean localizes();
+
     static void read(DateTimeFormatterBuilder builder, String pattern) {
         for (int at = 0; at < pattern.length(); at++) {
             char c = pattern.charAt(at);
@@ -59,7 +89,12 @@ final class Patterns {
                         throw new IllegalArgumentException(
                                 "Pad letter 'p' must be followed by valid pad pattern: " + pattern);
                     }
-                    builder.padNext(count);
+                    if (pads() || localizes()) {
+                        builder.padNext(count);
+                    }
+                    else {
+                        throw unsupported(c);
+                    }
                     c = pattern.charAt(end);
                     at = end;
                     end = at + 1;
@@ -96,13 +131,24 @@ final class Patterns {
                 }
             }
             else if (c == '[') {
-                builder.optionalStart();
+                if (optionals() || localizes()) {
+                    builder.optionalStart();
+                }
+                else {
+                    throw unsupported(c);
+                }
             }
             else if (c == ']') {
-                try {
-                    builder.optionalEnd();
+                if (optionals() || localizes()) {
+                    try {
+                        builder.optionalEnd();
+                    }
+                    catch (IllegalStateException none) {
+                        throw new IllegalArgumentException("Pattern invalid as it contains ] without previous [");
+                    }
                 }
-                catch (IllegalStateException none) {
+                else {
+                    // no pattern opens a section
                     throw new IllegalArgumentException("Pattern invalid as it contains ] without previous [");
                 }
             }
@@ -133,6 +179,24 @@ final class Patterns {
         return standalone ? style.asStandalone() : style;
     }
 
+    /** A field in words, in a program whose patterns can name words. */
+    private static void words(DateTimeFormatterBuilder builder, char c, TemporalField field, TextStyle style) {
+        if (words() || localizes()) {
+            builder.appendText(field, style);
+            return;
+        }
+        throw unsupported(c);
+    }
+
+    /** An offset, in a program whose patterns can name one. */
+    private static void offset(DateTimeFormatterBuilder builder, char c, String pattern, String none) {
+        if (offsets() || localizes()) {
+            builder.appendOffset(pattern, none);
+            return;
+        }
+        throw unsupported(c);
+    }
+
     /** A number of at most two letters, one or two digits wide. */
     private static void small(DateTimeFormatterBuilder builder, char c, int count, TemporalField field) {
         if (count > 2) {
@@ -148,7 +212,12 @@ final class Patterns {
 
     private static void year(DateTimeFormatterBuilder builder, int count, TemporalField field) {
         if (count == 2) {
-            builder.appendValueReduced(field, 2, 2, LocalDate.of(2000, 1, 1));
+            if (reduced() || localizes()) {
+                builder.appendValueReduced(field, 2, 2, LocalDate.of(2000, 1, 1));
+            }
+            else {
+                throw unsupported(field == ChronoField.YEAR ? 'u' : 'y');
+            }
         }
         else if (count < 4) {
             builder.appendValue(field, count, 19, SignStyle.NORMAL);
@@ -164,7 +233,7 @@ final class Patterns {
                 if (count > 5) {
                     throw tooMany(c);
                 }
-                builder.appendText(ChronoField.ERA, text(count, false));
+                words(builder, c, ChronoField.ERA, text(count, false));
                 return;
             case 'u':
                 year(builder, count, ChronoField.YEAR);
@@ -195,7 +264,7 @@ final class Patterns {
                     small(builder, c, count, ChronoField.MONTH_OF_YEAR);
                 }
                 else {
-                    builder.appendText(ChronoField.MONTH_OF_YEAR, text(count, c == 'L'));
+                    words(builder, c, ChronoField.MONTH_OF_YEAR, text(count, c == 'L'));
                 }
                 return;
             case 'd':
@@ -205,7 +274,7 @@ final class Patterns {
                 if (count > 5) {
                     throw tooMany(c);
                 }
-                builder.appendText(ChronoField.DAY_OF_WEEK, text(count, false));
+                words(builder, c, ChronoField.DAY_OF_WEEK, text(count, false));
                 return;
             case 'e':
             case 'c':
@@ -222,7 +291,7 @@ final class Patterns {
                     }
                     throw unsupported(c);
                 }
-                builder.appendText(ChronoField.DAY_OF_WEEK, text(count, c == 'c'));
+                words(builder, c, ChronoField.DAY_OF_WEEK, text(count, c == 'c'));
                 return;
             case 'F':
                 if (count > 1) {
@@ -234,7 +303,7 @@ final class Patterns {
                 if (count > 1) {
                     throw tooMany(c);
                 }
-                builder.appendText(ChronoField.AMPM_OF_DAY, TextStyle.SHORT);
+                words(builder, c, ChronoField.AMPM_OF_DAY, TextStyle.SHORT);
                 return;
             case 'h':
                 small(builder, c, count, ChronoField.CLOCK_HOUR_OF_AMPM);
@@ -255,8 +324,11 @@ final class Patterns {
                 small(builder, c, count, ChronoField.SECOND_OF_MINUTE);
                 return;
             case 'S':
-                builder.appendFraction(ChronoField.NANO_OF_SECOND, count, count, false);
-                return;
+                if (fractions() || localizes()) {
+                    builder.appendFraction(ChronoField.NANO_OF_SECOND, count, count, false);
+                    return;
+                }
+                throw unsupported(c);
             case 'A':
                 builder.appendValue(ChronoField.MILLI_OF_DAY, count, 19, SignStyle.NOT_NEGATIVE);
                 return;
@@ -270,8 +342,11 @@ final class Patterns {
                 if (count != 2) {
                     throw new IllegalArgumentException("Pattern letter count must be 2: " + c);
                 }
-                builder.appendZoneId();
-                return;
+                if (zoneIds() || localizes()) {
+                    builder.appendZoneId();
+                    return;
+                }
+                throw unsupported(c);
             case 'O':
                 if (count != 1 && count != 4) {
                     throw new IllegalArgumentException("Pattern letter count must be 1 or 4: " + c);
@@ -286,7 +361,7 @@ final class Patterns {
                 if (count > 5) {
                     throw tooMany(c);
                 }
-                builder.appendOffset(X_PATTERNS[count - 1], c == 'X' ? "Z" : X_NONE[count - 1]);
+                offset(builder, c, X_PATTERNS[count - 1], c == 'X' ? "Z" : X_NONE[count - 1]);
                 return;
             case 'Z':
                 if (count > 5) {
@@ -299,12 +374,7 @@ final class Patterns {
                     }
                     throw unsupported(c);
                 }
-                if (count == 5) {
-                    builder.appendOffset("+HH:MM:ss", "Z");
-                }
-                else {
-                    builder.appendOffset("+HHMM", "+0000");
-                }
+                offset(builder, c, count == 5 ? "+HH:MM:ss" : "+HHMM", count == 5 ? "Z" : "+0000");
                 return;
             case 'Y':
             case 'w':

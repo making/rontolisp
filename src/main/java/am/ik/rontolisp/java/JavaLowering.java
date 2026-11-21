@@ -168,6 +168,12 @@ final class JavaLowering implements JavaEmitter.Context {
 		 */
 		@Nullable Object constant;
 
+		/** The method it is a written parameter of, or {@code null}. */
+		@Nullable Method parameterOf;
+
+		/** Its index among the parameters of {@link #parameterOf}. */
+		int parameterIndex;
+
 		Local(LispSymbol symbol, JavaType type, Object key) {
 			this.symbol = symbol;
 			this.type = type;
@@ -995,8 +1001,38 @@ final class JavaLowering implements JavaEmitter.Context {
 
 	/** Records a call; a method of the library's Java source is lowered because of it. */
 	private void called(Method method) {
+		if (this.passing == method) {
+			this.passing = null;
+		}
+		else {
+			Map<Integer, Set<JavaEmitter.Naming>> namings = this.classes.namingParameters.get(method);
+			if (namings != null) {
+				// reached otherwise than by a call whose arguments were noted
+				namings.values().forEach(each -> each.forEach(naming -> naming.name(this, null)));
+			}
+		}
 		this.effects.calls.add(method);
 		reach(method);
+	}
+
+	/**
+	 * The static or private method whose call is being lowered, whose arguments at the
+	 * parameters whose texts name something have named it: {@link #called} notes nothing
+	 * more.
+	 */
+	private @Nullable Method passing;
+
+	/**
+	 * Notes what a call of a static or private method passes at the parameters whose
+	 * texts name something ({@link JavaClasses#namingParameters}).
+	 */
+	private void passes(Method method, List<Typed> arguments) {
+		Map<Integer, Set<JavaEmitter.Naming>> namings = this.classes.namingParameters.get(method);
+		if (namings == null || arguments.size() != method.parameters.size()) {
+			return;
+		}
+		namings.forEach((index, each) -> each.forEach(naming -> names(arguments.get(index), naming)));
+		this.passing = method;
 	}
 
 	private void reach(Method method) {
@@ -1537,6 +1573,8 @@ final class JavaLowering implements JavaEmitter.Context {
 				Parameter parameter = written.parameters().get(i - method.hidden);
 				local = bind(parameter.name(), method.inside(method.parameters.get(i)), parameter.pos(), parameter);
 				local.isFinal = parameter.isFinal();
+				local.parameterOf = method;
+				local.parameterIndex = i;
 			}
 			locals.add(local);
 		}
@@ -3647,6 +3685,20 @@ final class JavaLowering implements JavaEmitter.Context {
 					quoted = !quoted;
 				}
 				else if (!quoted && ((c >= 'A' && c <= 'Z') || (c >= 'a' && c <= 'z'))) {
+					int end = i + 1;
+					while (end < pattern.length() && pattern.charAt(end) == c) {
+						end++;
+					}
+					named |= this.classes.patternLetters.add(c);
+					if (end - i >= 3 && "MLec".indexOf(c) >= 0) {
+						named |= this.classes.patternLetters.add(JavaIntrinsics.WORDS);
+					}
+					if (end - i == 2 && (c == 'u' || c == 'y')) {
+						named |= this.classes.patternLetters.add(JavaIntrinsics.TWO_DIGITS);
+					}
+					i = end - 1;
+				}
+				else if (!quoted && c == '[') {
 					named |= this.classes.patternLetters.add(c);
 				}
 			}
@@ -3655,6 +3707,46 @@ final class JavaLowering implements JavaEmitter.Context {
 			// what was lowered for patterns naming none of these letters is lowered again
 			this.classes.changed();
 		}
+	}
+
+	@Override
+	public void names(Typed text, JavaEmitter.Naming naming) {
+		if (text.constant() instanceof String constant) {
+			naming.name(this, constant);
+			return;
+		}
+		Local parameter = text.form() instanceof LispSymbol symbol ? localOf(symbol) : null;
+		Method method = parameter == null ? null : parameter.parameterOf;
+		if (parameter == null || method == null || this.unit.source().library() || this.classes.session
+				|| !(method.isStatic || method.isPrivate) || method.isConstructor()
+				|| this.classes.assignedParameters.contains(parameter.key)) {
+			naming.name(this, null);
+			return;
+		}
+		if (this.classes.namingParameters.computeIfAbsent(method, key -> new HashMap<>())
+			.computeIfAbsent(parameter.parameterIndex, key -> new HashSet<>())
+			.add(naming)) {
+			// the calls lowered so far noted nothing of what they pass there
+			this.classes.changed();
+		}
+	}
+
+	/**
+	 * The local a symbol is the variable of, in the scopes of the body being lowered up
+	 * to a local class's, or {@code null}.
+	 */
+	private @Nullable Local localOf(LispSymbol symbol) {
+		for (Scope scope : this.scopes) {
+			for (Local local : scope.locals.values()) {
+				if (local.symbol().equals(symbol)) {
+					return local;
+				}
+			}
+			if (scope.boundary != null) {
+				return null;
+			}
+		}
+		return null;
 	}
 
 	@Override
@@ -3732,10 +3824,22 @@ final class JavaLowering implements JavaEmitter.Context {
 
 	/**
 	 * The answer to a condition that is a question the library's own source asks of the
-	 * program it is lowered into ({@link JavaIntrinsics#answered}); {@code null} for any
-	 * other condition. What the answer does not take is not lowered.
+	 * program it is lowered into ({@link JavaIntrinsics#answered}), or that such answers
+	 * decide: its negation, a conditional and or or whose first operand decides it or
+	 * leaves it to a second that is decided; {@code null} for any other condition. What
+	 * the answer does not take is not lowered.
 	 */
 	private @Nullable Boolean answered(Expression condition) {
+		if (condition instanceof Unary not && not.operator().equals("!")) {
+			Boolean answer = answered(not.operand());
+			return answer == null ? null : !answer;
+		}
+		if (condition instanceof Binary both && (both.operator().equals("&&") || both.operator().equals("||"))) {
+			// a question has no effect, so the operand it leaves untaken is not lowered
+			boolean and = both.operator().equals("&&");
+			Boolean first = answered(both.left());
+			return first == null ? null : first == !and ? first : answered(both.right());
+		}
 		if (!(condition instanceof Call call) || !call.arguments().isEmpty() || !this.unit.source().library()) {
 			return null;
 		}
@@ -4582,6 +4686,10 @@ final class JavaLowering implements JavaEmitter.Context {
 					return new Place(local.type(), local.symbol(), value -> {
 						if (local.isFinal) {
 							throw error(name.pos(), "cannot assign a value to final variable " + name.identifier());
+						}
+						if (local.parameterOf != null && this.classes.assignedParameters.add(local.key)) {
+							// a text read from it is no longer what the calls pass
+							this.classes.changed();
 						}
 						return call("setq", local.symbol(), value);
 					}, bindings);
@@ -8442,6 +8550,9 @@ final class JavaLowering implements JavaEmitter.Context {
 			return new Typed(located(form, pos), resolved.returnType());
 		}
 		LispVal form;
+		if (method.isStatic || method.isPrivate) {
+			passes(method, resolved.arguments());
+		}
 		if (method.isStatic) {
 			called(method);
 			uses(method.owner);
@@ -8451,6 +8562,7 @@ final class JavaLowering implements JavaEmitter.Context {
 			LispVal object = Objects.requireNonNull(receiver).form();
 			form = virtual(in, method, call.target() != null ? object : null, object, resolved.forms());
 		}
+		this.passing = null;
 		return new Typed(located(form, pos), resolved.returnType());
 	}
 

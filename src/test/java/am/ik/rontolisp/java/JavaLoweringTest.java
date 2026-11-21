@@ -612,17 +612,29 @@ class JavaLoweringTest {
 				    }
 				}
 				""";
-		// The same for an offset as GMT and its hours (O, ZZZZ); and a formatter's
-		// decimal
+		// The same for an offset as GMT and its hours (O, ZZZZ), words, a year of two
+		// digits, a fraction, a zone's id, an offset, a pad and an optional section,
+		// which a localized form's patterns may hold too; and a formatter's decimal
 		// style, the fields it resolves and resolving leniently are in a program that
-		// reaches withDecimalStyle, withResolverFields and withResolverStyle.
-		assertThat(lower(patterned.formatted("\"uuuu'Y'\"", ""), "L15.java"))
-			.noneMatch(form -> form.contains("WeekFields") || form.contains("IsoFields")
-					|| form.contains("JulianFields") || form.contains("Parsed.resolveOthers")
-					|| form.contains("IsoChronology") || form.contains("ZoneNames") || form.contains("Step.DayPeriod")
-					|| form.contains("OfPeriod()|") || form.contains("Step.GmtOffset") || form.contains("getZeroDigit")
-					|| form.contains("Parsed.among") || form.startsWith("(DEFUN |java.time.format.Parsed.weekDay(")
-							&& form.contains("java.time.DayOfWeek.of(int)"));
+		// reaches withDecimalStyle, withResolverFields and withResolverStyle, the last
+		// with a style that is no read of STRICT or SMART.
+		for (String strict : List.of("", ").withResolverStyle(java.time.format.ResolverStyle.STRICT")) {
+			assertThat(lower(patterned.formatted("\"uuuu'Y'\"" + strict, ""), "L15.java"))
+				.noneMatch(form -> form.contains("WeekFields") || form.contains("IsoFields")
+						|| form.contains("JulianFields") || form.contains("Parsed.resolveOthers")
+						|| form.contains("IsoChronology") || form.contains("ZoneNames")
+						|| form.contains("Step.DayPeriod") || form.contains("OfPeriod()|")
+						|| form.contains("Step.GmtOffset") || form.contains("getZeroDigit")
+						|| form.contains("Parsed.among")
+						|| form.startsWith("(DEFUN |java.time.format.Parsed.weekDay(")
+								&& form.contains("java.time.DayOfWeek.of(int)")
+						|| form.startsWith("(DEFUN |java.time.format.Parsed.resolveTime()| ")
+								&& form.contains("ofNanoOfDay")
+						|| form.contains("Step.Words") || form.contains("Step.Reduced")
+						|| form.contains("Step.Fraction") || form.contains("Step.ZoneName")
+						|| form.contains("Step.Offset") || form.contains("padNext")
+						|| form.startsWith("(DEFUN |java.time.format.DateTimeFormatterBuilder.optionalStart()| "));
+		}
 		assertThat(lower(patterned.formatted("args[0]", ".query(TemporalQueries.chronology())"), "L15.java"))
 			.anyMatch(form -> form.startsWith("(DEFUN |java.time.temporal.WeekFields.of(java.time.DayOfWeek,int)| "))
 			.anyMatch(form -> form.startsWith("(DEFUN |java.time.format.Parsed.resolveOthers()| "))
@@ -630,7 +642,9 @@ class JavaLoweringTest {
 					&& form.contains("java.time.chrono.IsoChronology.INSTANCE"))
 			.anyMatch(form -> form.startsWith("(DEFUN |java.time.format.ZoneNames.read(java.time.format.Reading,"))
 			.anyMatch(form -> form.startsWith("(DEFUN |java.time.format.Parsed.middleOfPeriod()| "))
-			.anyMatch(form -> form.startsWith("(DEFUN |java.time.format.Step.GmtOffset.parse("));
+			.anyMatch(form -> form.startsWith("(DEFUN |java.time.format.Step.GmtOffset.parse("))
+			.anyMatch(form -> form.startsWith("(DEFUN |java.time.format.Step.Words.parse("))
+			.anyMatch(form -> form.startsWith("(DEFUN |java.time.format.Step.Fraction.parse("));
 		assertThat(lower(patterned.formatted("\"uuuu'Y'\").withDecimalStyle(java.time.format.DecimalStyle.STANDARD)"
 				+ ".withResolverFields(java.time.temporal.ChronoField.YEAR)"
 				+ ".withResolverStyle(java.time.format.ResolverStyle.LENIENT", ""), "L15.java"))
@@ -639,7 +653,32 @@ class JavaLoweringTest {
 			.anyMatch(form -> form.startsWith("(DEFUN |java.time.format.Parsed.resolve(")
 					&& form.contains("Parsed.among"))
 			.anyMatch(form -> form.startsWith("(DEFUN |java.time.format.Parsed.weekDay(")
-					&& form.contains("java.time.DayOfWeek.of(int)"));
+					&& form.contains("java.time.DayOfWeek.of(int)"))
+			.anyMatch(form -> form.startsWith("(DEFUN |java.time.format.Parsed.resolveTime()| ")
+					&& form.contains("ofNanoOfDay"));
+		// A pattern a static or a private method is given names the letters of what
+		// every call passes it (Y a week's), through a lambda that captures it too; a
+		// method reached otherwise (a reference) or that assigns it names all of them.
+		String passed = """
+				import java.time.format.DateTimeFormatter;
+				import java.util.function.BiFunction;
+				class L19 {
+				    static Object read(String pattern, String text) { %sreturn passOn(pattern).apply(text); }
+				    private static java.util.function.Function<String, Object> passOn(String pattern) {
+				        return text -> DateTimeFormatter.ofPattern(pattern).parse(text);
+				    }
+				    public static void main(String[] args) {
+				        System.out.println(read("uuuu'Y'", "2026Y"));%s
+				    }
+				}
+				""";
+		assertThat(lower(passed.formatted("", ""), "L19.java")).noneMatch(form -> form.contains("WeekFields"));
+		for (List<String> otherwise : List.of(List.of("", " read(\"YYYY\", \"2026\");"),
+				List.of("", " BiFunction<String, String, Object> f = L19::read;"),
+				List.of("pattern = pattern.trim(); ", ""))) {
+			assertThat(lower(passed.formatted(otherwise.get(0), otherwise.get(1)), "L19.java")).anyMatch(
+					form -> form.startsWith("(DEFUN |java.time.temporal.WeekFields.of(java.time.DayOfWeek,int)| "));
+		}
 		String localized = """
 				import java.time.LocalTime;
 				import java.time.format.*;
@@ -651,6 +690,7 @@ class JavaLoweringTest {
 				""";
 		assertThat(lower(localized.formatted("MEDIUM"), "L16.java"))
 			.anyMatch(form -> form.startsWith("(DEFUN |java.time.format.Step.Styled.parts(int)| "))
+			.anyMatch(form -> form.startsWith("(DEFUN |java.time.format.Step.Words.print("))
 			.noneMatch(form -> form.contains("ZoneNames"));
 		assertThat(lower(localized.formatted("LONG"), "L16.java"))
 			.anyMatch(form -> form.startsWith("(DEFUN |java.time.format.ZoneNames.name("));

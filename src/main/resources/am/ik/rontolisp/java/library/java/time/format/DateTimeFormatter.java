@@ -359,10 +359,22 @@ public final class DateTimeFormatter {
         return style;
     }
 
-    public DateTimeFormatter withResolverStyle(ResolverStyle resolverStyle) {
+    /**
+     * The compiler calls styled where the style is a read of STRICT or SMART, otherwise
+     * anyStyle, so that only a program that can give a formatter a lenient style resolves
+     * leniently (Parsed.lenients()).
+     */
+    public native DateTimeFormatter withResolverStyle(ResolverStyle resolverStyle);
+
+    static DateTimeFormatter anyStyle(DateTimeFormatter formatter, ResolverStyle resolverStyle) {
+        return styled(formatter, resolverStyle);
+    }
+
+    static DateTimeFormatter styled(DateTimeFormatter formatter, ResolverStyle resolverStyle) {
         Objects.requireNonNull(resolverStyle, "resolverStyle");
-        return resolverStyle == style ? this
-                : new DateTimeFormatter(root, locale, decimals, resolverStyle, resolverFields, zone, chronology);
+        return resolverStyle == formatter.style ? formatter
+                : new DateTimeFormatter(formatter.root, formatter.locale, formatter.decimals, resolverStyle,
+                        formatter.resolverFields, formatter.zone, formatter.chronology);
     }
 
     public Set<TemporalField> getResolverFields() {

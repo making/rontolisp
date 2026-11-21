@@ -3185,7 +3185,7 @@ three only where it can make the part that writes it.** Provenance:
   or `Step.ZoneText`) keep resolving a period and reading names out of every other
   program; `Step.regional()` keeps the ids of the regions held out of one holding none.
   The tables (`ZoneNames.written0`, `read0`) hold the regions held: Tokyo 124 and 100 B,
-  Paris 159 and 510, every region 90,405 and 26,798 B. Measured and changed: a `HashMap`
+  Paris 159 and 510, every region 90,405 (53,865 since k79's groups) and 26,798 B. Measured and changed: a `HashMap`
   of the names put every class's `hashCode` and `equals` in a program writing a zone's name
   (49 KB, now arrays); the patterns and the periods as array literals cost 16 KB of top
   level (now texts); `Long.parseLong` 3.7 KB (now a loop).
@@ -3198,7 +3198,8 @@ three only where it can make the part that writes it.** Provenance:
   (5.6 s, 1,199,318 B) and the component (5.5 s) print a JDK's lines (the JDK 3.7 s, all on
   a loaded machine); the k35, k42, k43 and k52 grids print theirs as before.
 - What was not there came with k70 ("java.time: what k57 left") and k77 ("java.time: the
-  localized pattern of a requested template"), but the cost leads (`.todo/k79`).
+  localized pattern of a requested template"), the cost leads with k79 ("java.time: what a
+  formatter costs").
 - Pins: java-spec `localized-forms-a-zones-name-in-words-and-a-days-period` (standalone,
   47 lines, 66 since k77's templates); `JavaZoneRulesTest` (the shipped names are the JDK's; a program's tables hold
   what it holds); `JavaLoweringTest#theLibraryIsJavaSourceLoweredAsFarAsTheProgramReaches`
@@ -3292,7 +3293,8 @@ it reaches the member that makes it.** Provenance:
   whether the program reaches a member, the first reach lowering it again):
   `DateTimeFormatter.decimals()` by `withDecimalStyle`, `Parsed.filtered()` by
   `withResolverFields`, `Parsed.lenients()` by `withResolverStyle` -- the one way to a lenient
-  formatter, behind which only the lenient week rule is so far (`.todo/k79`) -- and
+  formatter, behind which every lenient branch of `Parsed` is since k79, and which a read of
+  `STRICT` or `SMART` does not answer (k79, "java.time: what a formatter costs") -- and
   `Patterns.localizedOffsets()` by the letters `O` and `Z` (`GmtOffset`, 3.7 KB, was in every
   program of a pattern).
 - **What a program pays** (wasm, base `358f6b493` -> the k70 commit `ca6c72ecb`, before
@@ -3376,7 +3378,9 @@ a period's or a zone's parts only where a template can name one.** Provenance:
 - **Who pays**: `ofLocalizedPattern` and `appendLocalized(String)` are natives
   (`JavaIntrinsics.templateLetters`): a constant template names `w` and `Y` for its `w`, and
   its `Q`, `B` and `v`; a computed one all five. A template's other letters find patterns of
-  letters every formatter has (`ccc` is no week's). `Texts.ownCalendars()` (`makesOther`: a
+  letters every formatter has (`ccc` is no week's), and since k79 of letters every program
+  making a localized form or a template's formatter has (`Patterns.localizes()`).
+  `Texts.ownCalendars()` (`makesOther`: a
   `Chronology` that is not ISO's) keeps the calendar's check, and `Step.templated()` (the
   part made) the formatter's locale handed to the parts (`Writing.locale`,
   `Reading.locale`), out of every other program. Measured: handed always, a program writing
@@ -3522,6 +3526,75 @@ sizes: `.todo/artefacts/k78-java-time-a-calendar-of-the-program-s-own/`.
   `JavaLoweringTest#theLibraryIsJavaSourceLoweredAsFarAsTheProgramReaches` (`L17`, `L18`: the
   calendar's writing and reading where a program makes one, its zoned date-time where it can give
   a zone).
+
+## java.time: what a formatter costs (2026-11-21, k79)
+
+**Invariant: a formatter's parts, the lenient resolving and the names of zones in words are
+in a program only as far as its patterns, styles and zones can name them, read through the
+constants every call of a static or private method passes; what a program prints is a JDK
+25's, as before.** Provenance: [java-frontend-provenance.md](java-frontend-provenance.md).
+The programs and the sizes: `.todo/artefacts/k79-java-time-what-a-formatter-costs-the-leads-k70-measured/`.
+The four leads of k70, each measured first (wasm, base `42b66b2e6`; the programs one
+statement in `main`, as k70's table):
+
+- **A constant passed on** (taken): a text a native notes (`ofPattern`, `appendPattern`,
+  `ofLocalizedPattern`, `appendLocalized(String)`, `ZoneId.of`, `ZoneRulesProvider.getRules`
+  and `getVersions`) that is a parameter of a static or private method no body assigns names
+  what every call of the method passes there, through a lambda that captures it too
+  (`JavaEmitter.Context.names`, a `Naming` per kind of text; `JavaClasses.namingParameters`,
+  `assignedParameters`). The first such parameter, a later assignment, lower the program
+  again; a call notes its arguments (`JavaLowering.passes`), any other way to the method --
+  a reference, a session -- names what a computed text names (`called`). A constructor, an
+  instance method that can be overridden, a field are no such parameter. YAVI's
+  `isLocalDatePattern` is private: `Event.java` 921,352 -> 848,308 by this alone. Measured
+  bound first by naming `uuuu-MM-dd` for every computed pattern: the same bytes.
+- **Resolving leniently** (taken): every lenient branch of `Parsed` is behind
+  `lenients()`, and `withResolverStyle` is a native whose argument, a read of `STRICT` or
+  `SMART`, calls `styled`, any other `anyStyle`, which `lenients()` asks for. A question
+  folds through `!`, `&&` and `||` where its first operand decides (`JavaLowering.answered`),
+  so `lenients() && lenient()` lowers nothing of the branch. A date read by a pattern
+  358,978 -> 357,819; with `withResolverStyle(STRICT)` 359,645 -> 358,257; `LENIENT` the
+  same bytes.
+- **The masked operations of the parts** (not taken: the premise is gone): since k56, k64
+  and k68 `Step.DayPeriod.parse` is 2,331 B, `ZoneNames.read()` 2,472 and
+  `Parsed.hourInPeriod` 904 (k56 had measured 4 to 6 KB each).
+- **The names of every region** (taken): the table a program writes names from holds each
+  group of six names a kind of locale writes once, and a region the numbers of its four
+  (`JavaZoneNames.written`; 562 regions' 2,248 groups, 827 distinct): every region 90,405
+  -> 53,865 characters. One region pays the lookup: Tokyo's `zzzz` 336,223 -> 336,740.
+  Not taken: the root's city out of its group (428 groups, some 50,500 characters); the
+  names read (26,798) repeat little.
+- **The parts of letters no pattern names** (found measuring, taken, the largest): a date
+  written by `uuuu-MM-dd` was 39.5 KB over one by the builder's numbers, read 55 KB: words,
+  a reduced year, a fraction, a zone's id, offsets, a pad and an optional section were in
+  every program of a pattern. They are behind questions of the letters noted
+  (`Patterns.words()`: `G`, `E`, `a`, and the mark `#` of a run of three or more of `M`,
+  `L`, `e`, `c`; `reduced()`: the mark `2` of `uu` or `yy`; `fractions()` `S`, `zoneIds()`
+  `V`, `offsets()` `X x Z`, `pads()` `p`, `optionals()` `[`), each `|| localizes()`: a
+  localized form's or a template's patterns are read where the program runs, so a program
+  reaching `DateTimeFormatterBuilder.parts` keeps every part. A gate not taken throws the
+  subset's refusal, which no pattern of the program reaches.
+- **What a program pays** (base -> k79): `LocalDate.parse` of a text, a zoned date-time in
+  Tokyo, `plusDays`, `ISO_LOCAL_DATE_TIME.format`, YAVI's `Member.java` and `Booking.java`
+  the same bytes; a date written by `uuuu-MM-dd` 281,671 -> 254,076, read 358,978 ->
+  315,477, read strictly 359,645 -> 315,816, leniently 359,645 -> 317,233; a pattern
+  computed where the program runs 450,150 -> 449,964; `ofLocalizedDate(MEDIUM)` written and
+  read 382,873 -> 381,815; `ZonedDateTime.parse` of `ISO_ZONED_DATE_TIME` 373,377 ->
+  372,270; a time by `h:mm B` 387,599 -> 339,699; Tokyo's `zzzz` 336,223 -> 310,944; every
+  region's `zzzz` written 474,188 -> 412,324, read too 606,200 -> 544,593; a week's pattern
+  through a static method 325,247 -> 282,618; Tokyo and Paris through a static method
+  201,377 -> 155,039 (every region held before); k43's `yavi/Event.java` 921,352 -> 799,945.
+  A date by the builder's numbers, written 242,116, read 303,530, is the floor.
+- **Verified**: the k43, k52, k57, k70 and k77 grids print a JDK's lines on the interpreter,
+  the JVM, wasm and the component; k78's probes print what they printed; `Event.java` and
+  the probes of each way to a parameter (a constant through two methods, an assignment, a
+  reference, a lambda's argument, a template, a capture, a zone) print a JDK's on the four.
+- Pins: java-spec `a-pattern-and-a-zone-a-method-is-given` (standalone: no other case's
+  pattern names its letters); `JavaLoweringTest#theLibraryIsJavaSourceLoweredAsFarAsTheProgramReaches`
+  (`L15` the parts and the lenient branches, `STRICT` too; `L16` a localized form keeps them;
+  `L19` a pattern through two methods, a reference, an assignment);
+  `JavaZoneRulesTest#aProgramsTableHoldsTheRegionsItNames` (a zone through a static method,
+  the groups).
 
 ## java.util.Date and java.sql (2026-11-20, k37)
 

@@ -598,11 +598,13 @@ class JavaZoneRulesTest {
 		assertThat(all.chars()).allMatch(c -> c >= ' ' && c <= '~' && c != '"' && c != '\\');
 		// A program that names no region holds none, though it reads a zoned text with an
 		// offset alone; a constant brings its region alone, a name computed where the
-		// program runs all. A short name of SHORT_IDS brings the region it stands for, a
-		// zoned text the regions it names, and so does a name the provider is asked for.
+		// program runs all, a static method's parameter what every call passes it. A
+		// short name of SHORT_IDS brings the region it stands for, a zoned text the
+		// regions it names, and so does a name the provider is asked for.
 		String program = """
 				import java.time.*;
 				class Z {
+				    static ZoneId zone(String id) { return ZoneId.of(id); }
 				    public static void main(String[] args) {
 				        System.out.println(ZonedDateTime.parse("2026-07-01T10:15+02:00").plusHours(1) + " " + %s);
 				    }
@@ -612,7 +614,8 @@ class JavaZoneRulesTest {
 			assertThat(lower(program.formatted(none)))
 				.noneMatch(form -> form.contains("java.time.Tz") || form.contains("java.time.zone.ZoneChanges"));
 		}
-		for (String tokyo : List.of("ZoneId.of(\"Asia/Tokyo\")", "ZoneId.of(\"JST\", ZoneId.SHORT_IDS)",
+		for (String tokyo : List.of("ZoneId.of(\"Asia/Tokyo\")", "zone(\"Asia/Tokyo\")",
+				"ZoneId.of(\"JST\", ZoneId.SHORT_IDS)",
 				"java.time.zone.ZoneRulesProvider.getRules(\"Asia/Tokyo\", false)",
 				"ZonedDateTime.parse(\"2026-07-01T10:15+09:00[Asia/Tokyo]\")")) {
 			assertThat(lower(program.formatted(tokyo))).as(tokyo)
@@ -622,18 +625,22 @@ class JavaZoneRulesTest {
 		}
 		// A library of the source path reaches a parse it may never make (YAVI's table of
 		// types): only the program's own files bring regions by reading zoned texts.
-		for (String every : List.of("ZoneId.of(args[1])", "ZoneId.of(\"JST\", java.util.Map.of())",
+		for (String every : List.of("ZoneId.of(args[1])", "zone(args[1])", "ZoneId.of(\"JST\", java.util.Map.of())",
 				"ZonedDateTime.parse(args[1])")) {
 			assertThat(lower(program.formatted(every))).as(every).anyMatch(form -> form.contains("Paris!"));
 		}
 		// The names in words a program carries are those of the regions it holds: what it
-		// writes for each, and what a JDK reads as each -- a name a JDK reads as a region
-		// the program does not hold read as the one it holds that writes it.
+		// writes for each, a group of six names of a kind of locale written once however
+		// many regions write it, and what a JDK reads as each -- a name a JDK reads as a
+		// region the program does not hold read as the one it holds that writes it.
 		JavaZoneNames names = JavaZoneNames.shipped();
 		assertThat(names.written(List.of("Asia/Tokyo")))
-			.startsWith("Asia/Tokyo\u0001GMT+09:00\u0001\u0001GMT+10:00\u0001\u0001GMT+09:00\u0001Tokyo\u0001JST\u0001")
+			.startsWith("GMT+09:00\u0001\u0001GMT+10:00\u0001\u0001GMT+09:00\u0001Tokyo\u0002JST\u0001")
 			.contains("\u0001Japan Standard Time\u0001")
-			.endsWith("\u0002");
+			.endsWith("\u0003Asia/Tokyo\u00010\u00011\u00012\u00012\u0001\u0002");
+		assertThat(names.written(List.of("Europe/Berlin", "Europe/Paris")))
+			.endsWith("\u0003Europe/Berlin\u00010\u00011\u00012\u00012\u0001\u0002"
+					+ "Europe/Paris\u00013\u00011\u00012\u00012\u0001\u0002");
 		// (a name read alike in English, British and Canadian is one entry, N its kinds)
 		assertThat(names.read(List.of("Asia/Tokyo"))).contains("\u0001N10Japan Standard Time\u0001");
 		assertThat(names.read(List.of("Africa/Accra"))).startsWith("Africa/Accra\u0001")
@@ -643,7 +650,7 @@ class JavaZoneRulesTest {
 			.startsWith("Africa/Abidjan\u0001")
 			.contains("\u0001J12Accra Time")
 			.doesNotContain("Africa/Accra");
-		assertThat(names.written(null)).hasSizeLessThan(91_000);
+		assertThat(names.written(null)).hasSizeLessThan(54_000);
 		assertThat(names.read(null)).hasSizeLessThan(27_000);
 		// A session goes on holding what a buffer named: the zone lives on in a variable.
 		JavaSession session = new JavaSession(JavaFiles.NONE);

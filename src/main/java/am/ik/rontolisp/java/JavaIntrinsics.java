@@ -223,11 +223,34 @@ final class JavaIntrinsics {
 
 	private static final String FORMATTER_BUILDER = "java.time.format.DateTimeFormatterBuilder";
 
-	/** The letters of a pattern each question of Patterns asks for. */
-	private static final Map<String, String> PATTERN_LETTERS = Map.of("java.time.format.Patterns.weeks()", "YwWec",
-			"java.time.format.Patterns.quarters()", "Qq", "java.time.format.Patterns.julian()", "g",
-			"java.time.format.Patterns.zones()", "zv", "java.time.format.Patterns.periods()", "B",
-			"java.time.format.Patterns.localizedOffsets()", "OZ");
+	/**
+	 * What a pattern's run of three or more of M, L, e or c notes beside its letter: a
+	 * field in words.
+	 */
+	static final char WORDS = '#';
+
+	/**
+	 * What a pattern's run of two of u or y notes beside its letter: a year of two
+	 * digits.
+	 */
+	static final char TWO_DIGITS = '2';
+
+	/**
+	 * The letters of a pattern each question of Patterns asks for, with {@link #WORDS},
+	 * {@link #TWO_DIGITS} and the {@code [} that opens an optional section.
+	 */
+	private static final Map<String, String> PATTERN_LETTERS = Map.ofEntries(
+			Map.entry("java.time.format.Patterns.weeks()", "YwWec"),
+			Map.entry("java.time.format.Patterns.quarters()", "Qq"),
+			Map.entry("java.time.format.Patterns.julian()", "g"), Map.entry("java.time.format.Patterns.zones()", "zv"),
+			Map.entry("java.time.format.Patterns.periods()", "B"),
+			Map.entry("java.time.format.Patterns.localizedOffsets()", "OZ"),
+			Map.entry("java.time.format.Patterns.words()", "GEa" + WORDS),
+			Map.entry("java.time.format.Patterns.reduced()", String.valueOf(TWO_DIGITS)),
+			Map.entry("java.time.format.Patterns.fractions()", "S"),
+			Map.entry("java.time.format.Patterns.zoneIds()", "V"),
+			Map.entry("java.time.format.Patterns.offsets()", "XxZ"), Map.entry("java.time.format.Patterns.pads()", "p"),
+			Map.entry("java.time.format.Patterns.optionals()", "["));
 
 	/**
 	 * The questions answered by whether the program makes an instance of a class of the
@@ -263,13 +286,15 @@ final class JavaIntrinsics {
 	 * The questions answered by whether the program reaches a method of the library: the
 	 * characters of a formatter's numbers where it can give one a decimal style, the
 	 * cutting of the fields read where it can name the fields to resolve, a lenient
-	 * resolving where it can give a resolver style, a zoned date-time of a calendar of
-	 * its own written where it can give a formatter a zone.
+	 * resolving where it can give a resolver style that is no read of STRICT or SMART, a
+	 * zoned date-time of a calendar of its own written where it can give a formatter a
+	 * zone, every part a pattern can make where it makes the parts of a localized form's
+	 * or a requested template's pattern.
 	 */
 	private static final Map<String, String> REACHES = Map.of("java.time.format.DateTimeFormatter.decimals()",
 			FORMATTER + ".withDecimalStyle", "java.time.format.Parsed.filtered()", FORMATTER + ".withResolverFields",
-			"java.time.format.Parsed.lenients()", FORMATTER + ".withResolverStyle",
-			"java.time.format.DateTimeFormatter.zones()", FORMATTER + ".withZone");
+			"java.time.format.Parsed.lenients()", FORMATTER + ".anyStyle", "java.time.format.DateTimeFormatter.zones()",
+			FORMATTER + ".withZone", "java.time.format.Patterns.localizes()", FORMATTER_BUILDER + ".parts");
 
 	/**
 	 * Whether reaching a method of the library, by its class and name, answers a
@@ -669,15 +694,26 @@ final class JavaIntrinsics {
 				|| reads(form, "java.time.format.FormatStyle.MEDIUM");
 	}
 
+	/** A formatter's pattern names its letters. */
+	private static final JavaEmitter.Naming PATTERN_NAMING = (lowering, text) -> lowering.namesPattern(text);
+
+	/** A requested template names the letters its patterns can hold. */
+	private static final JavaEmitter.Naming TEMPLATE_NAMING = (lowering, text) -> lowering
+		.namesPattern(templateLetters(text));
+
+	/** A zone's id names its region. */
+	private static final JavaEmitter.Naming ZONE_NAMING = (lowering, text) -> lowering.namesZone(text);
+
 	/**
 	 * The letters of a pattern that a requested template's patterns can hold and that a
 	 * formatter makes only where a pattern names them: a week's and its year's of w, a
 	 * quarter's of Q, a period's of the day of B, a zone's of v; all of them for a
 	 * template computed where the program runs. A template's other letters find patterns
-	 * of letters every formatter has, and z finds none.
+	 * of letters every formatter of a template has (Patterns.localizes()), and z finds
+	 * none.
 	 */
-	static String templateLetters(@Nullable Object constant) {
-		if (!(constant instanceof String template)) {
+	static String templateLetters(@Nullable String template) {
+		if (template == null) {
 			return "wYQBv";
 		}
 		StringBuilder letters = new StringBuilder();
@@ -2131,7 +2167,7 @@ final class JavaIntrinsics {
 		// naming a zone is noted before it is the library's own lookup, and what the
 		// library asks of the program is answered here (answered, below)
 		natives.put(ZONE_ID + ".of(String)", (lowering, call) -> {
-			lowering.namesZone(call.arguments().get(0).constant() instanceof String name ? name : null);
+			lowering.names(call.arguments().get(0), ZONE_NAMING);
 			return lowering.library(ZONE_ID, "ofId", List.of(call.argument(0)));
 		});
 		natives.put(ZONE_ID + ".getAvailableZoneIds()", (lowering, call) -> {
@@ -2153,11 +2189,11 @@ final class JavaIntrinsics {
 			return lowering.library(ZONE_ID, "providedIds", List.of());
 		});
 		natives.put(ZONE_RULES_PROVIDER + ".getRules(String,boolean)", (lowering, call) -> {
-			lowering.namesZone(call.arguments().get(0).constant() instanceof String name ? name : null);
+			lowering.names(call.arguments().get(0), ZONE_NAMING);
 			return lowering.library(ZONE_ID, "provided", operands(call));
 		});
 		natives.put(ZONE_RULES_PROVIDER + ".getVersions(String)", (lowering, call) -> {
-			lowering.namesZone(call.arguments().get(0).constant() instanceof String name ? name : null);
+			lowering.names(call.arguments().get(0), ZONE_NAMING);
 			return lowering.library(ZONE_RULES_PROVIDER, "versions", operands(call));
 		});
 		natives.put(ZONE_RULES_PROVIDER + ".version0()",
@@ -2185,13 +2221,13 @@ final class JavaIntrinsics {
 		// words of a quarter where it makes the fields of IsoFields, and the resolving of
 		// a field that is no ChronoField where it makes one
 		JavaEmitter pattern = (lowering, call) -> {
-			lowering.namesPattern(call.arguments().get(0).constant() instanceof String text ? text : null);
+			lowering.names(call.arguments().get(0), PATTERN_NAMING);
 			return lowering.library(FORMATTER, "patterned", operands(call));
 		};
 		natives.put(FORMATTER + ".ofPattern(String)", pattern);
 		natives.put(FORMATTER + ".ofPattern(String,java.util.Locale)", pattern);
 		natives.put(FORMATTER_BUILDER + ".appendPattern(String)", (lowering, call) -> {
-			lowering.namesPattern(call.arguments().get(0).constant() instanceof String text ? text : null);
+			lowering.names(call.arguments().get(0), PATTERN_NAMING);
 			return lowering.library(FORMATTER_BUILDER, "appended", operands(call));
 		});
 		// a localized form's time in full or long names its zone in words, the letter z
@@ -2214,14 +2250,21 @@ final class JavaIntrinsics {
 					lowering.namesPattern(briefTime(call.argument(1)) ? "" : "z");
 					return lowering.library(FORMATTER_BUILDER, "localized", operands(call));
 				});
+		// a formatter resolves leniently only where it can be given a style that is no
+		// read of STRICT or SMART
+		natives.put(FORMATTER + ".withResolverStyle(java.time.format.ResolverStyle)", (lowering, call) -> lowering
+			.library(FORMATTER,
+					reads(call.argument(0), "java.time.format.ResolverStyle.STRICT")
+							|| reads(call.argument(0), "java.time.format.ResolverStyle.SMART") ? "styled" : "anyStyle",
+					operands(call)));
 		// a localized form of a requested template names the letters its patterns can
 		// hold
 		natives.put(FORMATTER + ".ofLocalizedPattern(String)", (lowering, call) -> {
-			lowering.namesPattern(templateLetters(call.arguments().get(0).constant()));
+			lowering.names(call.arguments().get(0), TEMPLATE_NAMING);
 			return lowering.library(FORMATTER, "localizedPattern", operands(call));
 		});
 		natives.put(FORMATTER_BUILDER + ".appendLocalized(String)", (lowering, call) -> {
-			lowering.namesPattern(templateLetters(call.arguments().get(0).constant()));
+			lowering.names(call.arguments().get(0), TEMPLATE_NAMING);
 			return lowering.library(FORMATTER_BUILDER, "templated", operands(call));
 		});
 		PATTERN_LETTERS.forEach((question, letters) -> natives.put(question,

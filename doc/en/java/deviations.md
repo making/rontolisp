@@ -324,9 +324,13 @@ offset (`UTC+09:00`), and the fixed zones of the tz database (`Etc/GMT+5`, `Etc/
 `Zulu`). A region whose offset changes, such as `Europe/Paris`, is compiled into the program
 with its rules, and only where the program names it. `ZoneId.of("Europe/Paris")`, the name
 a constant, brings that one region, and so do `ZoneId.of("ECT", ZoneId.SHORT_IDS)` and
-`ZoneRulesProvider.getRules("Europe/Paris", false)`; `ZoneId.of` of a name computed where
-the program runs, `ZoneId.of` with a map of aliases other than `SHORT_IDS`, and
-`getAvailableZoneIds()` bring all of them. `ZonedDateTime.parse` written in the program's
+`ZoneRulesProvider.getRules("Europe/Paris", false)`. A parameter of a static or a private
+method that the method never assigns and that is passed to `ZoneId.of` brings the regions of
+the constants every call of the method passes it (`zone("Europe/Paris")` of
+`static ZoneId zone(String id) { return ZoneId.of(id); }` brings Paris). `ZoneId.of` of any
+other name computed where the program runs (a call through a method reference among them),
+`ZoneId.of` with a map of aliases other than `SHORT_IDS`, and `getAvailableZoneIds()` bring
+all of them. `ZonedDateTime.parse` written in the program's
 own files brings the regions a constant text names (`"2026-07-01T10:15+02:00[Europe/Paris]"`
 brings Paris) and all of them for a text computed where the program runs; written in a
 library of its source path, it brings none. A region the program does not hold is unknown

@@ -54,6 +54,18 @@ interface JavaEmitter {
 
 	}
 
+	/**
+	 * What a text an intrinsic member is given names to the lowering: a formatter's
+	 * pattern its letters, a zone's id its region; {@code null} for a text computed where
+	 * the program runs.
+	 */
+	@FunctionalInterface
+	interface Naming {
+
+		void name(Context lowering, @Nullable String text);
+
+	}
+
 	/** What a member asks of the lowering it is called from. */
 	interface Context {
 
@@ -177,6 +189,13 @@ interface JavaEmitter {
 		 * where it runs ({@code null} here) can name them all.
 		 */
 		void namesPattern(@Nullable String pattern);
+
+		/**
+		 * Notes what a text given where this is called names: a constant's by itself;
+		 * where it is a parameter of a static or private method that no body assigns,
+		 * what every call of the method passes; otherwise a computed one's.
+		 */
+		void names(Typed text, Naming naming);
 
 		/** Whether a pattern of the program can name one of these letters. */
 		boolean namesLetter(String letters);

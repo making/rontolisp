@@ -227,7 +227,9 @@ final class Parsed implements TemporalAccessor {
 
     /**
      * Whether a formatter of the program can resolve leniently: answered by whether it
-     * reaches DateTimeFormatter.withResolverStyle, the one way to a lenient one.
+     * gives DateTimeFormatter.withResolverStyle, the one way to a lenient one, a style
+     * that is no read of STRICT or SMART (its anyStyle), so that a program that cannot
+     * has none of the lenient branches below.
      */
     static native boolean lenients();
 
@@ -290,7 +292,7 @@ final class Parsed implements TemporalAccessor {
     }
 
     private long checked(ChronoField field, long value) {
-        return lenient() ? value : field.checkValidValue(value);
+        return lenients() && lenient() ? value : field.checkValidValue(value);
     }
 
     private void resolveDate() {
@@ -350,7 +352,7 @@ final class Parsed implements TemporalAccessor {
         if (has(ChronoField.DAY_OF_YEAR)) {
             int year = ChronoField.YEAR.checkValidIntValue(remove(ChronoField.YEAR));
             long day = remove(ChronoField.DAY_OF_YEAR);
-            date(lenient() ? LocalDate.ofYearDay(year, 1).plusDays(Math.subtractExact(day, 1))
+            date(lenients() && lenient() ? LocalDate.ofYearDay(year, 1).plusDays(Math.subtractExact(day, 1))
                     : LocalDate.ofYearDay(year, ChronoField.DAY_OF_YEAR.checkValidIntValue(day)));
             return;
         }
@@ -442,7 +444,7 @@ final class Parsed implements TemporalAccessor {
         int year = ChronoField.YEAR.checkValidIntValue(remove(ChronoField.YEAR));
         long month = remove(ChronoField.MONTH_OF_YEAR);
         long day = remove(ChronoField.DAY_OF_MONTH);
-        if (lenient()) {
+        if (lenients() && lenient()) {
             date(LocalDate.of(year, 1, 1).plusMonths(Math.subtractExact(month, 1)).plusDays(Math.subtractExact(day, 1)));
             return;
         }
@@ -462,7 +464,7 @@ final class Parsed implements TemporalAccessor {
         long week = remove(ChronoField.ALIGNED_WEEK_OF_MONTH);
         boolean aligned = has(ChronoField.ALIGNED_DAY_OF_WEEK_IN_MONTH);
         long day = remove(aligned ? ChronoField.ALIGNED_DAY_OF_WEEK_IN_MONTH : ChronoField.DAY_OF_WEEK);
-        if (lenient()) {
+        if (lenients() && lenient()) {
             LocalDate start = LocalDate.of(year, 1, 1).plusMonths(Math.subtractExact(month, 1));
             date(weekDay(start.plusWeeks(Math.subtractExact(week, 1)), day, aligned, true));
             return;
@@ -482,7 +484,7 @@ final class Parsed implements TemporalAccessor {
         long week = remove(ChronoField.ALIGNED_WEEK_OF_YEAR);
         boolean aligned = has(ChronoField.ALIGNED_DAY_OF_WEEK_IN_YEAR);
         long day = remove(aligned ? ChronoField.ALIGNED_DAY_OF_WEEK_IN_YEAR : ChronoField.DAY_OF_WEEK);
-        if (lenient()) {
+        if (lenients() && lenient()) {
             date(weekDay(LocalDate.of(year, 1, 1).plusWeeks(Math.subtractExact(week, 1)), day, aligned, true));
             return;
         }
@@ -546,7 +548,7 @@ final class Parsed implements TemporalAccessor {
         if (has(ChronoField.AMPM_OF_DAY) && has(ChronoField.HOUR_OF_AMPM)) {
             long half = remove(ChronoField.AMPM_OF_DAY);
             long hour = remove(ChronoField.HOUR_OF_AMPM);
-            if (lenient()) {
+            if (lenients() && lenient()) {
                 put(ChronoField.HOUR_OF_DAY, Math.addExact(Math.multiplyExact(half, 12), hour), ChronoField.AMPM_OF_DAY);
             }
             else {
@@ -619,15 +621,15 @@ final class Parsed implements TemporalAccessor {
                 && !has(ChronoField.SECOND_OF_MINUTE) && !has(ChronoField.NANO_OF_SECOND)) {
             // half a day alone is its middle
             long half = remove(ChronoField.AMPM_OF_DAY);
-            if (!lenient()) {
+            if (!(lenients() && lenient())) {
                 ChronoField.AMPM_OF_DAY.checkValidValue(half);
             }
             put(ChronoField.HOUR_OF_DAY, Math.addExact(Math.multiplyExact(half, 12), 6), ChronoField.AMPM_OF_DAY);
         }
-        else if (!lenient() && has(ChronoField.AMPM_OF_DAY)) {
+        else if (!(lenients() && lenient()) && has(ChronoField.AMPM_OF_DAY)) {
             ChronoField.AMPM_OF_DAY.checkValidValue(valueOf(ChronoField.AMPM_OF_DAY));
         }
-        if (!lenient() && has(ChronoField.HOUR_OF_AMPM)) {
+        if (!(lenients() && lenient()) && has(ChronoField.HOUR_OF_AMPM)) {
             ChronoField.HOUR_OF_AMPM.checkValidValue(valueOf(ChronoField.HOUR_OF_AMPM));
         }
     }
@@ -666,7 +668,7 @@ final class Parsed implements TemporalAccessor {
      */
     private void hourInPeriod() {
         if (period != null && has(ChronoField.HOUR_OF_DAY)) {
-            if (!lenient()) {
+            if (!(lenients() && lenient())) {
                 long hour = valueOf(ChronoField.HOUR_OF_DAY);
                 long minute = has(ChronoField.MINUTE_OF_HOUR) ? valueOf(ChronoField.MINUTE_OF_HOUR) : 0;
                 if (!Step.DayPeriod.contains(period[0], period[1], hour * 60 + minute)) {
@@ -692,7 +694,7 @@ final class Parsed implements TemporalAccessor {
                 long m = minute ? remove(ChronoField.MINUTE_OF_HOUR) : 0;
                 long s = second ? remove(ChronoField.SECOND_OF_MINUTE) : 0;
                 long n = nano ? remove(ChronoField.NANO_OF_SECOND) : 0;
-                if (lenient()) {
+                if (lenients() && lenient()) {
                     long total = Math.addExact(Math.addExact(Math.addExact(Math.multiplyExact(h, 3600000000000L),
                             Math.multiplyExact(m, 60000000000L)), Math.multiplyExact(s, NANOS_PER_SECOND)), n);
                     excessDays = Math.floorDiv(total, NANOS_PER_DAY);
@@ -712,7 +714,7 @@ final class Parsed implements TemporalAccessor {
                 return;
             }
         }
-        if (!lenient() && !has(ChronoField.HOUR_OF_DAY)) {
+        if (!(lenients() && lenient()) && !has(ChronoField.HOUR_OF_DAY)) {
             // with no hour each field is checked by itself, the finest first
             for (ChronoField field : new ChronoField[] {ChronoField.NANO_OF_SECOND, ChronoField.SECOND_OF_MINUTE,
                     ChronoField.MINUTE_OF_HOUR}) {

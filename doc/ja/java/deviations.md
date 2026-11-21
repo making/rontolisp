@@ -322,8 +322,12 @@ JDK では前後 2 つのパターンが混ざった状態が残ります。
 規則ごとコンパイル結果に埋め込みます。埋め込むのは、プログラムが名前を書いた地域だけです。
 `ZoneId.of("Europe/Paris")` のように名前が定数なら、その地域 1 つを埋め込みます。
 `ZoneId.of("ECT", ZoneId.SHORT_IDS)` と `ZoneRulesProvider.getRules("Europe/Paris", false)`
-も同じです。実行時に決まる名前を `ZoneId.of` に渡すか、`SHORT_IDS` 以外の別名の表を
-`ZoneId.of` に渡すか、`getAvailableZoneIds()` を呼ぶと、すべての地域を埋め込みます。
+も同じです。static または private のメソッドが代入せずに `ZoneId.of` に渡す引数は、その
+メソッドのすべての呼び出しが渡す定数の地域を埋め込みます（`static ZoneId zone(String id)
+{ return ZoneId.of(id); }` の `zone("Europe/Paris")` ならパリ）。それ以外の実行時に決まる
+名前（メソッド参照を通した呼び出しを含む）を `ZoneId.of` に渡すか、`SHORT_IDS` 以外の
+別名の表を `ZoneId.of` に渡すか、`getAvailableZoneIds()` を呼ぶと、すべての地域を
+埋め込みます。
 プログラム自身のファイルに書いた `ZonedDateTime.parse` は、定数の文字列ならそこに名前がある
 地域を埋め込み（`"2026-07-01T10:15+02:00[Europe/Paris]"` ならパリ）、実行時に決まる文字列なら
 すべての地域を埋め込みます。ソースパスのライブラリに書いた `ZonedDateTime.parse` は何も

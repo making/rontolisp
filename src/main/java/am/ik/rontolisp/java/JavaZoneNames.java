@@ -108,36 +108,51 @@ final class JavaZoneNames {
 		return new JavaZoneNames(written, read);
 	}
 
+	/** What ends the groups of a program's table of the names written. */
+	static final char GROUPS = '\u0003';
+
 	/**
-	 * The names a program writes for the regions it holds: for each, its id, its 24 names
-	 * and its spans, separated by {@link #FIELD}, ended by {@link #ENTRY}. A name of the
-	 * root's that is English's is empty, and so is one of its names of standard and
-	 * daylight time in full that is its city's with {@code (+0)} or {@code (+1)}, as a
-	 * British or a Canadian one that is English's is.
+	 * The names a program writes for the regions it holds: the groups of six names a kind
+	 * of locale writes for a region, each once, its names separated by {@link #FIELD},
+	 * ended by {@link #ENTRY}, the last by {@link #GROUPS}; then for each region its id,
+	 * the number of its group of each kind (the root, English, British, Canadian) and its
+	 * spans, separated by {@link #FIELD}, ended by {@link #ENTRY}. A name of the root's
+	 * that is English's is empty, and so is one of its names of standard and daylight
+	 * time in full that is its city's with {@code (+0)} or {@code (+1)}, as a British or
+	 * a Canadian one that is English's is. A metazone's names are its zones', so of 562
+	 * regions. 2,248 groups 827 differ: 90,405 characters written out, 53,865 so.
 	 * @param held the regions the program holds, or {@code null} for all of them
 	 */
 	String written(@Nullable Collection<String> held) {
-		StringBuilder table = new StringBuilder();
+		Map<String, Integer> groups = new LinkedHashMap<>();
+		StringBuilder entries = new StringBuilder();
 		for (String id : held == null ? this.written.keySet() : new TreeSet<>(held)) {
 			String[] names = this.written.get(id);
 			if (names == null) {
 				continue;
 			}
-			table.append(id);
-			for (int i = 0; i < names.length; i++) {
-				String name = names[i];
-				if (i < 6) {
-					String city = names[5];
-					boolean derived = (i == 1 && name.equals(city + " (+0)"))
-							|| (i == 3 && name.equals(city + " (+1)"));
-					boolean english = i != 5 && i % 2 == 0 && name.equals(names[6 + i]);
-					name = derived || english ? "" : name;
+			entries.append(id);
+			for (int kind = 0; kind < 4; kind++) {
+				StringBuilder group = new StringBuilder();
+				for (int i = kind * 6; i < kind * 6 + 6; i++) {
+					String name = names[i];
+					if (i < 6) {
+						String city = names[5];
+						boolean derived = (i == 1 && name.equals(city + " (+0)"))
+								|| (i == 3 && name.equals(city + " (+1)"));
+						boolean english = i != 5 && i % 2 == 0 && name.equals(names[6 + i]);
+						name = derived || english ? "" : name;
+					}
+					group.append(i == kind * 6 ? "" : FIELD).append(name);
 				}
-				table.append(FIELD).append(name);
+				Integer number = groups.putIfAbsent(group.toString(), groups.size());
+				entries.append(FIELD).append(number == null ? groups.size() - 1 : number);
 			}
-			table.append(ENTRY);
+			entries.append(FIELD).append(names[NAMES]).append(ENTRY);
 		}
-		return table.toString();
+		StringBuilder table = new StringBuilder();
+		groups.keySet().forEach(group -> table.append(group).append(ENTRY));
+		return table.append(GROUPS).append(entries).toString();
 	}
 
 	/**

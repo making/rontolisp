@@ -23,10 +23,12 @@ final class ZoneNames {
     }
 
     /**
-     * The names the program writes for the regions it holds: each region's id, its 24
-     * names (the root's six, English, British, Canadian) and its spans, separated by
-     * \u0001, ended by \u0002. A name is empty where English has the same, but the root's
-     * of standard and daylight time in full, empty where they are its city's marked.
+     * The names the program writes for the regions it holds: the groups of six names a
+     * kind of locale writes for a region, each once, separated by \u0001, ended by
+     * \u0002, the last by \u0003; then each region's id, the number of its group of each
+     * kind (the root, English, British, Canadian) and its spans, separated by \u0001,
+     * ended by \u0002. A name is empty where English has the same, but the root's of
+     * standard and daylight time in full, empty where they are its city's marked.
      */
     private static native String written0();
 
@@ -39,8 +41,13 @@ final class ZoneNames {
      */
     private static native String read0();
 
-    /** The entries of the regions the program holds, made the first time a name is asked. */
+    /**
+     * The entries of the regions the program holds and the groups of names they number,
+     * made the first time a name is asked.
+     */
     private static String[][] written;
+
+    private static String[][] groups;
 
     /**
      * The names read, the zones they are read as, and for each the kinds of locale it is
@@ -73,23 +80,34 @@ final class ZoneNames {
         return fields;
     }
 
-    /** A region's entry: its id, its 24 names and its spans; or null where it is not held. */
+    /** The entries of a table, from one index to another, each ended by \u0002. */
+    private static String[][] entries(String text, int from, int to) {
+        int count = 0;
+        for (int i = from; i < to; i++) {
+            if (text.charAt(i) == '\u0002') {
+                count++;
+            }
+        }
+        String[][] entries = new String[count][];
+        for (int at = from, n = 0; at < to; n++) {
+            int end = text.indexOf('\u0002', at);
+            entries[n] = fields(text, at, end);
+            at = end + 1;
+        }
+        return entries;
+    }
+
+    /**
+     * A region's entry: its id, the numbers of its groups of names and its spans; or null
+     * where it is not held.
+     */
     private static String[] written(String id) {
         String[][] table = written;
         if (table == null) {
             String text = written0();
-            int count = 0;
-            for (int i = 0; i < text.length(); i++) {
-                if (text.charAt(i) == '\u0002') {
-                    count++;
-                }
-            }
-            table = new String[count][];
-            for (int at = 0, n = 0; at < text.length(); n++) {
-                int end = text.indexOf('\u0002', at);
-                table[n] = fields(text, at, end);
-                at = end + 1;
-            }
+            int split = text.indexOf('\u0003');
+            groups = entries(text, 0, split);
+            table = entries(text, split + 1, text.length());
             written = table;
         }
         for (String[] entry : table) {
@@ -171,20 +189,26 @@ final class ZoneNames {
      * daylight, 2 the zone as a whole); null for a zone with none.
      */
     static String name(String id, int kind, boolean full, int time) {
-        String[] names = written(id);
-        if (names == null) {
+        String[] entry = written(id);
+        if (entry == null) {
             return fixed(id, kind, full);
         }
         int place = time * 2 + (full ? 1 : 0);
-        String name = names[1 + kind * 6 + place];
+        String name = names(entry, kind)[place];
         if (!name.isEmpty()) {
             return name;
         }
         if (kind == 0 && full && time < 2) {
             // the root's names of standard and daylight time: its city's, marked
-            return names[6] + (time == 0 ? " (+0)" : " (+1)");
+            return names(entry, 0)[5] + (time == 0 ? " (+0)" : " (+1)");
         }
-        return names[7 + place];
+        return names(entry, 1)[place];
+    }
+
+    /** The six names of a region's entry in a kind of locale: its group of them. */
+    private static String[] names(String[] entry, int kind) {
+        String number = entry[1 + kind];
+        return groups[(int) number(number, 0, number.length())];
     }
 
     /**
@@ -193,8 +217,8 @@ final class ZoneNames {
      */
     static boolean daylight(ZoneId zone, long second) {
         boolean daylight = zone.getRules().isDaylightSavings(Instant.ofEpochSecond(second));
-        String[] names = written(zone.getId());
-        String spans = names == null ? "" : names[25];
+        String[] entry = written(zone.getId());
+        String spans = entry == null ? "" : entry[5];
         for (int at = 0; at < spans.length();) {
             int comma = spans.indexOf(',', at);
             int end = spans.indexOf(',', comma + 1);

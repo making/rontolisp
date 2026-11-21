@@ -209,13 +209,26 @@ final class JavaClasses {
 
 	/**
 	 * The letters the patterns of the program's formatters name, outside their quoted
-	 * texts: the constant ones it was seen making. A letter of weeks, quarters or the
-	 * modified Julian day makes its parts only once one names it.
+	 * texts, with a mark of words and of a year of two digits where a run of letters
+	 * names one and the {@code [} of an optional section: the constant ones it was seen
+	 * making. A letter of weeks, quarters or the modified Julian day, words, a fraction,
+	 * a zone's id, an offset makes its parts only once one names it.
 	 */
 	final Set<Character> patternLetters = new java.util.TreeSet<>();
 
 	/** Whether the program makes a formatter of a pattern computed where it runs. */
 	boolean everyLetter;
+
+	/**
+	 * The parameters of static and private methods whose texts name something to the
+	 * lowering (a formatter's pattern, a zone's id), by method and index, each with what
+	 * a text passed there names: a call of the method names what it passes, any other way
+	 * to it what a text computed where the program runs names.
+	 */
+	final Map<JavaClass.Method, Map<Integer, Set<JavaEmitter.Naming>>> namingParameters = new IdentityHashMap<>();
+
+	/** The parameters some body assigns, by their declarations. */
+	final Set<Object> assignedParameters = java.util.Collections.newSetFromMap(new IdentityHashMap<>());
 
 	/**
 	 * The methods of the library some pass reached that a question of the library is
