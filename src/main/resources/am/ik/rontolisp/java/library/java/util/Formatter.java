@@ -5,6 +5,9 @@ package java.util;
 
 import java.io.BufferedWriter;
 import java.io.Closeable;
+import java.io.File;
+import java.io.FileNotFoundException;
+import java.io.FileOutputStream;
 import java.io.Flushable;
 import java.io.IOException;
 import java.io.OutputStream;
@@ -68,6 +71,44 @@ public final class Formatter implements Closeable, Flushable {
 
     public Formatter(OutputStream os, Charset charset, Locale l) {
         this(new BufferedWriter(new OutputStreamWriter(os, charset)), l);
+    }
+
+    // A file, made or emptied, written at flush() and close(); a charset's name is looked
+    // up before the file is opened.
+    public Formatter(String fileName) throws FileNotFoundException {
+        this(new FileOutputStream(fileName));
+    }
+
+    public Formatter(String fileName, String csn) throws FileNotFoundException, UnsupportedEncodingException {
+        this(fileName, csn, Locale.getDefault());
+    }
+
+    public Formatter(String fileName, String csn, Locale l) throws FileNotFoundException, UnsupportedEncodingException {
+        this(rontolisp.internal.Support.charset(Objects.requireNonNull(csn, "charsetName")), l, new File(fileName));
+    }
+
+    public Formatter(String fileName, Charset charset, Locale l) throws IOException {
+        this(Objects.requireNonNull(charset, "charset"), l, new File(fileName));
+    }
+
+    public Formatter(File file) throws FileNotFoundException {
+        this(new FileOutputStream(file));
+    }
+
+    public Formatter(File file, String csn) throws FileNotFoundException, UnsupportedEncodingException {
+        this(file, csn, Locale.getDefault());
+    }
+
+    public Formatter(File file, String csn, Locale l) throws FileNotFoundException, UnsupportedEncodingException {
+        this(rontolisp.internal.Support.charset(Objects.requireNonNull(csn, "charsetName")), l, file);
+    }
+
+    public Formatter(File file, Charset charset, Locale l) throws IOException {
+        this(Objects.requireNonNull(charset, "charset"), l, file);
+    }
+
+    private Formatter(Charset charset, Locale l, File file) throws FileNotFoundException {
+        this(new FileOutputStream(file), charset, l);
     }
 
     private void ensureOpen() {

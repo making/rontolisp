@@ -4,6 +4,9 @@
 package java.util;
 
 import java.io.Closeable;
+import java.io.File;
+import java.io.FileInputStream;
+import java.io.FileNotFoundException;
 import java.io.IOException;
 import java.io.InputStream;
 import java.io.InputStreamReader;
@@ -14,11 +17,14 @@ import java.nio.CharBuffer;
 import java.nio.charset.Charset;
 import java.nio.charset.IllegalCharsetNameException;
 import java.nio.charset.UnsupportedCharsetException;
+import java.nio.file.Files;
+import java.nio.file.Path;
 import java.util.regex.MatchResult;
 import java.util.regex.Matcher;
 import java.util.regex.Pattern;
 import java.util.stream.Stream;
 import rontolisp.internal.ObjectFlow;
+import rontolisp.internal.StrictReader;
 
 // The input read so far is one string and the position an index in it; what is behind the
 // position is dropped when more is read. The default delimiter is no pattern: its tokens are
@@ -157,6 +163,37 @@ public final class Scanner implements Iterator<String>, Closeable {
 
     public Scanner(String source) {
         this((Reader) null, Objects.requireNonNull(source, "source"));
+    }
+
+    // A file's bytes are decoded strictly, as a JDK's are: the first that are no text in
+    // the charset end the input, and ioException() answers why. A path's are decoded as an
+    // InputStream's, what is no text U+FFFD.
+    public Scanner(File source) throws FileNotFoundException {
+        this(strict(source, Charset.defaultCharset()), "");
+    }
+
+    public Scanner(File source, String charsetName) throws FileNotFoundException {
+        this(strict(Objects.requireNonNull(source), charset(charsetName)), "");
+    }
+
+    public Scanner(File source, Charset charset) throws IOException {
+        this(strict(source, Objects.requireNonNull(charset, "charset")), "");
+    }
+
+    private static Reader strict(File source, Charset charset) throws FileNotFoundException {
+        return new StrictReader(new FileInputStream(source), charset);
+    }
+
+    public Scanner(Path source) throws IOException {
+        this(Files.newInputStream(source));
+    }
+
+    public Scanner(Path source, String charsetName) throws IOException {
+        this(Objects.requireNonNull(source), charset(charsetName));
+    }
+
+    public Scanner(Path source, Charset charset) throws IOException {
+        this(Files.newInputStream(Objects.requireNonNull(source)), charset);
     }
 
     private static Reader reader(Readable source) {

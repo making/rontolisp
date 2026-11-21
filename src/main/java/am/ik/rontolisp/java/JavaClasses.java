@@ -46,7 +46,7 @@ final class JavaClasses {
 			"java.io", "java.nio.charset", "java.util.concurrent", "java.util.concurrent.atomic",
 			"java.util.concurrent.locks", "java.net", "java.time", "java.time.chrono", "java.time.format",
 			"java.time.temporal", "java.time.zone", "java.security", "java.util.stream", "java.text", "java.math",
-			"java.nio");
+			"java.nio", "java.nio.file");
 
 	/** The one package of the module {@code java.net.http}. */
 	private static final String HTTP_MODULE = "java.net.http";

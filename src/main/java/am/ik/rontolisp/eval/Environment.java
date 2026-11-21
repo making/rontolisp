@@ -7995,7 +7995,8 @@ public final class Environment implements Scope {
 					catch (IOException ex) {
 						throw new UncheckedIOException(ex);
 					}
-					if (streamPaths.containsKey(handle.value())) {
+					// a read at the end moves nothing, however often it is asked
+					if (b >= 0 && streamPaths.containsKey(handle.value())) {
 						streamPositions.merge(handle.value(), 1L, Long::sum);
 					}
 				}

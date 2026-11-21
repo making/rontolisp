@@ -1794,6 +1794,132 @@
 #+rontolisp-wasm
 (defun rontolisp::%java-input-more (last) (if (= last 10) nil t))
 
+;; --- files -----------------------------------------------------------------------
+;; The host's file system as the library's rontolisp.internal.Disk reaches it: a path
+;; is a string, a relative one resolved by the host (a .wasm's, against its first
+;; preopen), and a file opened a stream of octets. Nothing here signals: what fails
+;; answers nil, and the library's Java says why.
+
+;; What PATH names: 0 nothing, 1 a file (anything that is no directory), 2 a directory.
+(defun rontolisp::%java-file-kind (path)
+  (let ((found (if (> (length path) 0) (%probe-file path) nil)))
+    (cond ((null found) 0)
+          ((char= (char found (- (length found) 1)) #\/) 2)
+          (t 1))))
+
+;; PATH opened for its octets in MODE (Disk's: 0 read, 1 write emptied or made, 2
+;; append or made, 3 read and write over what is there, 4 write over what is there),
+;; nil where the host refused.
+(defun rontolisp::%java-file-open (path mode)
+  (handler-case (cond ((= mode 0)
+                       (open path
+                             :direction :input
+                             :element-type '(unsigned-byte 8)))
+                      ((= mode 1)
+                       (open path
+                             :direction :output
+                             :element-type '(unsigned-byte 8)
+                             :if-exists :supersede
+                             :if-does-not-exist :create))
+                      ((= mode 2)
+                       (open path
+                             :direction :output
+                             :element-type '(unsigned-byte 8)
+                             :if-exists :append
+                             :if-does-not-exist :create))
+                      ((= mode 3)
+                       (open path
+                             :direction :io
+                             :element-type '(unsigned-byte 8)
+                             :if-exists :overwrite))
+                      (t (open path
+                               :direction :output
+                               :element-type '(unsigned-byte 8)
+                               :if-exists :overwrite)))
+    (error (c) nil)))
+
+;; An octet of FILE, -1 at its end.
+(defun rontolisp::%java-file-read-byte (file) (read-byte file nil -1))
+
+;; How many octets of FILE went into BYTES from START, at most WANTED, -1 at its end.
+(defun rontolisp::%java-file-read (file bytes start wanted)
+  (let ((end (read-sequence bytes file :start start :end (+ start wanted))))
+    (if (= end start) -1 (- end start))))
+
+;; Writes reach the file before they answer, as a JDK's unbuffered streams do.
+(defun rontolisp::%java-file-write-byte (file b)
+  (write-byte (logand b 255) file)
+  (finish-output file)
+  nil)
+
+(defun rontolisp::%java-file-write (file bytes start wanted)
+  (write-sequence bytes file :start start :end (+ start wanted))
+  (finish-output file)
+  nil)
+
+(defun rontolisp::%java-file-close (file)
+  (close file)
+  nil)
+
+(defun rontolisp::%java-file-position (file) (file-position file))
+
+(defun rontolisp::%java-file-seek (file offset)
+  (file-position file offset)
+  nil)
+
+(defun rontolisp::%java-file-length (file) (or (file-length file) 0))
+
+;; The size of the file at PATH, -1 where it cannot be read.
+(defun rontolisp::%java-file-size (path)
+  (let ((file (rontolisp::%java-file-open path 0)))
+    (if file
+        (let ((size (file-length file)))
+          (close file)
+          (or size 0))
+        -1)))
+
+;; When the file at PATH was last written, in milliseconds since 1970 (whole seconds),
+;; 0 where the host does not say.
+(defun rontolisp::%java-file-modified (path)
+  (let ((date (handler-case (file-write-date path) (error (c) nil))))
+    (if date (* (- date 2208988800) 1000) 0)))
+
+;; The names in the directory at PATH in the host's order, nil for anything else.
+(defun rontolisp::%java-file-names (path)
+  (let ((listing
+         (%list-directory
+          (if (char= (char path (- (length path) 1)) #\/)
+              path
+              (concatenate 'string path "/"))))
+        (names nil))
+    (if listing
+        (progn
+          (dolist (name (cdr listing))
+            (let ((n (length name)))
+              (setq names
+                    (cons (if (and (> n 1) (char= (char name (- n 1)) #\/))
+                              (%substring name 0 (- n 1))
+                              name) names))))
+          (rontolisp::%java-list-array (reverse names)))
+        nil)))
+
+;; Makes the directory at PATH and every one above it that is missing: whether it is
+;; there now.
+(defun rontolisp::%java-file-make-directories (path)
+  (if (%make-directories (concatenate 'string path "/")) t nil))
+
+;; Deletes the file or the empty directory at PATH.
+(defun rontolisp::%java-file-delete (path) (if (%delete-file path) t nil))
+
+(defun rontolisp::%java-file-rename (from to) (if (%rename-file from to) t nil))
+
+;; The working directory, nil where the host names none.
+(defun rontolisp::%java-file-working-directory ()
+  (let ((cwd (%host-getcwd))) (if cwd (%normalize-string cwd) nil)))
+
+;; The absolute PATH with its links followed and its . and .. taken out.
+(defun rontolisp::%java-file-real (path) (%normalize-string (%real-path path)))
+
 ;; --- bytes and text ----------------------------------------------------------------
 
 ;; String.getBytes(): the UTF-8 of a string, a byte[].

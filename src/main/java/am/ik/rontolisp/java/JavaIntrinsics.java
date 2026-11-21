@@ -1972,6 +1972,26 @@ final class JavaIntrinsics {
 		natives.put("java.io.StandardInput.line0()", runtime("readln"));
 		natives.put("java.io.StandardInput.ready0()", runtime("input-ready"));
 		natives.put("java.io.StandardInput.more0(int)", runtime("input-more"));
+		// the host's file system: a file opened is a stream of octets of the host's
+		String disk = "rontolisp.internal.Disk.";
+		natives.put(disk + "kind(String)", runtime("file-kind"));
+		natives.put(disk + "open(String,int)", runtime("file-open"));
+		natives.put(disk + "read(Object)", runtime("file-read-byte"));
+		natives.put(disk + "read(Object,byte[],int,int)", runtime("file-read"));
+		natives.put(disk + "write(Object,int)", runtime("file-write-byte"));
+		natives.put(disk + "write(Object,byte[],int,int)", runtime("file-write"));
+		natives.put(disk + "close(Object)", runtime("file-close"));
+		natives.put(disk + "position(Object)", runtime("file-position"));
+		natives.put(disk + "seek(Object,long)", runtime("file-seek"));
+		natives.put(disk + "length(Object)", runtime("file-length"));
+		natives.put(disk + "size(String)", runtime("file-size"));
+		natives.put(disk + "modified(String)", runtime("file-modified"));
+		natives.put(disk + "names(String)", runtime("file-names"));
+		natives.put(disk + "makeDirectories(String)", runtime("file-make-directories"));
+		natives.put(disk + "delete(String)", runtime("file-delete"));
+		natives.put(disk + "rename(String,String)", runtime("file-rename"));
+		natives.put(disk + "workingDirectory()", runtime("file-working-directory"));
+		natives.put(disk + "real(String)", runtime("file-real"));
 		// what a class object holds of its class: the lowering's functions
 		natives.put("java.lang.Class.test0(Object,Object)", (lowering, call) -> call("if",
 				call("funcall", call.argument(0), call.argument(1)), JavaForms.T, JavaForms.NIL));

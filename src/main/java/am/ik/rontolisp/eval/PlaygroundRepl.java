@@ -68,6 +68,9 @@ public final class PlaygroundRepl {
 			+ "a buffer of this session runs on the page's one stack, where no thread can wait for another "
 			+ "(put the code in a main method and run the program)";
 
+	private static final String FILES_REFUSED = "a file is read or written only outside the browser: "
+			+ "the page has no file system (run the program with rontolisp on a host)";
+
 	/**
 	 * What the page's sources are read against: every language's default, and as the
 	 * source tree of a Java program, which the page reads from no file, the uploaded
@@ -194,6 +197,7 @@ public final class PlaygroundRepl {
 			boolean markers = SourceLanguage.usesReadEvalMarkers(source);
 			List<LispVal> forms = this.language.read(source, this.evaluator.sourceFeatures(), null, STANDARDS,
 					this.loader);
+			refuseFiles(forms);
 			if (this.oneStack != null && this.language == SourceLanguage.JAVA && JavaLibrary.startsThreads(forms)) {
 				// what reading the program wrote on the page -- its warnings -- comes
 				// first
@@ -244,6 +248,7 @@ public final class PlaygroundRepl {
 		// A buffer of a Java session runs on the interpreter, which on one stack cannot
 		// leave a thread waiting: a thread is a whole program's there (run).
 		boolean threadless = this.oneStack != null && this.language == SourceLanguage.JAVA;
+		refuseFiles(step.forms());
 		if (threadless) {
 			this.evaluator.refuseThreads(THREADS_REFUSED);
 		}
@@ -265,6 +270,15 @@ public final class PlaygroundRepl {
 			}
 		}
 		return values;
+	}
+
+	// A Java program that reaches a file is refused before it runs where the host is the
+	// browser's, whose page has no file system: its interpreter would answer every file
+	// missing, which no program can tell from a file that is.
+	private void refuseFiles(List<LispVal> forms) {
+		if (this.oneStack != null && this.language == SourceLanguage.JAVA && JavaLibrary.reachesFiles(forms)) {
+			throw new LispEvalException(FILES_REFUSED);
+		}
 	}
 
 	private SourceSession session() {

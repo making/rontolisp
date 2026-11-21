@@ -1,0 +1,45 @@
+at 0: 0 tokens, 0 chars, last null java.nio.charset.MalformedInputException: Input length = 1
+at 1: 0 tokens, 0 chars, last null java.nio.charset.MalformedInputException: Input length = 1
+at 10: 0 tokens, 0 chars, last null java.nio.charset.MalformedInputException: Input length = 1
+at 500: 0 tokens, 0 chars, last null java.nio.charset.MalformedInputException: Input length = 1
+at 1023: 0 tokens, 0 chars, last null java.nio.charset.MalformedInputException: Input length = 1
+at 1024: 0 tokens, 0 chars, last null java.nio.charset.MalformedInputException: Input length = 1
+at 1025: 103 tokens, 922 chars, last abcd java.nio.charset.MalformedInputException: Input length = 1
+at 2000: 103 tokens, 922 chars, last abcd java.nio.charset.MalformedInputException: Input length = 1
+at 4095: 409 tokens, 3676 chars, last abcd java.nio.charset.MalformedInputException: Input length = 1
+at 4096: 409 tokens, 3676 chars, last abcd java.nio.charset.MalformedInputException: Input length = 1
+at 4097: 409 tokens, 3676 chars, last abcd java.nio.charset.MalformedInputException: Input length = 1
+at 8000: 715 tokens, 6430 chars, last abcd java.nio.charset.MalformedInputException: Input length = 1
+at 8191: 817 tokens, 7348 chars, last abcd java.nio.charset.MalformedInputException: Input length = 1
+at 8192: 817 tokens, 7348 chars, last abcd java.nio.charset.MalformedInputException: Input length = 1
+at 8193: 817 tokens, 7348 chars, last abcd java.nio.charset.MalformedInputException: Input length = 1
+at 9000: 817 tokens, 7348 chars, last abcd java.nio.charset.MalformedInputException: Input length = 1
+at 20000: 1939 tokens, 17446 chars, last abcd java.nio.charset.MalformedInputException: Input length = 1
+UTF-8 lone high: UnmappableCharacterException Input length = 1 | MalformedInputException Input length = 1
+UTF-8 lone low: UnmappableCharacterException Input length = 1 | MalformedInputException Input length = 1
+UTF-8 high at end: UnmappableCharacterException Input length = 1 | MalformedInputException Input length = 1
+UTF-8 two highs: UnmappableCharacterException Input length = 1 | MalformedInputException Input length = 1
+UTF-8 e-acute: ok | ok
+UTF-8 euro: ok | ok
+UTF-8 emoji: ok | ok
+US-ASCII lone high: MalformedInputException Input length = 1 | MalformedInputException Input length = 1
+US-ASCII lone low: MalformedInputException Input length = 1 | MalformedInputException Input length = 1
+US-ASCII high at end: MalformedInputException Input length = 1 | MalformedInputException Input length = 1
+US-ASCII two highs: MalformedInputException Input length = 1 | MalformedInputException Input length = 1
+US-ASCII e-acute: UnmappableCharacterException Input length = 1 | UnmappableCharacterException Input length = 1
+US-ASCII euro: UnmappableCharacterException Input length = 1 | UnmappableCharacterException Input length = 1
+US-ASCII emoji: UnmappableCharacterException Input length = 2 | UnmappableCharacterException Input length = 2
+ISO-8859-1 lone high: UnmappableCharacterException Input length = 1 | MalformedInputException Input length = 1
+ISO-8859-1 lone low: UnmappableCharacterException Input length = 1 | MalformedInputException Input length = 1
+ISO-8859-1 high at end: UnmappableCharacterException Input length = 1 | MalformedInputException Input length = 1
+ISO-8859-1 two highs: UnmappableCharacterException Input length = 1 | MalformedInputException Input length = 1
+ISO-8859-1 e-acute: ok | ok
+ISO-8859-1 euro: UnmappableCharacterException Input length = 1 | UnmappableCharacterException Input length = 1
+ISO-8859-1 emoji: UnmappableCharacterException Input length = 1 | UnmappableCharacterException Input length = 2
+UTF-16 lone high: MalformedInputException Input length = 1 | MalformedInputException Input length = 1
+UTF-16 lone low: MalformedInputException Input length = 1 | MalformedInputException Input length = 1
+UTF-16 high at end: MalformedInputException Input length = 1 | MalformedInputException Input length = 1
+UTF-16 two highs: MalformedInputException Input length = 1 | MalformedInputException Input length = 1
+UTF-16 e-acute: ok | ok
+UTF-16 euro: ok | ok
+UTF-16 emoji: ok | ok

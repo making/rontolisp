@@ -20283,6 +20283,695 @@ standalone:
       Tc {FormatFlagsConversionMismatchException=504, IllegalFormatPrecisionException=512, MissingFormatWidthException=2, written=6} 1f444da3
       h {FormatFlagsConversionMismatchException=884, MissingFormatWidthException=128, written=12} deed840
       H {FormatFlagsConversionMismatchException=884, MissingFormatWidthException=128, written=12} fd4fd840
+  - name: a-program-makes-reads-lists-and-is-refused-its-files-through-java-io
+    # Files through java.io: a File's paths, the byte and character streams of a file, a
+    # print writer, a print stream, a formatter and a scanner of one, a random access file,
+    # a directory's names (sorted: readdir's order is each file system's own), and the
+    # words of each refusal, permissions included. The program runs in its own directory
+    # on every leg, a wasm leg's preopened under its own name.
+    file: FilesOfJavaIo.java
+    directory: true
+    files:
+      locked.txt: secret
+    modes:
+      locked.txt: "---------"
+      ro/: r-xr-xr-x
+    source: |
+      import java.io.File;
+      import java.io.FileFilter;
+      import java.io.FileInputStream;
+      import java.io.FileOutputStream;
+      import java.io.FileReader;
+      import java.io.FileWriter;
+      import java.io.IOException;
+      import java.io.InputStream;
+      import java.io.PrintStream;
+      import java.io.PrintWriter;
+      import java.io.RandomAccessFile;
+      import java.io.Reader;
+      import java.io.Writer;
+      import java.nio.charset.StandardCharsets;
+      import java.util.Arrays;
+      import java.util.Formatter;
+      import java.util.Scanner;
+
+      // A program's files through java.io, in the directory it runs in: the paths of a File, what
+      // the streams, the readers and writers, a scanner and a random access file make and read, a
+      // directory's names in the host's order, and the words of what each refuses.
+      public class FilesOfJavaIo {
+          interface Io {
+              Object run() throws Exception;
+          }
+
+          static void show(String label, Io io) {
+              try {
+                  Object value = io.run();
+                  System.out.println(label + ": " + (value instanceof String[] names ? Arrays.toString(names) : value));
+              }
+              catch (Exception e) {
+                  System.out.println(label + ": " + e);
+              }
+          }
+
+          static String text(File file) throws IOException {
+              try (InputStream in = new FileInputStream(file)) {
+                  return new String(in.readAllBytes(), StandardCharsets.UTF_8).replace('\n', '|');
+              }
+          }
+
+          static String sorted(File[] files) {
+              String[] names = new String[files.length];
+              for (int i = 0; i < files.length; i++) {
+                  names[i] = files[i].getPath();
+              }
+              Arrays.sort(names);
+              return Arrays.toString(names);
+          }
+
+          public static void main(String[] args) {
+              String here = new File("").getAbsolutePath();
+              File dir = new File("out//a/");
+              show("paths", () -> dir + " " + dir.getName() + " " + dir.getParent() + " " + dir.isAbsolute() + " "
+                      + new File(dir, "/b//") + " " + new File("", "c") + " " + new File("/", "..") + " "
+                      + new File(".").getParentFile() + " " + new File((File) null, "d").hashCode());
+              show("absolute", () -> dir.getAbsolutePath().equals(here + "/out/a") + " "
+                      + new File("out/../out/./a").getCanonicalPath().equals(new File(here).getCanonicalPath() + "/out/a") + " "
+                      + new File("/x/../y/.").getCanonicalPath() + " " + dir.equals(new File("out/a/")) + " "
+                      + dir.compareTo(new File("out/b")) + " " + dir.toPath().getFileName());
+              show("made", () -> dir.mkdir() + " " + dir.mkdirs() + " " + dir.mkdirs() + " " + dir.mkdir() + " "
+                      + dir.isDirectory() + " " + dir.exists() + " " + dir.isFile() + " " + new File(dir, "x/y").mkdir());
+              File f = new File(dir, "f.txt");
+              show("new file", () -> f.createNewFile() + " " + f.createNewFile() + " " + f.length() + " " + f.isFile() + " "
+                      + (f.lastModified() > 1_600_000_000_000L) + " " + new File(dir, "none").lastModified() + " "
+                      + f.canRead() + " " + f.canWrite() + " " + new File(dir, "none").canRead() + " " + f.isHidden());
+              show("written", () -> {
+                  try (FileOutputStream out = new FileOutputStream(f)) {
+                      out.write("hello".getBytes());
+                      out.write('!');
+                      out.write(new byte[] { 'a', 'b', 'c' }, 1, 2);
+                  }
+                  return f.length() + " " + text(f);
+              });
+              show("appended", () -> {
+                  try (FileOutputStream out = new FileOutputStream(f.getPath(), true)) {
+                      out.write(" more".getBytes());
+                  }
+                  return text(f);
+              });
+              show("read", () -> {
+                  try (FileInputStream in = new FileInputStream(f)) {
+                      byte[] b = new byte[6];
+                      return in.available() + " " + in.read() + " " + in.read(b, 1, 4) + " " + Arrays.toString(b) + " "
+                              + in.read(b, 0, 0) + " " + in.skip(3) + " " + (char) in.read() + " " + in.skip(100) + " "
+                              + in.read() + " " + in.available() + " " + in.skip(-104) + " " + (char) in.read();
+                  }
+              });
+              show("closed", () -> {
+                  FileInputStream in = new FileInputStream(f);
+                  in.close();
+                  in.close();
+                  return in.read();
+              });
+              show("range", () -> {
+                  try (FileInputStream in = new FileInputStream(f)) {
+                      return in.read(new byte[4], 3, 2);
+                  }
+              });
+              show("grown", () -> {
+                  try (FileInputStream in = new FileInputStream(f); FileOutputStream out = new FileOutputStream(f, true)) {
+                      in.readAllBytes();
+                      int end = in.read();
+                      out.write('?');
+                      return end + " " + (char) in.read() + " " + in.read();
+                  }
+              });
+              File w = new File(dir, "w.txt");
+              show("writer", () -> {
+                  try (Writer out = new FileWriter(w)) {
+                      out.write("héllo\n");
+                      out.append("line 2");
+                  }
+                  return w.length() + " " + text(w);
+              });
+              show("latin", () -> {
+                  try (Writer out = new FileWriter(w, StandardCharsets.ISO_8859_1, true)) {
+                      out.write("\né€");
+                  }
+                  return w.length();
+              });
+              show("reader", () -> {
+                  try (Reader in = new FileReader(w)) {
+                      StringBuilder seen = new StringBuilder();
+                      int c;
+                      while ((c = in.read()) >= 0) {
+                          seen.append(c < 128 ? String.valueOf((char) c) : "<" + c + ">");
+                      }
+                      return seen.toString().replace('\n', '|');
+                  }
+              });
+              show("reader latin", () -> {
+                  try (Reader in = new FileReader(w.getPath(), StandardCharsets.ISO_8859_1)) {
+                      char[] buf = new char[64];
+                      int n = in.read(buf);
+                      return n + " " + (int) buf[n - 2] + " " + (int) buf[n - 1];
+                  }
+              });
+              File p = new File(dir, "p.txt");
+              show("print writer", () -> {
+                  try (PrintWriter out = new PrintWriter(p)) {
+                      out.println("one two");
+                      out.printf("%d-%s%n", 2, "three");
+                      out.print(3.5);
+                  }
+                  return text(p);
+              });
+              show("print stream", () -> {
+                  try (PrintStream out = new PrintStream(dir + "/s.txt", "UTF-16BE")) {
+                      out.print("ab");
+                  }
+                  return new File(dir, "s.txt").length();
+              });
+              show("formatter", () -> {
+                  try (Formatter out = new Formatter(dir + "/m.txt")) {
+                      out.format("%s=%05d", "x", 42);
+                  }
+                  return text(new File(dir, "m.txt"));
+              });
+              show("scanner", () -> {
+                  try (Scanner in = new Scanner(p)) {
+                      StringBuilder seen = new StringBuilder();
+                      while (in.hasNext()) {
+                          seen.append('[').append(in.next()).append(']');
+                      }
+                      return seen;
+                  }
+              });
+              // bytes that are no UTF-8: a scanner of a file stops at them, one of a path
+              // replaces them
+              File bad = new File(dir, "bad.txt");
+              show("bad", () -> {
+                  try (FileOutputStream out = new FileOutputStream(bad)) {
+                      out.write(new byte[] { 'o', 'n', 'e', ' ', 't', (byte) 0xe9, 'o', '\n', 'x' });
+                  }
+                  return bad.length();
+              });
+              show("scanner bad", () -> {
+                  Scanner in = new Scanner(bad);
+                  return in.hasNext() + " " + in.ioException();
+              });
+              show("scanner bad path", () -> {
+                  Scanner in = new Scanner(bad.toPath());
+                  return in.nextLine().replace('�', '?') + " " + in.nextLine() + " " + in.ioException();
+              });
+              // a directory's names come in the host's order, which differs from one file
+              // system to another: sorted here
+              File list = new File("out/list");
+              show("listed", () -> {
+                  list.mkdir();
+                  for (String name : new String[] { "b", "a", "c", "10", "9", "B", ".dot" }) {
+                      new File(list, name).createNewFile();
+                  }
+                  new File(list, "dir").mkdir();
+                  String[] names = list.list();
+                  Arrays.sort(names);
+                  return Arrays.toString(names);
+              });
+              show("files", () -> sorted(list.listFiles((FileFilter) File::isDirectory)) + " "
+                      + sorted(list.listFiles((d, name) -> name.length() == 1 && d.equals(list))) + " "
+                      + Arrays.toString(list.list((d, name) -> name.startsWith("1"))) + " " + new File(list, "dir").list().length
+                      + " " + f.list() + " " + new File("out/none").listFiles());
+              show("renamed", () -> new File(list, "a").renameTo(new File(list, "a2")) + " "
+                      + new File(list, "a2").renameTo(new File(list, "b")) + " " + new File(list, "zz").renameTo(new File(list, "y"))
+                      + " " + new File(list, "c").renameTo(new File(list, "none/c")) + " " + list.list().length);
+              show("deleted", () -> new File(list, "c").delete() + " " + new File(list, "c").delete() + " " + list.delete()
+                      + " " + new File(list, "dir").delete() + " " + list.list().length);
+              // a file read and written where the program moves
+              File r = new File(dir, "r.bin");
+              show("random", () -> {
+                  try (RandomAccessFile raf = new RandomAccessFile(r, "rw")) {
+                      StringBuilder seen = new StringBuilder();
+                      seen.append(raf.length()).append(' ');
+                      raf.writeInt(0x01020304);
+                      raf.write("abc".getBytes());
+                      raf.writeUTF("hé");
+                      raf.writeLong(-2);
+                      raf.writeDouble(1.5);
+                      seen.append(raf.length()).append(' ').append(raf.getFilePointer()).append(' ');
+                      raf.seek(0);
+                      seen.append(raf.readInt()).append(' ').append(raf.read()).append(' ');
+                      raf.seek(7);
+                      seen.append(raf.readUTF()).append(' ').append(raf.readLong()).append(' ').append(raf.readDouble())
+                              .append(' ').append(raf.read()).append(' ');
+                      raf.seek(40);
+                      seen.append(raf.read()).append(' ').append(raf.length()).append(' ');
+                      raf.write(9);
+                      seen.append(raf.length()).append(' ');
+                      raf.setLength(5);
+                      seen.append(raf.length()).append(' ').append(raf.getFilePointer()).append(' ');
+                      raf.setLength(8);
+                      raf.seek(0);
+                      byte[] all = new byte[10];
+                      seen.append(raf.read(all)).append(' ').append(Arrays.toString(all)).append(' ').append(raf.skipBytes(3));
+                      return seen;
+                  }
+              });
+              show("random lines", () -> {
+                  try (PrintWriter out = new PrintWriter(new File(dir, "l.txt"))) {
+                      out.print("first\nsecond\r\nthird\rfourth");
+                  }
+                  try (RandomAccessFile raf = new RandomAccessFile(dir + "/l.txt", "r")) {
+                      return raf.readLine() + "|" + raf.readLine() + "|" + raf.readLine() + "|" + raf.readLine() + "|"
+                              + raf.readLine();
+                  }
+              });
+              show("random end", () -> {
+                  try (RandomAccessFile raf = new RandomAccessFile(r, "r")) {
+                      raf.seek(6);
+                      return raf.readInt();
+                  }
+              });
+              show("random read only", () -> {
+                  try (RandomAccessFile raf = new RandomAccessFile(r, "r")) {
+                      raf.write(1);
+                      return raf.length();
+                  }
+              });
+              show("random seek", () -> {
+                  try (RandomAccessFile raf = new RandomAccessFile(r, "rws")) {
+                      raf.seek(-1);
+                      return raf.getFilePointer();
+                  }
+              });
+              show("random mode", () -> new RandomAccessFile(r, "w"));
+              show("random missing", () -> new RandomAccessFile("out/none.bin", "r"));
+              // the words of what is refused
+              show("in missing", () -> new FileInputStream("out/missing.txt"));
+              show("in directory", () -> new FileInputStream(dir));
+              show("in under a file", () -> new FileReader(f + "/x"));
+              show("in empty", () -> new FileInputStream(""));
+              show("in nul", () -> new FileInputStream("a\u0000b"));
+              show("out directory", () -> new FileOutputStream("out"));
+              show("out in missing", () -> new FileWriter("out/nope/x.txt"));
+              show("out under a file", () -> new PrintWriter(f + "/x"));
+              show("print writer charset", () -> new PrintWriter("out/nope/x.txt", "NOPE"));
+              show("scanner missing", () -> new Scanner(new File("out/missing.txt")));
+              show("scanner directory", () -> new Scanner(dir));
+              show("new file in missing", () -> new File("out/nope/x").createNewFile());
+              show("new file under a file", () -> new File(f, "x").createNewFile());
+              show("in locked", () -> new FileInputStream("locked.txt"));
+              show("out locked", () -> new FileOutputStream("locked.txt", true));
+              show("out read-only", () -> new FileOutputStream("ro/x.txt"));
+              show("locked", () -> new File("locked.txt").canRead() + " " + new File("locked.txt").canWrite() + " "
+                      + new File("ro").canRead());
+          }
+      }
+    stdout: |
+      paths: out/a a out false out/a/b /c /.. null 1234421
+      absolute: true true /y true -1 a
+      made: false true false false true true false false
+      new file: true false 0 true true 0 true true false false
+      written: 8 hello!bc
+      appended: hello!bc more
+      read: 13 104 4 [0, 101, 108, 108, 111, 0] 0 3   100 -1 0 -104 !
+      closed: java.io.IOException: Stream Closed
+      range: java.lang.IndexOutOfBoundsException
+      grown: -1 ? -1
+      writer: 13 héllo|line 2
+      latin: 16
+      reader: h<233>llo|line 2|<65533>?
+      reader latin: 16 233 63
+      print writer: one two|2-three|3.5
+      print stream: 4
+      formatter: x=00042
+      scanner: [one][two][2-three][3.5]
+      bad: 9
+      scanner bad: false java.nio.charset.MalformedInputException: Input length = 1
+      scanner bad path: one t?o x null
+      listed: [.dot, 10, 9, B, a, b, c, dir]
+      files: [out/list/dir] [out/list/9, out/list/B, out/list/a, out/list/b, out/list/c] [10] 0 null null
+      renamed: true true false false 7
+      deleted: true false false true 5
+      random: 0 28 28 16909060 97 hé -2 1.5 -1 -1 28 41 5 5 8 [1, 2, 3, 4, 97, 0, 0, 0, 0, 0] 0
+      random lines: first|second|third|fourth|null
+      random end: java.io.EOFException
+      random read only: java.io.IOException: Bad file descriptor
+      random seek: java.io.IOException: Negative seek offset
+      random mode: java.lang.IllegalArgumentException: Illegal mode "w" must be one of "r", "rw", "rws", or "rwd"
+      random missing: java.io.FileNotFoundException: out/none.bin (No such file or directory)
+      in missing: java.io.FileNotFoundException: out/missing.txt (No such file or directory)
+      in directory: java.io.FileNotFoundException: out/a (Is a directory)
+      in under a file: java.io.FileNotFoundException: out/a/f.txt/x (Not a directory)
+      in empty: java.io.FileNotFoundException:  (No such file or directory)
+      in nul: java.io.FileNotFoundException: Invalid file path
+      out directory: java.io.FileNotFoundException: out (Is a directory)
+      out in missing: java.io.FileNotFoundException: out/nope/x.txt (No such file or directory)
+      out under a file: java.io.FileNotFoundException: out/a/f.txt/x (Not a directory)
+      print writer charset: java.io.UnsupportedEncodingException: NOPE
+      scanner missing: java.io.FileNotFoundException: out/missing.txt (No such file or directory)
+      scanner directory: java.io.FileNotFoundException: out/a (Is a directory)
+      new file in missing: java.io.IOException: No such file or directory
+      new file under a file: java.io.IOException: Not a directory
+      in locked: java.io.FileNotFoundException: locked.txt (Permission denied)
+      out locked: java.io.FileNotFoundException: locked.txt (Permission denied)
+      out read-only: java.io.FileNotFoundException: ro/x.txt (Permission denied)
+      locked: false false true
+  - name: a-program-makes-reads-copies-moves-lists-and-is-refused-its-files-through-java-nio-file
+    # Files through java.nio.file: a Path's names and what it resolves and relativizes
+    # to, what Files makes, reads, copies, moves, lists and walks (a walk's order where each
+    # directory has one name), the strict codecs (readString's count of bytes that are no
+    # UTF-8 is not its decoders'), and the exceptions with the paths they name.
+    file: FilesOfNio.java
+    directory: true
+    files:
+      locked.txt: secret
+    modes:
+      locked.txt: "---------"
+      ro/: r-xr-xr-x
+    source: |
+      import java.io.BufferedReader;
+      import java.io.BufferedWriter;
+      import java.io.ByteArrayOutputStream;
+      import java.io.IOException;
+      import java.io.InputStream;
+      import java.io.OutputStream;
+      import java.nio.charset.StandardCharsets;
+      import java.nio.file.FileSystemException;
+      import java.nio.file.Files;
+      import java.nio.file.InvalidPathException;
+      import java.nio.file.Path;
+      import java.nio.file.Paths;
+      import java.nio.file.StandardCopyOption;
+      import java.nio.file.StandardOpenOption;
+      import java.util.ArrayList;
+      import java.util.Arrays;
+      import java.util.List;
+      import java.util.stream.Collectors;
+      import java.util.stream.Stream;
+
+      // A program's files through java.nio.file, in the directory it runs in: a path's names and
+      // what it resolves and relativizes to, what Files makes, reads, copies, moves and lists, the
+      // strict codecs of its text and the exceptions it throws, with the words of each.
+      public class FilesOfNio {
+          interface Io {
+              Object run() throws Exception;
+          }
+
+          static void show(String label, Io io) {
+              try {
+                  Object value = io.run();
+                  System.out.println(label + ": " + (value instanceof byte[] bytes ? Arrays.toString(bytes) : value));
+              }
+              catch (Exception e) {
+                  System.out.println(label + ": " + e);
+              }
+          }
+
+          static String names(Path p) {
+              List<String> names = new ArrayList<>();
+              for (Path name : p) {
+                  names.add(name.toString());
+              }
+              return names.toString();
+          }
+
+          public static void main(String[] args) {
+              Path empty = Path.of("");
+              Path here = empty.toAbsolutePath();
+              show("of", () -> Path.of("a//b/", "", "/c") + " " + Paths.get("", "x") + " " + Path.of("/..") + " " + empty
+                      + " " + Path.of("a", "b").equals(Path.of("a/b")) + " " + Path.of("a/b").hashCode() + " "
+                      + Path.of("a/b").compareTo(Path.of("a-b")));
+              show("names", () -> {
+                  StringBuilder seen = new StringBuilder();
+                  for (String text : new String[] { "", "/", "a", "/a/b/c", "a/./../b" }) {
+                      Path p = Path.of(text);
+                      seen.append('[').append(p).append("] ").append(p.getFileName()).append(' ').append(p.getParent())
+                              .append(' ').append(p.getRoot()).append(' ').append(p.getNameCount()).append(' ')
+                              .append(names(p)).append(' ').append(p.normalize()).append(' ').append(p.isAbsolute())
+                              .append("; ");
+                  }
+                  return seen;
+              });
+              show("parts", () -> Path.of("/a/b/c").getName(1) + " " + Path.of("a/b/c").subpath(1, 3) + " "
+                      + Path.of("/a/b/c").startsWith("/a") + " " + Path.of("a/b/c").startsWith("a/b/") + " "
+                      + Path.of("a/bc").startsWith("a/b") + " " + Path.of("/a/b/c").endsWith("b/c") + " "
+                      + Path.of("a").endsWith("") + " " + empty.startsWith(""));
+              show("part refused", () -> Path.of("a/b").subpath(1, 1));
+              show("resolved", () -> Path.of("a").resolve("b/c") + " " + Path.of("a").resolve("/x") + " " + empty.resolve("b")
+                      + " " + Path.of("/").resolve("b") + " " + Path.of("a/b").resolveSibling("c") + " "
+                      + Path.of("a").resolveSibling("c") + " " + Path.of("a/b").resolve(""));
+              show("relativized", () -> Path.of("a/b").relativize(Path.of("a/c/d")) + " "
+                      + Path.of("/a/b").relativize(Path.of("/c")) + " " + Path.of("a/./b").relativize(Path.of("a/c")) + " "
+                      + Path.of("a").relativize(Path.of("../b")) + " [" + Path.of("a/b").relativize(Path.of("a/b")) + "]");
+              show("relativize refused", () -> Path.of("../a").relativize(Path.of("b")));
+              show("relativize mixed", () -> Path.of("a").relativize(Path.of("/a")));
+              show("absolute", () -> Path.of("x/y").toAbsolutePath().equals(here.resolve("x/y")) + " "
+                      + here.isAbsolute() + " " + Path.of("x").toFile() + " " + empty.toFile().getPath().isEmpty());
+              show("nul", () -> {
+                  try {
+                      return Path.of("a", "b\u0000");
+                  }
+                  catch (InvalidPathException e) {
+                      return e.getMessage().replace('\u0000', '@') + " " + e.getIndex() + " " + e.getReason();
+                  }
+              });
+              Path dir = Path.of("out", "a");
+              show("made", () -> Files.createDirectories(dir) + " " + Files.createDirectories(Path.of("out/a/")) + " "
+                      + Files.isDirectory(dir) + " " + Files.exists(dir) + " " + Files.notExists(dir) + " "
+                      + Files.isRegularFile(dir) + " " + Files.isDirectory(empty));
+              Path f = dir.resolve("f.txt");
+              show("written", () -> Files.writeString(f, "héllo\nline 2\r\nend") + " " + Files.size(f) + " "
+                      + Files.isRegularFile(f));
+              show("read", () -> Files.readString(f).replace("\r\n", "|").replace('\n', '|') + " " + Files.readAllLines(f)
+                      + " " + Files.readAllBytes(f).length);
+              show("lines", () -> {
+                  try (Stream<String> lines = Files.lines(f)) {
+                      return lines.map(String::toUpperCase).collect(Collectors.joining(","));
+                  }
+              });
+              show("bytes", () -> Arrays.toString(Files.readAllBytes(Files.write(dir.resolve("b.bin"), new byte[] { 1, -2 }))));
+              show("lines written", () -> Files.readString(Files.write(dir.resolve("l.txt"), List.of("one", "two"))).replace('\n', '|'));
+              show("appended", () -> Files.readAllLines(
+                      Files.writeString(dir.resolve("l.txt"), "three", StandardOpenOption.APPEND)));
+              show("options", () -> {
+                  Path n = dir.resolve("n.txt");
+                  Files.writeString(n, "new", StandardOpenOption.CREATE_NEW);
+                  Files.writeString(n, "N", StandardOpenOption.WRITE);
+                  String first = Files.readString(n);
+                  Files.writeString(n, "M", StandardOpenOption.CREATE);
+                  return first + " " + Files.readString(n);
+              });
+              show("create new existing", () -> Files.writeString(f, "x", StandardOpenOption.CREATE_NEW));
+              show("write missing", () -> Files.writeString(dir.resolve("none.txt"), "x", StandardOpenOption.APPEND));
+              show("append truncate", () -> Files.newOutputStream(f, StandardOpenOption.APPEND,
+                      StandardOpenOption.TRUNCATE_EXISTING));
+              show("reader writer", () -> {
+                  Path w = dir.resolve("w.txt");
+                  try (BufferedWriter out = Files.newBufferedWriter(w, StandardCharsets.UTF_16BE)) {
+                      out.write("ab");
+                      out.newLine();
+                  }
+                  try (BufferedReader in = Files.newBufferedReader(w, StandardCharsets.UTF_16BE)) {
+                      return Files.size(w) + " " + in.readLine() + " " + in.readLine();
+                  }
+              });
+              show("streams", () -> {
+                  try (OutputStream out = Files.newOutputStream(dir.resolve("s.bin"))) {
+                      out.write(new byte[] { 7, 8, 9 });
+                  }
+                  try (InputStream in = Files.newInputStream(dir.resolve("s.bin"))) {
+                      return in.read() + " " + in.readAllBytes().length;
+                  }
+              });
+              // the strict codecs
+              Path bad = dir.resolve("bad.txt");
+              show("malformed", () -> Files.write(bad, new byte[] { 'a', (byte) 0xe9, 'b', '\n', 'c' }) + " "
+                      + Files.readString(bad, StandardCharsets.ISO_8859_1).length());
+              show("readString malformed", () -> Files.readString(bad));
+              show("readAllLines malformed", () -> Files.readAllLines(bad));
+              show("lines malformed", () -> {
+                  try (Stream<String> lines = Files.lines(bad)) {
+                      return lines.count();
+                  }
+              });
+              show("ascii", () -> Files.readString(bad, StandardCharsets.US_ASCII));
+              show("cut", () -> Files.readString(Files.write(dir.resolve("cut.txt"), new byte[] { 'a', (byte) 0xe2, (byte) 0x82 })));
+              show("surrogate", () -> Files.readString(Files.write(dir.resolve("sur.txt"),
+                      new byte[] { 'a', (byte) 0xed, (byte) 0xa0, (byte) 0x80, 'b' })));
+              show("unmappable", () -> Files.writeString(dir.resolve("u.txt"), "a€b", StandardCharsets.US_ASCII));
+              show("unmappable left", () -> Files.exists(dir.resolve("u.txt")));
+              show("unmappable lines", () -> Files.write(dir.resolve("u2.txt"), List.of("ok", "é"), StandardCharsets.US_ASCII));
+              show("unmappable left lines", () -> Files.readString(dir.resolve("u2.txt")).replace('\n', '|'));
+              show("lone surrogate", () -> Files.writeString(dir.resolve("s.txt"), "a\ud800b"));
+              // copies, moves and deletes
+              show("copied", () -> Files.copy(f, dir.resolve("g.txt")) + " " + Files.mismatch(f, dir.resolve("g.txt")) + " "
+                      + Files.isSameFile(f, Path.of("out/./a/f.txt")) + " " + Files.isSameFile(f, dir.resolve("g.txt")));
+              show("copy existing", () -> Files.copy(f, dir.resolve("g.txt")));
+              show("copy replacing", () -> Files.copy(dir.resolve("b.bin"), dir.resolve("g.txt"),
+                      StandardCopyOption.REPLACE_EXISTING) + " " + Arrays.toString(Files.readAllBytes(dir.resolve("g.txt"))));
+              show("copy streams", () -> {
+                  ByteArrayOutputStream out = new ByteArrayOutputStream();
+                  long n = Files.copy(f, out);
+                  try (InputStream in = Files.newInputStream(f)) {
+                      return n + " " + Files.copy(in, dir.resolve("h.txt")) + " " + out.size();
+                  }
+              });
+              show("copy directory", () -> Files.copy(dir, Path.of("out/a2")) + " " + Files.list(Path.of("out/a2")).count());
+              show("moved", () -> Files.move(dir.resolve("g.txt"), dir.resolve("m.txt")) + " " + Files.exists(dir.resolve("g.txt")));
+              show("move existing", () -> Files.move(dir.resolve("h.txt"), dir.resolve("m.txt")));
+              show("move into missing", () -> Files.move(dir.resolve("m.txt"), Path.of("out/nope/m.txt")));
+              show("move missing", () -> Files.move(dir.resolve("g.txt"), dir.resolve("x.txt")));
+              show("deleted", () -> {
+                  Files.delete(dir.resolve("m.txt"));
+                  return Files.deleteIfExists(dir.resolve("h.txt")) + " " + Files.deleteIfExists(dir.resolve("h.txt"));
+              });
+              show("delete missing", () -> {
+                  Files.delete(dir.resolve("m.txt"));
+                  return "deleted";
+              });
+              show("delete full", () -> {
+                  Files.delete(dir);
+                  return "deleted";
+              });
+              // listing and walking: the host's order, which differs from one file system to
+              // another, sorted but where a directory has one name
+              Path list = Path.of("out/list");
+              show("listed", () -> {
+                  Files.createDirectory(list);
+                  for (String name : new String[] { "b", "a", "c", "10", "9", "B", ".dot" }) {
+                      Files.createFile(list.resolve(name));
+                  }
+                  Files.createDirectories(list.resolve("dir/sub"));
+                  Files.createFile(list.resolve("dir/x"));
+                  try (Stream<Path> s = Files.list(list)) {
+                      return s.map(Path::toString).sorted().collect(Collectors.joining(" "));
+                  }
+              });
+              show("walked", () -> {
+                  try (Stream<Path> s = Files.walk(list)) {
+                      return s.map(Path::toString).sorted().collect(Collectors.joining(" "));
+                  }
+              });
+              show("walked down", () -> {
+                  Files.createDirectories(Path.of("out/chain/a/b"));
+                  Files.writeString(Path.of("out/chain/a/b/c.txt"), "c");
+                  try (Stream<Path> s = Files.walk(Path.of("out/chain/"))) {
+                      return s.map(Path::toString).collect(Collectors.joining(" "));
+                  }
+              });
+              show("walked depth 1", () -> {
+                  try (Stream<Path> s = Files.walk(list, 1)) {
+                      return s.count();
+                  }
+              });
+              show("hidden", () -> Files.isHidden(list.resolve(".dot")) + " " + Files.isHidden(list.resolve("a")));
+              show("list missing", () -> Files.list(Path.of("out/none")));
+              show("list a file", () -> Files.list(f));
+              show("walk negative", () -> Files.walk(list, -1));
+              // the refusals of making and reading
+              show("directory again", () -> Files.createDirectory(dir));
+              show("directory in missing", () -> Files.createDirectory(Path.of("out/x/y")));
+              show("file again", () -> Files.createFile(f));
+              show("file in missing", () -> Files.createFile(Path.of("out/nope/x.txt")));
+              show("directories over a file", () -> Files.createDirectories(f));
+              show("directories under a file", () -> {
+                  try {
+                      return Files.createDirectories(f.resolve("x"));
+                  }
+                  catch (FileSystemException e) {
+                      return e.getClass().getName() + ": " + here.relativize(Path.of(e.getFile())) + " " + e.getReason();
+                  }
+              });
+              show("read missing", () -> Files.readString(dir.resolve("missing.txt")));
+              show("read directory", () -> Files.readAllBytes(dir));
+              show("read under a file", () -> Files.readString(f.resolve("x")));
+              show("write directory", () -> Files.writeString(dir, "x"));
+              show("size missing", () -> Files.size(dir.resolve("missing.txt")));
+              show("real missing", () -> Path.of("out/none/..").toRealPath());
+              show("real", () -> Path.of("out/a/../a/./f.txt").toRealPath().equals(here.toRealPath().resolve("out/a/f.txt")));
+              show("read locked", () -> Files.readString(Path.of("locked.txt")));
+              show("write locked", () -> Files.writeString(Path.of("locked.txt"), "x"));
+              show("write read-only", () -> Files.writeString(Path.of("ro/x.txt"), "x"));
+              show("readable", () -> Files.isReadable(f) + " " + Files.isReadable(Path.of("locked.txt")) + " "
+                      + Files.isWritable(f) + " " + Files.isReadable(Path.of("ro")));
+              show("texts", () -> new FileSystemException("a", "b", "r").getMessage() + "|"
+                      + new FileSystemException(null, null, "r").getMessage() + "|" + new FileSystemException("a").getMessage()
+                      + "|" + new InvalidPathException("in", "why", 3).getMessage());
+          }
+      }
+    stdout: |
+      of: a/b/c x /..  true 94772 2
+      names: []  null null 1 []  false; [/] null null / 0 [] / true; [a] a null null 1 [a] a false; [/a/b/c] c /a/b / 3 [a, b, c] /a/b/c true; [a/./../b] b a/./.. null 4 [a, ., .., b] b false; 
+      parts: b b/c true true false true false true
+      part refused: java.lang.IllegalArgumentException
+      resolved: a/b/c /x b /b a/c c a/b
+      relativized: ../c/d ../../c ../c ../../b []
+      relativize refused: java.lang.IllegalArgumentException: Unable to compute relative  path from ../a to b
+      relativize mixed: java.lang.IllegalArgumentException: 'other' is different type of Path
+      absolute: true true x true
+      nul: Nul character not allowed: a/b@ -1 Nul character not allowed
+      made: out/a out/a true true false false true
+      written: out/a/f.txt 18 true
+      read: héllo|line 2|end [héllo, line 2, end] 18
+      lines: HÉLLO,LINE 2,END
+      bytes: [1, -2]
+      lines written: one|two|
+      appended: [one, two, three]
+      options: New Mew
+      create new existing: java.nio.file.FileAlreadyExistsException: out/a/f.txt
+      write missing: java.nio.file.NoSuchFileException: out/a/none.txt
+      append truncate: java.lang.IllegalArgumentException: APPEND + TRUNCATE_EXISTING not allowed
+      reader writer: 6 ab null
+      streams: 7 2
+      malformed: out/a/bad.txt 5
+      readString malformed: java.nio.charset.MalformedInputException: Input length = 3
+      readAllLines malformed: java.nio.charset.MalformedInputException: Input length = 1
+      lines malformed: java.io.UncheckedIOException: java.nio.charset.MalformedInputException: Input length = 1
+      ascii: java.nio.charset.MalformedInputException: Input length = 1
+      cut: java.nio.charset.MalformedInputException: Input length = 1
+      surrogate: java.nio.charset.MalformedInputException: Input length = 3
+      unmappable: java.nio.charset.UnmappableCharacterException: Input length = 1
+      unmappable left: false
+      unmappable lines: java.nio.charset.UnmappableCharacterException: Input length = 1
+      unmappable left lines: ok|
+      lone surrogate: java.nio.charset.UnmappableCharacterException: Input length = 1
+      copied: out/a/g.txt -1 true false
+      copy existing: java.nio.file.FileAlreadyExistsException: out/a/g.txt
+      copy replacing: out/a/g.txt [1, -2]
+      copy streams: 18 18 18
+      copy directory: out/a2 0
+      moved: out/a/m.txt false
+      move existing: java.nio.file.FileAlreadyExistsException: out/a/m.txt
+      move into missing: java.nio.file.NoSuchFileException: out/a/m.txt -> out/nope/m.txt
+      move missing: java.nio.file.NoSuchFileException: out/a/g.txt
+      deleted: true false
+      delete missing: java.nio.file.NoSuchFileException: out/a/m.txt
+      delete full: java.nio.file.DirectoryNotEmptyException: out/a
+      listed: out/list/.dot out/list/10 out/list/9 out/list/B out/list/a out/list/b out/list/c out/list/dir
+      walked: out/list out/list/.dot out/list/10 out/list/9 out/list/B out/list/a out/list/b out/list/c out/list/dir out/list/dir/sub out/list/dir/x
+      walked down: out/chain out/chain/a out/chain/a/b out/chain/a/b/c.txt
+      walked depth 1: 9
+      hidden: true false
+      list missing: java.nio.file.NoSuchFileException: out/none
+      list a file: java.nio.file.NotDirectoryException: out/a/f.txt
+      walk negative: java.lang.IllegalArgumentException: 'maxDepth' is negative
+      directory again: java.nio.file.FileAlreadyExistsException: out/a
+      directory in missing: java.nio.file.NoSuchFileException: out/x/y
+      file again: java.nio.file.FileAlreadyExistsException: out/a/f.txt
+      file in missing: java.nio.file.NoSuchFileException: out/nope/x.txt
+      directories over a file: java.nio.file.FileAlreadyExistsException: out/a/f.txt
+      directories under a file: java.nio.file.FileSystemException: out/a/f.txt/x Not a directory
+      read missing: java.nio.file.NoSuchFileException: out/a/missing.txt
+      read directory: java.io.IOException: Is a directory
+      read under a file: java.nio.file.FileSystemException: out/a/f.txt/x: Not a directory
+      write directory: java.nio.file.FileSystemException: out/a: Is a directory
+      size missing: java.nio.file.NoSuchFileException: out/a/missing.txt
+      real missing: java.nio.file.NoSuchFileException: out/none/..
+      real: true
+      read locked: java.nio.file.AccessDeniedException: locked.txt
+      write locked: java.nio.file.AccessDeniedException: locked.txt
+      write read-only: java.nio.file.AccessDeniedException: ro/x.txt
+      readable: true false true true
+      texts: a -> b: r|r|a|why at index 3: in
 refused:
   scaffold: |
     class Refused {

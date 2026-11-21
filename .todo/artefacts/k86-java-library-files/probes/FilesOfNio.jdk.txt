@@ -1,0 +1,73 @@
+of: a/b/c x /..  true 94772 2
+names: []  null null 1 []  false; [/] null null / 0 [] / true; [a] a null null 1 [a] a false; [/a/b/c] c /a/b / 3 [a, b, c] /a/b/c true; [a/./../b] b a/./.. null 4 [a, ., .., b] b false; 
+parts: b b/c true true false true false true
+part refused: java.lang.IllegalArgumentException
+resolved: a/b/c /x b /b a/c c a/b
+relativized: ../c/d ../../c ../c ../../b []
+relativize refused: java.lang.IllegalArgumentException: Unable to compute relative  path from ../a to b
+relativize mixed: java.lang.IllegalArgumentException: 'other' is different type of Path
+absolute: true true x true
+nul: Nul character not allowed: a/b@ -1 Nul character not allowed
+made: out/a out/a true true false false true
+written: out/a/f.txt 18 true
+read: héllo|line 2|end [héllo, line 2, end] 18
+lines: HÉLLO,LINE 2,END
+bytes: [1, -2]
+lines written: one|two|
+appended: [one, two, three]
+options: New Mew
+create new existing: java.nio.file.FileAlreadyExistsException: out/a/f.txt
+write missing: java.nio.file.NoSuchFileException: out/a/none.txt
+append truncate: java.lang.IllegalArgumentException: APPEND + TRUNCATE_EXISTING not allowed
+reader writer: 6 ab null
+streams: 7 2
+malformed: out/a/bad.txt 5
+readString malformed: java.nio.charset.MalformedInputException: Input length = 3
+readAllLines malformed: java.nio.charset.MalformedInputException: Input length = 1
+lines malformed: java.io.UncheckedIOException: java.nio.charset.MalformedInputException: Input length = 1
+ascii: java.nio.charset.MalformedInputException: Input length = 1
+cut: java.nio.charset.MalformedInputException: Input length = 1
+surrogate: java.nio.charset.MalformedInputException: Input length = 3
+unmappable: java.nio.charset.UnmappableCharacterException: Input length = 1
+unmappable left: false
+unmappable lines: java.nio.charset.UnmappableCharacterException: Input length = 1
+unmappable left lines: ok|
+lone surrogate: java.nio.charset.UnmappableCharacterException: Input length = 1
+copied: out/a/g.txt -1 true false
+copy existing: java.nio.file.FileAlreadyExistsException: out/a/g.txt
+copy replacing: out/a/g.txt [1, -2]
+copy streams: 18 18 18
+copy directory: out/a2 0
+moved: out/a/m.txt false
+move existing: java.nio.file.FileAlreadyExistsException: out/a/m.txt
+move into missing: java.nio.file.NoSuchFileException: out/a/m.txt -> out/nope/m.txt
+move missing: java.nio.file.NoSuchFileException: out/a/g.txt
+deleted: true false
+delete missing: java.nio.file.NoSuchFileException: out/a/m.txt
+delete full: java.nio.file.DirectoryNotEmptyException: out/a
+listed: out/list/.dot out/list/10 out/list/9 out/list/B out/list/a out/list/b out/list/c out/list/dir
+walked: out/list out/list/.dot out/list/10 out/list/9 out/list/B out/list/a out/list/b out/list/c out/list/dir out/list/dir/sub out/list/dir/x
+walked down: out/chain out/chain/a out/chain/a/b out/chain/a/b/c.txt
+walked depth 1: 9
+hidden: true false
+list missing: java.nio.file.NoSuchFileException: out/none
+list a file: java.nio.file.NotDirectoryException: out/a/f.txt
+walk negative: java.lang.IllegalArgumentException: 'maxDepth' is negative
+directory again: java.nio.file.FileAlreadyExistsException: out/a
+directory in missing: java.nio.file.NoSuchFileException: out/x/y
+file again: java.nio.file.FileAlreadyExistsException: out/a/f.txt
+file in missing: java.nio.file.NoSuchFileException: out/nope/x.txt
+directories over a file: java.nio.file.FileAlreadyExistsException: out/a/f.txt
+directories under a file: java.nio.file.FileSystemException: out/a/f.txt/x Not a directory
+read missing: java.nio.file.NoSuchFileException: out/a/missing.txt
+read directory: java.io.IOException: Is a directory
+read under a file: java.nio.file.FileSystemException: out/a/f.txt/x: Not a directory
+write directory: java.nio.file.FileSystemException: out/a: Is a directory
+size missing: java.nio.file.NoSuchFileException: out/a/missing.txt
+real missing: java.nio.file.NoSuchFileException: out/none/..
+real: true
+read locked: java.nio.file.AccessDeniedException: locked.txt
+write locked: java.nio.file.AccessDeniedException: locked.txt
+write read-only: java.nio.file.AccessDeniedException: ro/x.txt
+readable: true false true true
+texts: a -> b: r|r|a|why at index 3: in

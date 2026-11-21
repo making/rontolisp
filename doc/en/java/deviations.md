@@ -303,6 +303,9 @@ pattern of a number. The positions of `match()` and of `toString()` count from t
 what the scanner holds: all of a `String`'s text, where a JDK's count from its buffer past the
 first 1024 characters. A `Readable` is handed an empty `CharBuffer` of 1024 characters at each
 read; a JDK hands it the scanner's buffer, positioned after what the scanner still holds.
+Each read past the first asks for 1024 characters, where a JDK's asks for what its buffer
+has room for: a `Scanner` of a `File` whose bytes stop being text past its first 1024
+characters gives the tokens before another read than a JDK's does.
 
 **A `CharBuffer` is one class.** `getClass().getName()` of every buffer is
 `java.nio.CharBuffer`, where a JDK names its kind (`java.nio.HeapCharBuffer`). A
@@ -506,6 +509,35 @@ the encodings (`file.encoding`, `native.encoding`, `stdin.encoding`, `stdout.enc
 `stderr.encoding`, each `UTF-8`); any other key is `null`. `System.gc()` does nothing.
 `System.getenv(name)` answers the host's variable -- a `.wasm` has those its host hands it
 (`wasmtime run --env NAME=value`) -- and `getenv()` of every variable is not there.
+
+## Files
+
+**A file is the host's, and a `.wasm` has the directories its host preopens.** A relative
+path is resolved against the working directory, which a `.wasm` takes to be its first
+preopen: where that one is named relatively (`wasmtime run --dir .`), `getAbsolutePath`,
+`getCanonicalPath`, `toAbsolutePath` and `toRealPath` answer a relative path. A `.wasm`
+asks the host of a path by opening it, so a file it may not read is not there for `exists`,
+`isFile`, `length` and `Files.exists`; refused, it is still `Permission denied`. A link is
+followed by every member: `LinkOption.NOFOLLOW_LINKS` and `FileVisitOption.FOLLOW_LINKS`
+change nothing, and `Files.walk` goes into a link to a directory.
+
+**What the host says of a file is what every target can ask.** `lastModified` is in whole
+seconds. The size of a file is read by opening it: `length` of a directory and of a file
+the program may not read is 0, `Files.size` of a directory 0 and of such a file an
+`AccessDeniedException`. Whether a directory may be written is not asked: `canWrite` and
+`Files.isWritable` of one throw an `UnsupportedOperationException`. A shorter
+`RandomAccessFile.setLength` writes the bytes it keeps again.
+`StandardOpenOption.DELETE_ON_CLOSE`, `SYNC`, `DSYNC` and `SPARSE` and
+`StandardCopyOption.COPY_ATTRIBUTES` and `ATOMIC_MOVE` change nothing. Every `Path` is of
+one class of the subset's own (what `getClass()` answers), and there is no `FileSystem`.
+Not there, refused by name: `File.toURI`, `deleteOnExit`, `createTempFile`, `listRoots`,
+`canExecute`, the setters (`setReadable`, `setLastModified` ..) and the space a disk has;
+`Path.toUri`, `getFileSystem`, `register`; `Files.newDirectoryStream`, `find`,
+`walkFileTree`, `isSymbolicLink`, `getLastModifiedTime` and the attributes, the temporary
+files and directories; `FileDescriptor` and the channels.
+
+**In the browser a program that reaches a file is refused before it runs**: the page has no
+file system. One that only computes paths runs.
 
 ## Threads
 
@@ -733,7 +765,6 @@ Each of these is an error naming the construct and its position.
 - A class extending `String`, `StringBuilder` or a box.
 - Of `java.util.concurrent`, what [The JDK classes](classes.md) does not list: the queues
   ordered by priority or by delay. A `Timer`'s `schedule` of a `Date`. Thread groups.
-- Any JDK class or member [The JDK classes](classes.md) does not list: files
-  (`File`, `FileReader`, `java.nio.file`, a `Scanner` of one), `Calendar`,
-  reflection. Of `java.net`, everything but `URI`, `URL`, the addresses of a server and the
+- Any JDK class or member [The JDK classes](classes.md) does not list: `Calendar`,
+  reflection, what [Files](#files) names. Of `java.net`, everything but `URI`, `URL`, the addresses of a server and the
   [HTTP client](#the-http-client): sockets, `HttpURLConnection`.

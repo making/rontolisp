@@ -580,6 +580,24 @@ algorithm came from, and the answer goes in the file's header.
   where a refused token leaves it, what a `hasNext` keeps and what drops it, the match each
   operation leaves, a scanner's text, `CharBuffer.hashCode`. The answers are lines of
   `java-spec.yaml`, which the JDK leg asks again.
+- **`File`, the file streams, `RandomAccessFile`, `Path`, `Files` and the strict codecs (k86,
+  2026-11-21).** Written from the API documentation (the members; `File.hashCode`'s formula,
+  which it states for a Unix host; what each open option and copy option asks; that a
+  `RandomAccessFile`'s modes are `r`, `rw`, `rws` and `rwd`) and JDK 25's answers to probes
+  (`.todo/artefacts/k86-java-library-files/probes/`: 142 lines of a `File`'s paths, 105 of a
+  `Path`'s, the operations and refusals of both packages in a directory holding a file and a
+  directory no one may read, 4,238 byte sequences through `readString` and `readAllLines`, the
+  encoders over each kind of character, a scanner of a file at 17 offsets of bytes that are
+  no text). Nobody opened OpenJDK's source, and the shape is its own: one class of natives
+  over what Common Lisp opens on four backends, a refusal decided by asking the host what is
+  at the path and above it, a path a normal text cut into names when asked. What the
+  documentation does not state was read off the answers: the normal form of a path and the
+  root an empty parent is, the words and exception of each refusal and which path it names,
+  that a skip moves past the end and back, how many bytes each strict decoder and encoder
+  counts (a decoder the Unicode Standard's maximal subpart; `readString` the size a lead
+  byte announces), that a read meeting such bytes loses what it decoded, the texts of
+  `FileSystemException` and `InvalidPathException`. The answers are lines of
+  `java-spec.yaml`, which the JDK leg asks again.
 - **A `CopyOnWriteArrayList`'s part, what a stale part answers and `removeRange` (k74,
   2026-11-21).** Written from the API documentation (what `subList`, `clear` and `removeRange`
   state, that a copy-on-write list's iterator is a snapshot) and JDK 25's answers to probes

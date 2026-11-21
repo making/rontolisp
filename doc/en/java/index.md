@@ -540,11 +540,35 @@ void main() {
 ## The JDK classes
 
 The subset has its own implementation of a part of the JDK's classes: `java.lang`,
-`java.util` with its streams, regular expressions and concurrency, `java.io` over memory,
-`java.math`, `java.time`, `java.net.http` and an HTTP server, among others.
+`java.util` with its streams, regular expressions and concurrency, `java.io` over memory
+and [files](#files), `java.nio.file`, `java.math`, `java.time`, `java.net.http` and an HTTP
+server, among others.
 [The JDK classes](classes.md) lists each class with its members, and how formatting,
 regular expressions, streams and hash tables behave; any other class or member is refused
 by name.
+
+## Files
+
+`File`, the file streams, `RandomAccessFile`, `Path` and `Files` reach the host's file
+system: on the interpreter and the JVM, every file the process may reach, a relative path
+resolved against the working directory; in a `.wasm`, the directories its host preopens, a
+relative path resolved against the first of them. What is refused is the JDK's exception
+with its words. In the browser a program that reaches a file is refused before it runs:
+the page has no file system.
+
+```bash
+cat > Notes.java <<'END'
+import java.nio.file.*;
+
+void main() throws Exception {
+    Path notes = Path.of("notes.txt");
+    Files.writeString(notes, "one\ntwo\n");
+    IO.println(Files.readAllLines(notes) + " " + Files.size(notes));
+}
+END
+rontolisp Notes.java                                         # [one, two] 8
+rontolisp Notes.java -o notes.wasm && wasmtime run --dir . notes.wasm
+```
 
 ## Threads
 

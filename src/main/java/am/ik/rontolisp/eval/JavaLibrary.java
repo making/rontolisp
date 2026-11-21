@@ -246,6 +246,38 @@ public final class JavaLibrary {
 		return false;
 	}
 
+	/**
+	 * The prefix of what the library's file classes reach the host's file system through.
+	 */
+	private static final String FILES = "RONTOLISP::%JAVA-FILE-";
+
+	/**
+	 * Whether a lowered program can reach the host's file system: its forms call the
+	 * run-time functions of {@code rontolisp.internal.Disk} only when a call of a file
+	 * class reaches them, so a program computing paths alone does not.
+	 * @param program the top-level forms
+	 * @return {@code true} when the program names a function a file is reached through
+	 */
+	static boolean reachesFiles(List<LispVal> program) {
+		for (LispVal form : program) {
+			if (startsWith(form, FILES)) {
+				return true;
+			}
+		}
+		return false;
+	}
+
+	private static boolean startsWith(LispVal form, String prefix) {
+		LispVal rest = form;
+		while (rest instanceof LispCons cons) {
+			if (startsWith(cons.car(), prefix)) {
+				return true;
+			}
+			rest = cons.cdr();
+		}
+		return rest instanceof LispSymbol symbol && symbol.name().startsWith(prefix);
+	}
+
 	private static boolean names(LispVal form, Set<String> names) {
 		LispVal rest = form;
 		while (rest instanceof LispCons cons) {

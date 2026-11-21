@@ -1,0 +1,37 @@
+BitsOnly 99993 -> 99993
+JoinOnly 114360 -> 114360
+LinesFile  -> 132245
+PathOnly  -> 147493
+PatOnly 286480 -> 286480
+PwOut 227379 -> 227379
+ReadBytes 21924 -> 21924
+ReadChars 84048 -> 84048
+ReadFile  -> 197305
+ReadLines 100752 -> 100752
+Readln 17190 -> 17190
+ScanDelim 308984 -> 308984
+ScanLine 100547 -> 100547
+SumScan 143438 -> 143438
+SumTok 108775 -> 108775
+SzBigFormat 190734 -> 190734
+SzComputed 177181 -> 177181
+SzDouble 77332 -> 77332
+SzFormatDs 153771 -> 153771
+SzFormat 153883 -> 153883
+SzFormattable 194761 -> 194761
+SzFormatter 186426 -> 186426
+SzGeneral 166544 -> 166544
+SzHash 168224 -> 168224
+SzHex 169790 -> 169790
+SzLocalDate 279117 -> 279117
+SzMax 132824 -> 132824
+SzMillis 255781 -> 255781
+SzParse 58395 -> 58395
+SzPrintfDs 153876 -> 153876
+SzStreamDs 159124 -> 159124
+SzThrowsHash 199819 -> 199819
+SzThrows 54130 -> 54130
+SzZoned 372157 -> 372157
+Tok 103103 -> 103103
+TokOnly 50730 -> 50730
+Utf16Bytes 70170 -> 70170

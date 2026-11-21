@@ -41,6 +41,36 @@ public class PrintStream extends FilterOutputStream implements Appendable {
         this.charset = Objects.requireNonNull(charset, "charset");
     }
 
+    // A file, made or emptied, each print reaching it as it is made; a charset's name is
+    // looked up before the file is opened.
+    public PrintStream(String fileName) throws FileNotFoundException {
+        this(new FileOutputStream(fileName), false);
+    }
+
+    public PrintStream(String fileName, String csn) throws FileNotFoundException, UnsupportedEncodingException {
+        this(rontolisp.internal.Support.charset(Objects.requireNonNull(csn, "charsetName")), new File(fileName));
+    }
+
+    public PrintStream(String fileName, Charset charset) throws IOException {
+        this(Objects.requireNonNull(charset, "charset"), new File(fileName));
+    }
+
+    public PrintStream(File file) throws FileNotFoundException {
+        this(new FileOutputStream(file), false);
+    }
+
+    public PrintStream(File file, String csn) throws FileNotFoundException, UnsupportedEncodingException {
+        this(rontolisp.internal.Support.charset(Objects.requireNonNull(csn, "charsetName")), file);
+    }
+
+    public PrintStream(File file, Charset charset) throws IOException {
+        this(Objects.requireNonNull(charset, "charset"), file);
+    }
+
+    private PrintStream(Charset charset, File file) throws FileNotFoundException {
+        this(new FileOutputStream(file), false, charset);
+    }
+
     // A standard stream.
     PrintStream() {
         super(null);

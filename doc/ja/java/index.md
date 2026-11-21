@@ -541,10 +541,33 @@ void main() {
 ## 使える JDK のクラス
 
 このサブセットは、JDK のクラスの一部を独自に実装しています。`java.lang`、ストリームと
-正規表現と並行処理を含む `java.util`、メモリ上の `java.io`、`java.math`、`java.time`、
-`java.net.http`、HTTP サーバーなどです。[使える JDK のクラス](classes.md)に、各クラスの
+正規表現と並行処理を含む `java.util`、メモリ上と[ファイル](#files)の `java.io`、
+`java.nio.file`、`java.math`、`java.time`、`java.net.http`、HTTP サーバーなどです。[使える JDK のクラス](classes.md)に、各クラスの
 メンバーと、書式指定、正規表現、ストリーム、ハッシュ表の動作を挙げています。挙げていない
 クラスとメンバーは名前を示して拒否します。
+
+## ファイル
+
+`File`、ファイルのストリーム、`RandomAccessFile`、`Path`、`Files` はホストのファイルシステムを
+使います。インタープリターと JVM では、プロセスが使えるすべてのファイルを使い、相対パスは
+作業ディレクトリを基準に解決します。`.wasm` では、ホストが事前に開いた（プリオープンした）
+ディレクトリを使い、相対パスは最初のディレクトリを基準に解決します。拒否は JDK と同じ例外と
+文言です。ブラウザーでは、ファイルに触れるプログラムを実行前に拒否します。ページには
+ファイルシステムがないためです。
+
+```bash
+cat > Notes.java <<'END'
+import java.nio.file.*;
+
+void main() throws Exception {
+    Path notes = Path.of("notes.txt");
+    Files.writeString(notes, "one\ntwo\n");
+    IO.println(Files.readAllLines(notes) + " " + Files.size(notes));
+}
+END
+rontolisp Notes.java                                         # [one, two] 8
+rontolisp Notes.java -o notes.wasm && wasmtime run --dir . notes.wasm
+```
 
 ## スレッド
 

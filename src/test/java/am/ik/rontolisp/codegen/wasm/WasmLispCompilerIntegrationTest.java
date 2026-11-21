@@ -13166,7 +13166,10 @@ class WasmLispCompilerIntegrationTest {
 	@Test
 	void directoryListingResumesPastOneReaddirRound() throws Exception {
 		// The listing buffer is 8 KiB, so a directory this size spans several fd_readdir
-		// rounds and only the cookie resume gets all of it back.
+		// rounds and only the cookie resume gets all of it back -- in the host's order,
+		// which the primitive keeps on every backend (a JVM's File.list() is it): until
+		// 2026-11-21 each name was consed ahead of the ones before it, so the listing
+		// came back reversed.
 		String code = """
 				(dotimes (i 400)
 				  (with-open-file (out (concatenate 'string "many-" (princ-to-string (+ 1000 i)) ".txt")
@@ -13176,8 +13179,15 @@ class WasmLispCompilerIntegrationTest {
 				  (print (length all))
 				  (print (first all))
 				  (print (car (last all))))
+				(terpri)
+				(format t "~{~a~^ ~}" (cdr (%list-directory "./")))
 				""";
-		assertThat(compileAndRunWithDir(code)).isEqualTo("400\n#P\"many-1000.txt\"\n#P\"many-1399.txt\"");
+		String[] printed = compileAndRunWithDir(code).split("\n", -1);
+		assertThat(List.of(printed).subList(0, 3)).containsExactly("400", "#P\"many-1000.txt\"", "#P\"many-1399.txt\"");
+		assertThat(printed[printed.length - 1])
+			.isEqualTo(Stream.of(java.util.Objects.requireNonNull(new java.io.File(workDir()).listFiles()))
+				.map(file -> file.getName() + (file.isDirectory() ? "/" : ""))
+				.collect(java.util.stream.Collectors.joining(" ")));
 	}
 
 	@Test

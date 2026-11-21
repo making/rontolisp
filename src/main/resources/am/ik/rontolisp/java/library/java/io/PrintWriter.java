@@ -37,6 +37,35 @@ public class PrintWriter extends Writer {
         this(new BufferedWriter(new OutputStreamWriter(out, charset)), autoFlush);
     }
 
+    // A file, made or emptied; a charset's name is looked up before the file is opened.
+    public PrintWriter(String fileName) throws FileNotFoundException {
+        this(new FileOutputStream(fileName), false);
+    }
+
+    public PrintWriter(String fileName, String csn) throws FileNotFoundException, UnsupportedEncodingException {
+        this(rontolisp.internal.Support.charset(Objects.requireNonNull(csn, "charsetName")), new File(fileName));
+    }
+
+    public PrintWriter(String fileName, java.nio.charset.Charset charset) throws IOException {
+        this(Objects.requireNonNull(charset, "charset"), new File(fileName));
+    }
+
+    public PrintWriter(File file) throws FileNotFoundException {
+        this(new FileOutputStream(file), false);
+    }
+
+    public PrintWriter(File file, String csn) throws FileNotFoundException, UnsupportedEncodingException {
+        this(rontolisp.internal.Support.charset(Objects.requireNonNull(csn, "charsetName")), file);
+    }
+
+    public PrintWriter(File file, java.nio.charset.Charset charset) throws IOException {
+        this(Objects.requireNonNull(charset, "charset"), file);
+    }
+
+    private PrintWriter(java.nio.charset.Charset charset, File file) throws FileNotFoundException {
+        this(new FileOutputStream(file), false, charset);
+    }
+
     private void text(String s, boolean line) {
         try {
             if (out == null) {

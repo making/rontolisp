@@ -122,6 +122,56 @@ public final class Utf16 extends Charset {
         return new String(units, 0, n);
     }
 
+    // A strict decoder refuses a byte with no partner (one), a surrogate with none (two)
+    // and a high surrogate with a unit after it that is no low one (four); a JDK's
+    // readString counts as its decoders do.
+    public long malformed(byte[] b, int from, int to, boolean whole) {
+        int at = from;
+        boolean order = little;
+        if (marks && to - at >= 2) {
+            int mark = unit(b, at, false);
+            if (mark == 0xfeff || mark == 0xfffe) {
+                order = mark == 0xfffe;
+                at += 2;
+            }
+        }
+        while (at < to) {
+            if (to - at < 2) {
+                return (long) at << 3 | 1;
+            }
+            int unit = unit(b, at, order);
+            if (unit >= 0xd800 && unit <= 0xdbff) {
+                if (to - at < 4) {
+                    return (long) at << 3 | 2;
+                }
+                int next = unit(b, at + 2, order);
+                if (next < 0xdc00 || next > 0xdfff) {
+                    return (long) at << 3 | 4;
+                }
+                at += 4;
+            }
+            else if (unit >= 0xdc00 && unit <= 0xdfff) {
+                return (long) at << 3 | 2;
+            }
+            else {
+                at += 2;
+            }
+        }
+        return -1;
+    }
+
+    // A strict encoder refuses a surrogate with no partner as malformed, one unit.
+    public long unwritable(String s, boolean whole) {
+        int n = s.length();
+        for (int i = 0; i < n; i++) {
+            int c = s.codePointAt(i);
+            if (c >= 0xd800 && c <= 0xdfff) {
+                return (long) i << 3 | 1 << 1 | 1;
+            }
+        }
+        return -1;
+    }
+
     // A byte with no partner yet waits, and so does a high surrogate that ends the bytes
     // when the unit after it is its to take: of the high surrogates at the end, each
     // takes the one after it, so the last waits when they are an odd number.

@@ -1,0 +1,49 @@
+paths: out/a a out false out/a/b /c /.. null 1234421
+absolute: true true /y true -1 a
+made: false true false false true true false false
+new file: true false 0 true true 0 true true false false
+written: 8 hello!bc
+appended: hello!bc more
+read: 13 104 4 [0, 101, 108, 108, 111, 0] 0 3   100 -1 0 -104 !
+closed: java.io.IOException: Stream Closed
+range: java.lang.IndexOutOfBoundsException
+grown: -1 ? -1
+writer: 13 héllo|line 2
+latin: 16
+reader: h<233>llo|line 2|<65533>?
+reader latin: 16 233 63
+print writer: one two|2-three|3.5
+print stream: 4
+formatter: x=00042
+scanner: [one][two][2-three][3.5]
+bad: 9
+scanner bad: false java.nio.charset.MalformedInputException: Input length = 1
+scanner bad path: one t?o x null
+listed: [.dot, 10, 9, B, a, b, c, dir]
+files: [out/list/dir] [out/list/9, out/list/B, out/list/a, out/list/b, out/list/c] [10] 0 null null
+renamed: true true false false 7
+deleted: true false false true 5
+random: 0 28 28 16909060 97 hé -2 1.5 -1 -1 28 41 5 5 8 [1, 2, 3, 4, 97, 0, 0, 0, 0, 0] 0
+random lines: first|second|third|fourth|null
+random end: java.io.EOFException
+random read only: java.io.IOException: Bad file descriptor
+random seek: java.io.IOException: Negative seek offset
+random mode: java.lang.IllegalArgumentException: Illegal mode "w" must be one of "r", "rw", "rws", or "rwd"
+random missing: java.io.FileNotFoundException: out/none.bin (No such file or directory)
+in missing: java.io.FileNotFoundException: out/missing.txt (No such file or directory)
+in directory: java.io.FileNotFoundException: out/a (Is a directory)
+in under a file: java.io.FileNotFoundException: out/a/f.txt/x (Not a directory)
+in empty: java.io.FileNotFoundException:  (No such file or directory)
+in nul: java.io.FileNotFoundException: Invalid file path
+out directory: java.io.FileNotFoundException: out (Is a directory)
+out in missing: java.io.FileNotFoundException: out/nope/x.txt (No such file or directory)
+out under a file: java.io.FileNotFoundException: out/a/f.txt/x (Not a directory)
+print writer charset: java.io.UnsupportedEncodingException: NOPE
+scanner missing: java.io.FileNotFoundException: out/missing.txt (No such file or directory)
+scanner directory: java.io.FileNotFoundException: out/a (Is a directory)
+new file in missing: java.io.IOException: No such file or directory
+new file under a file: java.io.IOException: Not a directory
+in locked: java.io.FileNotFoundException: locked.txt (Permission denied)
+out locked: java.io.FileNotFoundException: locked.txt (Permission denied)
+out read-only: java.io.FileNotFoundException: ro/x.txt (Permission denied)
+locked: false false true

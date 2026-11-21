@@ -1,0 +1,103 @@
+exists notExists = false true
+createDirectory = t
+createDirectory again ! java.nio.file.FileAlreadyExistsException: t
+createDirectory in missing ! java.nio.file.NoSuchFileException: t/a/b
+createDirectories = t/a/b
+createDirectories again = t/a/b
+isDirectory isRegularFile = true false true
+createFile = t/f.txt
+createFile again ! java.nio.file.FileAlreadyExistsException: t/f.txt
+createFile in missing ! java.nio.file.NoSuchFileException: t/nope/x.txt
+createDirectories over a file ! java.nio.file.FileAlreadyExistsException: t/f.txt
+createDirectories under a file ! java.nio.file.FileSystemException: /tmp/tmp.TYxAoQO2GF/t/f.txt/x: Not a directory
+size = 0
+size missing ! java.nio.file.NoSuchFileException: t/missing
+writeString = t/f.txt
+size = 18
+readString = héllo
+€😀
+end
+readAllBytes = [104, -61, -87, 108, 108, 111, 10, -30, -126, -84, -16, -97, -104, -128, 10, 101, 110, 100]
+readAllLines = [héllo, €😀, end]
+lines = [5, 3, 3]
+write bytes = t/b.bin
+readAllBytes = [1, 2, -1]
+write lines = t/l.txt
+readString lines = one|two||
+append = t/l.txt
+readAllLines = [one, two, , three]
+line ends = [a, b, c, , d] [a, b, c, , d]
+create new existing ! java.nio.file.FileAlreadyExistsException: t/f.txt
+write missing no create ! java.nio.file.NoSuchFileException: t/none.txt
+append missing ! java.nio.file.NoSuchFileException: t/none.txt
+append and truncate ! java.lang.IllegalArgumentException: APPEND + TRUNCATE_EXISTING not allowed
+read option ! java.lang.IllegalArgumentException: READ not allowed
+create new = t/new.txt
+write existing no truncate = New
+create no truncate = Mew
+readString missing ! java.nio.file.NoSuchFileException: t/missing.txt
+readString directory ! java.io.IOException: Is a directory
+readAllBytes directory ! java.io.IOException: Is a directory
+readAllLines directory ! java.io.IOException: Is a directory
+readString locked ! java.nio.file.AccessDeniedException: locked.txt
+writeString locked ! java.nio.file.AccessDeniedException: locked.txt
+writeString in missing ! java.nio.file.NoSuchFileException: t/nope/x.txt
+writeString directory ! java.nio.file.FileSystemException: t: Is a directory
+writeString read-only directory ! java.nio.file.AccessDeniedException: ro/x.txt
+writeString under a file ! java.nio.file.FileSystemException: t/f.txt/x: Not a directory
+readString under a file ! java.nio.file.FileSystemException: t/f.txt/x: Not a directory
+newInputStream missing ! java.nio.file.NoSuchFileException: t/missing.txt
+newInputStream directory ! java.io.IOException: Is a directory
+newBufferedReader missing ! java.nio.file.NoSuchFileException: t/missing.txt
+newBufferedWriter in missing ! java.nio.file.NoSuchFileException: t/nope/x.txt
+newOutputStream directory ! java.nio.file.FileSystemException: t: Is a directory
+lines missing ! java.nio.file.NoSuchFileException: t/missing.txt
+write malformed = t/bad.txt
+readString malformed ! java.nio.charset.MalformedInputException: Input length = 3
+readAllLines malformed ! java.nio.charset.MalformedInputException: Input length = 1
+lines malformed ! java.io.UncheckedIOException: java.nio.charset.MalformedInputException: Input length = 1
+  cause java.nio.charset.MalformedInputException: Input length = 1
+newBufferedReader malformed ! java.nio.charset.MalformedInputException: Input length = 1
+readString latin = 5
+readString ascii ! java.nio.charset.MalformedInputException: Input length = 1
+readString utf16 ! java.nio.charset.MalformedInputException: Input length = 1
+readString truncated ! java.nio.charset.MalformedInputException: Input length = 1
+readString surrogate ! java.nio.charset.MalformedInputException: Input length = 3
+readString long ! java.nio.charset.MalformedInputException: Input length = 4
+writeString unmappable ! java.nio.charset.UnmappableCharacterException: Input length = 1
+u.txt after ! java.nio.file.NoSuchFileException: t/u.txt
+writeString lone surrogate ! java.nio.charset.UnmappableCharacterException: Input length = 1
+write lines unmappable ! java.nio.charset.UnmappableCharacterException: Input length = 1
+newBufferedWriter unmappable ! java.nio.charset.UnmappableCharacterException: Input length = 1
+copy = t/g.txt
+copy existing ! java.nio.file.FileAlreadyExistsException: t/g.txt
+copy replace = t/g.txt
+copied = [1, 2, -1]
+copy missing ! java.nio.file.NoSuchFileException: t/missing
+copy directory = t/a2
+copied directory = true false
+copy stream = 18
+copy to stream = 18
+move = t/m.txt
+move existing ! java.nio.file.FileAlreadyExistsException: t/m.txt
+move replace = t/m.txt
+move missing ! java.nio.file.NoSuchFileException: t/g.txt
+delete = false
+delete missing ! java.nio.file.NoSuchFileException: t/m.txt
+deleteIfExists = true false
+delete non-empty ! java.nio.file.DirectoryNotEmptyException: t/a
+deleteIfExists non-empty ! java.nio.file.DirectoryNotEmptyException: t/a
+list = [t/list/dir, t/list/.dot, t/list/b, t/list/c, t/list/10, t/list/9, t/list/B, t/list/a]
+list sorted = [t/list/.dot, t/list/10, t/list/9, t/list/B, t/list/a, t/list/b, t/list/c, t/list/dir]
+walk = [t/list, t/list/dir, t/list/dir/sub, t/list/dir/x, t/list/.dot, t/list/b, t/list/c, t/list/10, t/list/9, t/list/B, t/list/a]
+walk depth 1 = [t/list, t/list/dir, t/list/.dot, t/list/b, t/list/c, t/list/10, t/list/9, t/list/B, t/list/a]
+walk of a file = [t/f.txt]
+list missing ! java.nio.file.NoSuchFileException: t/none
+list of a file ! java.nio.file.NotDirectoryException: t/f.txt
+walk missing ! java.nio.file.NoSuchFileException: t/none
+walk negative ! java.lang.IllegalArgumentException: 'maxDepth' is negative
+isSameFile = true false
+isReadable isWritable = true true false true true
+mismatch = -1 0
+toRealPath = true
+toRealPath missing ! java.nio.file.NoSuchFileException: t/none/..

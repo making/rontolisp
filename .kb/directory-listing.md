@@ -18,7 +18,12 @@ each name BARE with a trailing `/` when itself a directory.
 - The leading `t` tells an empty directory from a missing one (`%directory-in` resolves the
   directory only when it is there; the Clojure front end's `File.list` answers nil vs `[]`).
 - It never signals (as `probe-file`): a WASM trap is not catchable.
-- Host order is kept; `directory` sorts with `string<` in shared Lisp.
+- Host order is kept; `directory` sorts with `string<` in shared Lisp. Until 2026-11-21 both
+  WASM backends answered it reversed (`_list_directory` consed each name ahead of the ones
+  before), which only an unsorted reader could see: the Java subset's `File.list()`, which a
+  JDK answers in readdir's order (`.kb/java-frontend.md`, "Files"). Each cell is now linked
+  after the last; pinned by `WasmLispCompilerIntegrationTest#directoryListingResumesPastOneReaddirRound`
+  against the JVM's `File.listFiles()` of the same directory.
 - `.` and `..` never appear -- preview1 `fd_readdir` YIELDS them and the WASM P1 runtime drops
   them, else `collect-sub*directories` walks its own parent forever.
 - An unreadable directory reads as absent, matching the WASM backends.

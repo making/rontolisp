@@ -157,6 +157,82 @@ public class Charset {
         return 0;
     }
 
+    // Where the first bytes of b[from, to) that are no text in this charset start and how
+    // many they are, as start << 3 | count, or -1: what a strict decoder refuses. A JDK's
+    // decoders count the bytes that start a sequence well (the Unicode Standard's maximal
+    // subpart), an encoded surrogate's three as one sequence; its readString of UTF-8
+    // (WHOLE) counts the bytes a lead byte announces where there are enough of them, one
+    // where there are not -- but two for a three-byte lead whose second byte cannot follow
+    // it -- and one for a two-byte lead or a byte that leads nothing. Read off a JDK's
+    // answers to every lead byte followed by each kind of byte.
+    public long malformed(byte[] b, int from, int to, boolean whole) {
+        if (this == ISO_8859_1) {
+            return -1;
+        }
+        int i = from;
+        while (i < to) {
+            int c = b[i] & 0xff;
+            if (c < 0x80) {
+                i++;
+                continue;
+            }
+            if (this != UTF_8) {
+                return (long) i << 3 | 1;
+            }
+            int size = c >= 0xc2 && c <= 0xdf ? 2 : c >= 0xe0 && c <= 0xef ? 3 : c >= 0xf0 && c <= 0xf4 ? 4 : 0;
+            int low = c == 0xe0 ? 0xa0 : c == 0xf0 ? 0x90 : 0x80;
+            int high = c == 0xed ? 0x9f : c == 0xf4 ? 0x8f : 0xbf;
+            int second = i + 1 < to ? b[i + 1] & 0xff : -1;
+            int good = 1;
+            if (size > 0 && second >= low && second <= high) {
+                good = 2;
+                while (good < size && i + good < to && (b[i + good] & 0xc0) == 0x80) {
+                    good++;
+                }
+            }
+            if (size > 0 && good == size) {
+                i += size;
+                continue;
+            }
+            int count;
+            if (whole) {
+                int left = to - i;
+                count = c >= 0xe0 && c <= 0xef
+                        ? left >= 3 ? 3 : left == 2 && ((second & 0xc0) != 0x80 || c == 0xe0 && second < 0xa0) ? 2 : 1
+                        : c >= 0xf0 && c <= 0xf7 && left >= 4 ? 4 : 1;
+            }
+            else if (c == 0xed && second >= 0xa0 && second <= 0xbf) {
+                count = i + 2 < to && (b[i + 2] & 0xc0) == 0x80 ? 3 : 2;
+            }
+            else {
+                count = good;
+            }
+            return (long) i << 3 | count;
+        }
+        return -1;
+    }
+
+    // Where the first character of s this charset cannot write is, how many UTF-16 units a
+    // JDK counts of it and whether it is malformed -- a surrogate with no partner -- or
+    // unmappable, as index << 3 | count << 1 | malformed, or -1: what a strict encoder
+    // refuses, its writers' or (WHOLE) its writeString's, which count otherwise. Read off a
+    // JDK's answers.
+    public long unwritable(String s, boolean whole) {
+        int last = this == UTF_8 ? 0x10ffff : this == ISO_8859_1 ? 0xff : 0x7f;
+        int n = s.length();
+        for (int i = 0; i < n; i++) {
+            int c = s.codePointAt(i);
+            if (c >= 0xd800 && c <= 0xdfff) {
+                // writeString calls it unmappable but in US-ASCII
+                return (long) i << 3 | 1 << 1 | (whole && last != 0x7f ? 0 : 1);
+            }
+            if (c > last) {
+                return (long) i << 3 | (c > 0xffff && !(whole && last == 0xff) ? 2 : 1) << 1;
+            }
+        }
+        return -1;
+    }
+
     // The charset the rest of an output is written in once its start is, and the rest
     // of an input read in once the count bytes at the start of b are: the charset
     // itself, but for the one whose start holds a mark.

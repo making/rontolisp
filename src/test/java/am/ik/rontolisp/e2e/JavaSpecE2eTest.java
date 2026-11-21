@@ -105,10 +105,18 @@ class JavaSpecE2eTest {
 	 * any file that is no {@code .java} a resource beside them
 	 * @param provided what the library was compiled against and its sources jar does not
 	 * hold, by path, or {@code null}: only the JDK leg's compile of the library reads it
+	 * @param directory whether it runs in the directory its files are written to, on
+	 * every leg: the interpreter then in a process of its own (a process cannot change
+	 * where it runs), a wasm leg with that directory preopened under its own name
+	 * @param modes the permissions its files and directories are given after they are
+	 * written, by path ({@code r-xr-xr-x}; a path ending in a slash is a directory, made
+	 * empty), or {@code null}: its legs are skipped where the user is root, whom no
+	 * permission refuses
 	 */
 	record Standalone(String name, String file, String source, String stdout, @Nullable String error,
 			@Nullable String stderr, @Nullable String at, @Nullable Map<String, String> files, @Nullable String stdin,
-			@Nullable String warnings, @Nullable Map<String, String> library, @Nullable Map<String, String> provided) {
+			@Nullable String warnings, @Nullable Map<String, String> library, @Nullable Map<String, String> provided,
+			@Nullable Boolean directory, @Nullable Map<String, String> modes) {
 
 		/**
 		 * The name of the library's sources jar, which a location line ends a path of.
@@ -183,7 +191,8 @@ class JavaSpecE2eTest {
 		}
 
 		/**
-		 * Writes the program's files under a directory of its own and answers the first.
+		 * Writes the program's files under a directory of its own, gives them their
+		 * modes, and answers the first.
 		 */
 		Path write(String leg) throws IOException {
 			if (this.files != null) {
@@ -191,7 +200,47 @@ class JavaSpecE2eTest {
 					JavaSpecE2eTest.write(leg, other.getKey(), other.getValue());
 				}
 			}
-			return JavaSpecE2eTest.write(leg, this.file, this.source);
+			Path written = JavaSpecE2eTest.write(leg, this.file, this.source);
+			if (this.modes != null) {
+				if (System.getProperty("user.name").equals("root")) {
+					abort("no permission refuses root");
+				}
+				for (Map.Entry<String, String> mode : this.modes.entrySet()) {
+					Path path = workDir.resolve(leg).resolve(mode.getKey());
+					if (mode.getKey().endsWith("/")) {
+						Files.createDirectories(path);
+					}
+					Files.setPosixFilePermissions(path,
+							java.nio.file.attribute.PosixFilePermissions.fromString(mode.getValue()));
+				}
+			}
+			return written;
+		}
+
+		/**
+		 * The directory a leg runs in, the program's root, where the case asks for one.
+		 */
+		@Nullable Path runsIn(Path written) {
+			if (!Boolean.TRUE.equals(this.directory)) {
+				return null;
+			}
+			Path dir = written;
+			for (int i = this.file.split("/").length; i > 0; i--) {
+				dir = java.util.Objects.requireNonNull(dir.getParent());
+			}
+			return dir;
+		}
+
+		/**
+		 * What wasmtime runs the module with: its directory preopened under its own name.
+		 */
+		List<String> wasmtime(Path module, @Nullable Path dir) {
+			List<String> command = new ArrayList<>(List.of("wasmtime", "run", "-W", "gc=y", "-W", "exceptions=y"));
+			if (dir != null) {
+				command.addAll(List.of("--dir", dir + "::" + dir));
+			}
+			command.add(module.toString());
+			return command;
 		}
 
 	}
@@ -293,10 +342,12 @@ class JavaSpecE2eTest {
 					try (ThreadStdio.Scope _ = ThreadStdio.err(warned)) {
 						module = compileWasm(file, s.source(), component, s.stem(), s.standards(s.stem() + "-" + leg));
 					}
-					assertEnded(s, leg, ended(
-							new ProcessBuilder("wasmtime", "run", "-W", "gc=y", "-W", "exceptions=y", module.toString())
-								.start(),
-							s.stdin()), withoutRoot(warned, s.stem() + "-" + leg));
+					Path dir = s.runsIn(file);
+					ProcessBuilder run = new ProcessBuilder(s.wasmtime(module, dir));
+					if (dir != null) {
+						run.directory(dir.toFile());
+					}
+					assertEnded(s, leg, ended(run.start(), s.stdin()), withoutRoot(warned, s.stem() + "-" + leg));
 				}));
 			}
 		}
@@ -589,6 +640,18 @@ class JavaSpecE2eTest {
 
 	private static void standaloneOnInterpreter(Standalone s) throws Exception {
 		Path file = s.write(s.stem() + "-INTERPRETER");
+		Path dir = s.runsIn(file);
+		if (dir != null) {
+			// where the program runs is the directory of a process of its own
+			assertEnded(s, "INTERPRETER",
+					ended(new ProcessBuilder(Path.of(System.getProperty("java.home"), "bin", "java").toString(), "-cp",
+							System.getProperty("java.class.path"), "am.ik.rontolisp.cli.RontoLispCli",
+							dir.relativize(file).toString())
+						.directory(dir.toFile())
+						.start(), s.stdin()),
+					null);
+			return;
+		}
 		SourceStandards standards = s.standards(s.stem() + "-INTERPRETER");
 		int[] status = new int[1];
 		ByteArrayOutputStream out = new ByteArrayOutputStream();
@@ -653,11 +716,13 @@ class JavaSpecE2eTest {
 			Files.createDirectories(java.util.Objects.requireNonNull(travelling.getParent()));
 			Files.write(travelling, runtime.getValue());
 		}
-		assertEnded(s, "JVM",
-				ended(new ProcessBuilder(Path.of(System.getProperty("java.home"), "bin", "java").toString(), "-cp",
-						dir.toString(), s.stem())
-					.start(), s.stdin()),
-				withoutRoot(warned, s.stem() + "-JVM"));
+		ProcessBuilder run = new ProcessBuilder(Path.of(System.getProperty("java.home"), "bin", "java").toString(),
+				"-cp", dir.toString(), s.stem());
+		Path runsIn = s.runsIn(file);
+		if (runsIn != null) {
+			run.directory(runsIn.toFile());
+		}
+		assertEnded(s, "JVM", ended(run.start(), s.stdin()), withoutRoot(warned, s.stem() + "-JVM"));
 	}
 
 	// Starts run on a thread of its own and answers its result, rethrowing what it threw.

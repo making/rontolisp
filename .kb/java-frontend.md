@@ -50,8 +50,8 @@ collectors and the inference they need, `Name.class::isInstance` / `::cast`: k12
 (2026-11-19); a library read as source from the program's source path and lowered as far
 as the program reaches it, annotation types and type annotations, an exact method
 reference in a call's applicability: k24 (2026-11-19); what comes after is `.todo/k15`,
-`k16`, `k17`, `k18`, `k19`, `k20`, `k21`, `k22`, `k95` and `k85` .. `k91` (what k00, k11, k06, k07,
-k08, k10, k12, k26, k47, k55, k60, k71, k72 and k82 left); YAVI compiled to wasm in both of its styles, the milestone k24 was
+`k16`, `k17`, `k18`, `k19`, `k20`, `k21`, `k22`, `k95`, `k87` .. `k91` and `l02` (what k00, k11, k06,
+k07, k08, k10, k12, k26, k47, k55, k60, k71, k72, k82 and k86 left); YAVI compiled to wasm in both of its styles, the milestone k24 was
 asked for, and where its bytes go: k33 (2026-11-20; "YAVI compiled to wasm" below); the
 Maven plugin's `wasm` goal reading a project's
 dependencies from their sources jars, a session reading the source path: k32 (2026-11-20);
@@ -93,7 +93,9 @@ Collections, a bridge's cast and PriorityQueue" below); `StringJoiner`, `StringT
 `List.copyOf`, `Set.copyOf` and `Map.copyOf` answering a collection of their own kind, the
 halves of a surrogate pair joined where text is made on every backend, `chars()` as the
 UTF-16 units: k82 (2026-11-21; "The copies of `copyOf` and the halves of a surrogate pair"
-below).
+below); files (`File`, the file streams and readers, `RandomAccessFile`, a scanner, a print
+stream and a formatter of a file, `java.nio.file`'s `Path` and `Files`) and the strict
+codecs of `Files`: k86 (2026-11-21; "Files" below).
 
 ## Where it sits
 
@@ -2410,7 +2412,7 @@ backends by the `four.sh` above them, the JDK's lines in `*.jdk.txt`).
   (`StandardInput` asks the host for a character at a time; `ReadChars.java`);
   `BufferedReader` and `StringTokenizer` 0.95 / 2.81 / 13.62 s.
 - **Left**: files, with `Scanner` of a `File` and a
-  `Path`, `.todo/k86`; `java.text` `.todo/k87`; the other buffers, `CharBuffer.order()` with
+  `Path`, k86 ("Files" below); `java.text` `.todo/k87`; the other buffers, `CharBuffer.order()` with
   them, `.todo/k88`; reflection and weak references `.todo/k89`; `BigInteger`'s primes
   `.todo/k90`; the standard input on wasm read a character a host call `.todo/k91`; the
   concurrent queues on `PriorityQueue` `.todo/k21`.
@@ -2632,7 +2634,7 @@ probes of `.todo/artefacts/k85-java-library-a-formatter-of-its-own/`).
   but the padding and the refusal before appending.
 - **Not there** (`.todo/k95`): the refusals of the flags and precisions `%d`, `%x`, `%o`,
   `%e`, `%f`, `%c`, `%b`, `%s` do not take, and every refusal made before a `Formatter`
-  appends anything; the relative index `%<s`; a `Formatter` of a file (`.todo/k86`).
+  appends anything; the relative index `%<s`; a `Formatter` of a file (k86, "Files" below).
 - Pins: java-spec `a-formatter-writes-to-an-appendable-and-a-format-has-every-conversion`
   (standalone: it holds a region and makes a `Formattable`; the refusals as counts and a
   hash per conversion); `JavaLoweringTest#theLibraryIsJavaSourceLoweredAsFarAsTheProgramReaches`
@@ -3853,7 +3855,7 @@ long's ends, 300 seeded date-times, the members of each against the others).
 **Invariant: a stream is Java source over `byte[]`, `char[]` and the stream under it; the
 host is reached at three classes only -- `StandardOutput`, `StandardInput`
 (`java.io`, not public) and the UTF-8 pair of `java.lisp` -- and a program that only prints
-holds none of it.** No files: `File`, `FileReader`, `java.nio.file` stay refused.
+holds none of it.** Files are k86's ("Files" below).
 
 - **The classes**: `InputStream`/`OutputStream`, the `ByteArray` pair, the `Filter` pair,
   the `Buffered` pair, `DataInput`/`DataOutput` and their streams, `PrintStream`;
@@ -3991,6 +3993,137 @@ holds none of it.** No files: `File`, `FileReader`, `java.nio.file` stay refused
   244,022 / 260,052, 0.43 / 0.66 s against 0.50 / 0.42 s for one `StringBuilder` printed
   (76,122 / 108,409). The corpus case of the byte streams alone is 312,953 B of wasm, the
   one of the print streams and readers 460,101 B.
+
+## Files (2026-11-21, k86)
+
+**Invariant: `File`, the file streams and readers, `RandomAccessFile`, `Path` and `Files` are
+Java source answering what a JDK 25 answers on a Unix host -- each path, each refusal's
+exception and words, a directory's names in the host's order -- over one class of `native`
+members, `rontolisp.internal.Disk`, and a program that reaches no file holds none of it.**
+Written from the API documentation and JDK 25's answers to probes
+([java-frontend-provenance.md](java-frontend-provenance.md)); the probes are
+`.todo/artefacts/k86-java-library-files/probes/`, `four.sh` there runs one under the JDK and
+the four backends, each in a directory of its own holding `locked.txt` (mode 000) and `ro/`
+(mode 555).
+
+- **The host layer**: `Disk`'s natives are `%java-file-*` of `java.lisp` over what Common Lisp
+  already does on four backends -- `open` of octets in five modes (read; write emptied;
+  append; read and write over what is there, `:io :overwrite`; write over what is there,
+  `:output :overwrite`), `read-sequence` / `write-sequence` into the program's `byte[]`
+  (an octet vector, so one bulk transfer), `file-position`, `file-length`, `%probe-file`,
+  `%list-directory`, `%make-directories`, `%delete-file`, `%rename-file`, `file-write-date`,
+  `%host-getcwd`, `%real-path`. Nothing signals: an `open` the host refuses is `nil` inside a
+  `handler-case`, and the Java says why (`Disk.refused`: a directory is there, a file is there
+  -- `Permission denied` --, or the nearest thing above is a file -- `Not a directory` --,
+  or the directory it would be made in refuses it, or something above is missing). Measured
+  on the four backends before writing: an `:io` open of a missing file with `:if-does-not-exist
+  :create` fails on both wasm backends (so `Disk.opened` makes the file first), a seek past
+  the end and a write there leave zeros on all four, and a directory opens for reading on the
+  interpreter and wasm (so the Java asks `kind` first). A write reaches the file before it
+  answers (`finish-output`), as a JDK's unbuffered `FileOutputStream` does.
+- **What the probes found in the layer below, fixed** (each pinned before the fix): the
+  interpreter's `read-byte` counted a read at the end into `file-position` (ci-spec
+  `file-position-round-trips-on-a-binary-file-stream`, [read-load-streams.md](read-load-streams.md));
+  the wasm `%list-directory` answered the host's names reversed, each consed ahead of the
+  ones before (`WasmLispCompilerIntegrationTest#directoryListingResumesPastOneReaddirRound`,
+  [directory-listing.md](directory-listing.md)). A JDK's `File.list()` and `Files.list` are
+  readdir's order; with the fix every leg answers it (`[dir, .dot, b, c, 10, 9, B, a]` on
+  ext4 for names made in the order `b a c 10 9 B .dot dir`). That order is the file
+  system's -- ext4 hashes names with a seed of each file system's own --, so no expected
+  text can hold it: the corpus sorts what it lists, and the wasm test compares the listing
+  with the JVM's `File.listFiles()` of the same directory where it runs.
+- **A `.wasm` cannot see a file it may not open**: `%probe-file` opens what it probes, and
+  wasmtime 49 refuses a mode-000 file even to an open asking no rights (measured), so
+  `exists()` is `false` there. `Disk.refused` asks the parent's listing before it calls a
+  read's refusal `No such file or directory`, which makes the words `Permission denied` on
+  every leg (`deviations.md` keeps `exists`). The lead, `.todo/l02`: read the errno, an
+  `EACCES` meaning "there", and an `O_DIRECTORY` retry telling a directory.
+- **Paths** (`FilePaths.java`, 142 lines; `NioPaths.java`, 105): a `File` keeps its path with
+  each run of slashes one and none at the end; an empty parent is the root (`new File("",
+  "c")` is `/c`); `getAbsolutePath` puts a relative path below the working directory without
+  normalizing it; `hashCode` is the specification's `path.hashCode() ^ 1234321`; a NUL is
+  `Invalid file path`. A `Path` (`rontolisp.internal.LocalPath`, the one class) is the same
+  text with the names between its slashes: the empty path has one name, itself, that its
+  iterator does not give, and is the working directory to `Files` (`exists`, `list` naming
+  `a` not `./a`, `readString`'s `Is a directory`); `relativize` normalizes both and refuses a
+  `..` it would have to climb (`Unable to compute relative  path from ..`, two spaces, the
+  paths as given); `hashCode` is the text's. Every line of both probes but a JDK's helpful
+  `NullPointerException` texts is a JDK's on four backends; `getAbsolutePath` is a JDK's
+  where a `.wasm`'s first preopen has an absolute name (`--dir d::d`, the native runner's),
+  and relative under `--dir .`.
+- **The refusals** (`FileOps.java`, `NioFiles.java`, `Odds*.java`): `java.io` is
+  `FileNotFoundException("path (reason)")`, `Stream Closed` with a capital C, an index
+  refused with no message, `createNewFile`'s `IOException` of the bare reason;
+  `java.nio.file` is `NoSuchFileException`, `AccessDeniedException`,
+  `FileAlreadyExistsException`, `DirectoryNotEmptyException`, `NotDirectoryException` of the
+  path, or `FileSystemException(path, null, reason)` (`Is a directory`, `Not a directory`);
+  a move names both paths (`a -> b`); `createDirectories` under a file names the absolute
+  path. `FileSystemException.getMessage` is `file -> other: reason` of the parts there are.
+  Each class chooses its words over `Disk.refused`'s one answer.
+- **Streams**: `FileInputStream` holds no buffer; `skip` moves by what is asked, past the end
+  and back (`skip(100)` then `skip(-90)`, a JDK's lseek); a read at the end asked again
+  reads what the file has grown by (the component reads nothing after its end until a seek,
+  measured, so the stream seeks to where it is when the length passed it). `RandomAccessFile`
+  keeps its position in Java and seeks only when the file's own differs; a shorter
+  `setLength` writes the kept bytes into the file emptied (no truncate below), a longer one a
+  zero at the end. `FileReader` / `FileWriter` are the bridges over the streams; the print
+  streams, writers, formatters and scanners of a file are constructors over them, a
+  charset's name looked up before the file is opened, as a JDK does.
+- **Strict codecs** (`Malformed.java`, 4,238 lines; `Malformed2.java`, `Malformed3.java`):
+  `Files`' readers and a `Scanner` of a `File` refuse bytes that are no text
+  (`rontolisp.internal.StrictReader`), its writers and `writeString` a character the charset
+  cannot write (`StrictWriter`, `Charset.unwritable`). How many bytes a refusal counts is
+  `Charset.malformed`: a decoder's is the Unicode Standard's maximal subpart, an encoded
+  surrogate's three bytes one sequence; `readString`'s of UTF-8 is otherwise -- the size its
+  lead byte announces where the bytes are there (`F5`..`F7` too), one where they are not,
+  two for a three-byte lead whose second byte cannot follow it (`ED A0` excepted), one for a
+  two-byte lead -- read off every lead byte followed by every kind of byte, identical on the
+  four backends. A read that meets such bytes throws and loses what it decoded before them, so
+  a `Scanner` of a `File` with them in its first 1024 characters gives no token, as a JDK's.
+  The encoders: a lone surrogate is `MalformedInputException(1)` to a writer and in US-ASCII
+  and UTF-16, `UnmappableCharacterException(1)` to `writeString` in UTF-8 and ISO-8859-1; a
+  character past the charset is unmappable, a supplementary one 2 units but 1 to ISO-8859-1's
+  `writeString`; `writeString` encodes before it opens (a refused text makes no file), a
+  writer writes the bytes before the refused character. A `Scanner` of a `Path` and a
+  `FileReader` replace, as a JDK's do.
+- **A `Scanner`'s reads were measured and left** (`Odds2.java`): past its first read a JDK's
+  scanner asks for the room its buffer has (1024, then 1020 for four characters kept), ours
+  for 1024, so a `Scanner` of a `File` whose bytes stop being text past 1024 characters gives
+  the tokens before another read (`deviations.md`). Asking as a JDK does is two ints and a
+  compaction rule: +1,021 to +1,444 B of wasm in every `Scanner` program (`ScanLine`,
+  `SumScan`, `ScanDelim` of k72), for a difference only that case shows. Not made.
+- **In the browser** a Java program whose forms reach a `%java-file-` function -- only a call
+  that reaches the host does, `Path` arithmetic does not -- is refused before it runs
+  (`PlaygroundRepl.refuseFiles`, `JavaLibrary.reachesFiles`), a whole program and a session's
+  buffer alike, where the host is the page's one stack: its interpreter would answer every
+  file missing, and so would a module it compiles (`BrowserModule`'s `path_open` is
+  `ENOENT`), so the refusal comes before either.
+- **Measured** (wasm bytes, 2026-11-21, the base `aac4d12d9` against this): 34 programs that
+  reach no file -- k85's and k71's size programs, k72's readers, scanners and tokenizers, a
+  `PrintWriter` over `System.out`, the UTF-16 codec of a string -- and `examples/java/shop`
+  (wasm and class) are byte-identical. A program reading a file's text with `Files.readString`
+  is 197,305 B, its lines through a `BufferedReader` over a `FileReader` 132,245 B, `Path`
+  arithmetic alone 147,493 B (a `Path` printed is `%string` of an interface, which brings
+  `%java-to-string`'s numbers); `sizes/` of the artefacts. Time (8.3 MB of 200,000 lines, one
+  run each, JDK / JVM class / wasm): `Files.readAllBytes` 0.62 / 0.25 / 0.23 s, the lines
+  through a `BufferedReader` over a `FileReader` 0.76 / 1.96 / 2.65 s, `readAllLines` and
+  `readString` of it 0.77 / 3.90 / 3.10 s -- the octets come in one transfer, the time is the
+  decoding and the scan for what is no text, both Java of the subset; the interpreter takes
+  41.6 s for the first two together.
+- **The corpus runs a case in its directory**: a `standalone:` case with `directory: true` runs
+  on every leg where its files are written -- the interpreter in a process of its own, the
+  JVM's process there, a wasm leg with it preopened under its absolute name -- and `modes:`
+  sets permissions after they are written, its legs skipped for root. Pins: java-spec
+  `a-program-makes-reads-lists-and-is-refused-its-files-through-java-io` and
+  `a-program-makes-reads-copies-moves-lists-and-is-refused-its-files-through-java-nio-file`
+  (49 and 73 lines, a JDK's), `PlaygroundReplTest#theJavaPickKeepsItsDeclarationsAcrossBuffersAndRunsAProgram`
+  (the browser's refusal), `JavaLoweringTest#theLibrarysSourceIsJavaAJdkCompiles` (the new
+  classes and their `throws` against a JDK's).
+- **Left** (`.todo/l02`): `File.toURI`, `deleteOnExit`, temporary files, the setters and
+  `canExecute`, `Path.toUri`, `Files.newDirectoryStream`, `find`, `walkFileTree`,
+  `getLastModifiedTime` and `FileTime`, the attributes, `isSymbolicLink` and
+  `NOFOLLOW_LINKS`, `DELETE_ON_CLOSE`; `canWrite` of a directory, the size of a directory and
+  of an unreadable file, `System.getProperty("user.dir")`.
 
 ## java.util.stream (2026-11-19, k12)
 
@@ -6303,7 +6436,10 @@ on four backends and under a JDK is the `standalone:` case
 the command line's two options and the coordinates
 `JavaClassPathCliTest#aJavaProgramCompilesItsLibrariesFromTheSourcePath`. A
 `standalone:` case may carry `files:` (path to text) written beside it, its `file:` a path
-below its package's directories (`a-program-of-several-files-finds-its-classes-by-package`).
+below its package's directories (`a-program-of-several-files-finds-its-classes-by-package`);
+with `directory: true` every leg runs in that directory (the interpreter's in a process of
+its own, a wasm leg's preopened under its absolute name) and `modes:` gives its files
+permissions, skipped for root (k86, "Files").
 java-spec `refused:` cases of the inner class types and the bounds
 (`a-member-of-an-inner-class-typed-through-the-arguments-around-it`,
 `a-type-argument-outside-its-parameter-s-bound`, `a-field-written-through-an-extends-wildcard`),

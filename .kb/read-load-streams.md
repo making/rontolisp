@@ -1392,9 +1392,12 @@ Lisp's "cannot be determined"); a STRING stream answers its character position
 
 - **Interpreter.** A binary stream: the per-handle `streamPositions` map (`Environment`),
   advanced by the byte primitives through `merge` and repositioned by `binaryFileStreamSet`
-  (re-open at the offset). A character stream: `open` builds `runtime/RontoCharFileReader`
-  / `RontoCharFileWriter` for EVERY character file (no gate -- an interpreter has no size),
-  and `file-position` asks them. A `:io` / `:overwrite` stream: `RontoIoFileStream`
+  (re-open at the offset). A `read-byte` at the end advances nothing (until 2026-11-21 each
+  one counted, so a stream read past its end answered a position beyond it; found by the
+  Java subset's `available()` and `getFilePointer`, pinned by ci-spec
+  `file-position-round-trips-on-a-binary-file-stream`). A character stream: `open` builds
+  `runtime/RontoCharFileReader` / `RontoCharFileWriter` for EVERY character file (no gate --
+  an interpreter has no size), and `file-position` asks them. A `:io` / `:overwrite` stream: `RontoIoFileStream`
   (section after next). Then two wrappers: the wide element types scale, and a character
   parked in the `unread-char` cell is subtracted (the query) or dropped (the set).
 - **JVM.** Binary: the mirrored `Object[] _streamPositions` side table, advanced by

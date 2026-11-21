@@ -298,7 +298,9 @@ JDK のメッセージは `remove` です。`List.of()`、`Set.of()`、`Map.of()
 する入力の先頭から数えます。`String` ならそのテキスト全体です。JDK は最初の 1024 文字を過ぎると
 自身のバッファーの先頭から数えます。`Readable` には読み込みのたびに 1024 文字の空の
 `CharBuffer` を渡します。JDK はスキャナー自身のバッファーを、まだ保持している文字の後ろに
-位置を置いて渡します。
+位置を置いて渡します。2 回目以降の読み込みでも 1024 文字を求めます。JDK はバッファーの空きの分を
+求めます。そのため、先頭 1024 文字より後ろに文字にならないバイトがある `File` の `Scanner` では、
+それより前のトークンを JDK とは異なる読み込みの区切りまで返します。
 
 **`CharBuffer` は 1 つのクラスです。** どのバッファーでも `getClass().getName()` は
 `java.nio.CharBuffer` です。JDK は種類の名前（`java.nio.HeapCharBuffer`）を返します。`String`
@@ -498,6 +500,35 @@ JDK のクラスは、JDK 自身のものも含めてリソースを見つけま
 どれも `UTF-8`）に答えます。それ以外のキーは `null` です。`System.gc()` は何もしません。
 `System.getenv(name)` はホストの環境変数を返します。`.wasm` が読めるのは、ホストが渡した
 変数です（`wasmtime run --env NAME=value`）。すべての変数を返す `getenv()` はありません。
+
+## ファイル
+
+**ファイルはホストのものです。`.wasm` では、ホストが事前に開いたディレクトリだけを使います。**
+相対パスは作業ディレクトリを基準に解決します。`.wasm` は最初にプリオープンされたディレクトリを
+作業ディレクトリとみなします。そのディレクトリが相対名で開かれている場合（`wasmtime run --dir .`）、
+`getAbsolutePath`、`getCanonicalPath`、`toAbsolutePath`、`toRealPath` は相対パスを返します。
+`.wasm` はパスをホストに問い合わせる際にそのパスを開くため、読めないファイルは `exists`、`isFile`、
+`length`、`Files.exists` からは存在しないように見えます。開こうとして拒否されたときの理由は
+`Permission denied` のままです。シンボリックリンクはどのメンバーもたどります。
+`LinkOption.NOFOLLOW_LINKS` と `FileVisitOption.FOLLOW_LINKS` は何も変えず、`Files.walk` は
+ディレクトリへのリンクの中にも入ります。
+
+**ファイルについてホストに尋ねる内容は、どのターゲットでも尋ねられるものに限られます。**
+`lastModified` は秒単位です。ファイルのサイズはファイルを開いて読みます。ディレクトリと、
+プログラムが読めないファイルの `length` は 0 です。`Files.size` は、ディレクトリでは 0、
+読めないファイルでは `AccessDeniedException` になります。
+ディレクトリに書き込めるかどうかはホストに尋ねません。ディレクトリの `canWrite` と
+`Files.isWritable` は `UnsupportedOperationException` を投げます。`RandomAccessFile.setLength` で
+ファイルを短くすると、残すバイトを書き直します。`StandardOpenOption.DELETE_ON_CLOSE`、`SYNC`、
+`DSYNC`、`SPARSE`、`StandardCopyOption.COPY_ATTRIBUTES`、`ATOMIC_MOVE` は何も変えません。
+`Path` はすべて、このサブセット独自の 1 つのクラスです（`getClass()` が返すもの）。`FileSystem` は
+ありません。次のメンバーはなく、名前を示して拒否します。`File.toURI`、`deleteOnExit`、`createTempFile`、`listRoots`、`canExecute`、
+設定用のメソッド（`setReadable`、`setLastModified` など）、ディスクの容量。`Path.toUri`、
+`getFileSystem`、`register`。`Files.newDirectoryStream`、`find`、`walkFileTree`、`isSymbolicLink`、
+`getLastModifiedTime` と属性、一時ファイルと一時ディレクトリ。`FileDescriptor` とチャネル。
+
+**ブラウザーでは、ファイルに触れるプログラムを実行前に拒否します。** ページにはファイルシステムが
+ないためです。パスを計算するだけのプログラムは実行します。
 
 ## スレッド
 
@@ -747,9 +778,8 @@ WebSocket です。`version(..)` で指定した値は保持され、問い合�
 - `String`、`StringBuilder`、ボックスを継承するクラス。
 - `java.util.concurrent` のうち、[使える JDK のクラス](classes.md)の表にないもの。優先度順または遅延順の
   キューです。`Date` を取る `Timer` の `schedule`、スレッドグループも拒否されます。
-- [使える JDK のクラス](classes.md)の表にない JDK のクラスとメンバー。ファイル（`File`、
-  `FileReader`、`java.nio.file`、ファイルを読む `Scanner`）、`Calendar`、
-  リフレクションなどです。
+- [使える JDK のクラス](classes.md)の表にない JDK のクラスとメンバー。`Calendar`、
+  リフレクション、[ファイル](#files)に挙げたものなどです。
   `java.net` では、`URI`、`URL`、サーバーのアドレス、[HTTP クライアント](#the-http-client)以外の
   すべてが該当します。
   ソケット、`HttpURLConnection` です。

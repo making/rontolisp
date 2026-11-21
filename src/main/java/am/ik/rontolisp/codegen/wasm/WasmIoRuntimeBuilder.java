@@ -1090,22 +1090,27 @@ final class WasmIoRuntimeBuilder {
 	 * tree degrades instead of aborting. And the {@code "."} / {@code ".."} entries a
 	 * preview1 host yields are SKIPPED: {@code Files.list} and wasi:filesystem's
 	 * {@code read-directory} both omit them, so emitting them here would be the one
-	 * backend that walks its own parent forever.
+	 * backend that walks its own parent forever. The names keep the host's order, as the
+	 * other backends' {@code File.list()} does: each entry is linked after the last one
+	 * (until 2026-11-21 it was consed ahead of them, which reversed the listing).
 	 * @return the function body bytes
 	 */
 	static byte[] buildListDirectoryBody(boolean identityHash) {
 		ByteArrayOutputStream body = new am.ik.wasm.UnsynchronizedByteArrayOutputStream();
 		WasmWriter w = new WasmWriter(body);
-		// param: PATH=0 (ref) ; i32 locals 1..9, i64 local 10, ref local 11
+		// param: PATH=0 (ref) ; i32 locals 1..9, i64 local 10, ref local 11 (the first
+		// cell), cons locals 12 (the last cell) and 13 (the cell being linked)
 		final int PATH = 0, OFF = 1, PLEN = 2, FD = 3, BUF = 4, END = 5, P = 6, NAMLEN = 7, DST = 8, I = 9;
-		final int COOKIE = 10, ACC = 11;
-		w.write(3);
+		final int COOKIE = 10, ACC = 11, TAIL = 12, CELL = 13;
+		w.write(4);
 		w.write(9);
 		w.write(Type.I32);
 		w.write(1);
 		w.write(Type.I64);
 		w.write(1);
 		w.writeRefType(true, Type.EQ.code());
+		w.write(2);
+		w.writeRefType(true, WasmLispCompiler.TYPE_CONS);
 
 		// Stage the path bytes into linear scratch exactly as _open / _probe_file do.
 		loadMem32(w, WasmLispCompiler.HEAP_PTR_ADDR);
@@ -1304,7 +1309,8 @@ final class WasmIoRuntimeBuilder {
 		w.write(Instruction.I32_ADD);
 		setLocal(w, NAMLEN);
 		w.write(Instruction.END);
-		// memory[dst+1+namlen] = '"' ; acc = cons(_str_fresh(dst, namlen + 2), acc)
+		// memory[dst+1+namlen] = '"' ; cell = cons(_str_fresh(dst, namlen + 2), nil),
+		// linked after the last cell (or the first one)
 		getLocal(w, DST);
 		i32(w, 1);
 		w.write(Instruction.I32_ADD);
@@ -1317,9 +1323,24 @@ final class WasmIoRuntimeBuilder {
 		i32(w, 2);
 		w.write(Instruction.I32_ADD);
 		WasmEmitHelper.emitStrFreshCall(w);
-		getLocal(w, ACC);
+		w.write(Instruction.REF_NULL);
+		w.writeHeapType(Type.EQ.code());
 		WasmEmitHelper.emitNewCons(w, identityHash);
+		setLocal(w, CELL);
+		getLocal(w, TAIL);
+		w.write(Instruction.REF_IS_NULL);
+		w.write(Instruction.IF, 0x40);
+		getLocal(w, CELL);
 		setLocal(w, ACC);
+		w.write(Instruction.ELSE);
+		getLocal(w, TAIL);
+		getLocal(w, CELL);
+		w.write(Instruction.GC_PREFIX, Instruction.STRUCT_SET);
+		w.writeUnsignedLeb128(WasmLispCompiler.TYPE_CONS);
+		w.writeUnsignedLeb128(1);
+		w.write(Instruction.END);
+		getLocal(w, CELL);
+		setLocal(w, TAIL);
 		// namlen may have grown by the slash; restore it for the p advance below
 		getLocal(w, P);
 		i32(w, 16);

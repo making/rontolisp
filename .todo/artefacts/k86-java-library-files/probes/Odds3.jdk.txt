@@ -1,0 +1,23 @@
+exists = true true false
+list = [Odds3.java, d, f.txt, locked.txt, ro]
+walk = [, Odds3.java, d, f.txt, locked.txt, ro]
+readString ! java.io.IOException: Is a directory
+size = true
+toRealPath = true
+list dot = [./Odds3.java, ./d, ./f.txt, ./locked.txt, ./ro]
+walk dir = [d, d/e, d/g.txt]
+a -> b: r|a: r| -> b: r|a|r|null|a -> b|a -> b: r|null|a|b|r
+why: in|why at index 3: in|-1|in|why
+relativize dots ! java.lang.IllegalArgumentException: Unable to compute relative  path from ./../a to b
+relativize dots 2 ! java.lang.IllegalArgumentException: Unable to compute relative  path from x/../../a to b/./c
+move onto dir ! java.nio.file.DirectoryNotEmptyException: d
+copy onto dir = d/e
+copy onto self = d/g.txt
+move onto self = d/./g.txt
+move dir = d/e2 false
+copy into missing ! java.nio.file.NoSuchFileException: nope/g.txt
+move into missing ! java.nio.file.NoSuchFileException: d/g.txt -> nope/g.txt
+isSymbolicLink = false
+createDirectory empty ! java.nio.file.FileAlreadyExistsException: 
+delete empty ! java.nio.file.FileSystemException: : Invalid argument
+newBufferedWriter empty ! java.nio.file.FileSystemException: : Is a directory

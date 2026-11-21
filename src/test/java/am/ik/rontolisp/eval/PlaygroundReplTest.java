@@ -205,6 +205,16 @@ class PlaygroundReplTest {
 		// languages of the page keep theirs.
 		assertThatThrownBy(() -> oneStack.eval("new Thread(() -> IO.println(\"worker\")).start()"))
 			.hasMessageContaining("a thread is started only by a whole program in the browser");
+		// The page has no file system: a program or a buffer that reaches a file is
+		// refused before it runs; one that only computes paths runs.
+		assertThatThrownBy(() -> oneStack.run("""
+				void main() throws Exception { IO.println(java.nio.file.Files.readString(java.nio.file.Path.of("x"))); }
+				""")).hasMessage("a file is read or written only outside the browser: the page has no file system"
+				+ " (run the program with rontolisp on a host)");
+		assertThatThrownBy(() -> oneStack.eval("new java.io.File(\"x\").exists()"))
+			.hasMessageContaining("a file is read or written only outside the browser");
+		assertThat(oneStack.run("void main() { IO.println(java.nio.file.Path.of(\"a\", \"b/\").resolve(\"..\")); }"))
+			.isEqualTo("a/b/..\n");
 		assertThat(oneStack.pick(SourceLanguage.COMMON_LISP)
 			.eval("(rontolisp:join-thread (rontolisp:make-thread (lambda () 42)))")).isEqualTo("42");
 	}

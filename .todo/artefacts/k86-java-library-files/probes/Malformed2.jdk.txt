@@ -1,0 +1,90 @@
+UTF-8 61E08080 MalformedInputException Input length = 3 MalformedInputException Input length = 1
+UTF-8 61E09FBF MalformedInputException Input length = 3 MalformedInputException Input length = 1
+UTF-8 61E080807A MalformedInputException Input length = 3 MalformedInputException Input length = 1
+UTF-8 61F0808080 MalformedInputException Input length = 4 MalformedInputException Input length = 1
+UTF-8 61F08FBFBF MalformedInputException Input length = 4 MalformedInputException Input length = 1
+UTF-8 61F4908080 MalformedInputException Input length = 4 MalformedInputException Input length = 1
+UTF-8 61F4BFBFBF MalformedInputException Input length = 4 MalformedInputException Input length = 1
+UTF-8 61F08080807A MalformedInputException Input length = 4 MalformedInputException Input length = 1
+UTF-8 61C080 MalformedInputException Input length = 1 MalformedInputException Input length = 1
+UTF-8 61C1BF MalformedInputException Input length = 1 MalformedInputException Input length = 1
+UTF-8 61F5808080 MalformedInputException Input length = 4 MalformedInputException Input length = 1
+UTF-8 61EDA080EDB080 MalformedInputException Input length = 3 MalformedInputException Input length = 3
+UTF-8 61EDBFBF MalformedInputException Input length = 3 MalformedInputException Input length = 3
+UTF-8 61E080 MalformedInputException Input length = 2 MalformedInputException Input length = 1
+UTF-8 61F080 MalformedInputException Input length = 1 MalformedInputException Input length = 1
+UTF-8 61F08080 MalformedInputException Input length = 1 MalformedInputException Input length = 1
+UTF-8 61F490 MalformedInputException Input length = 1 MalformedInputException Input length = 1
+UTF-8 61F49080 MalformedInputException Input length = 1 MalformedInputException Input length = 1
+UTF-8 61E18080E14141 MalformedInputException Input length = 3 MalformedInputException Input length = 1
+UTF-8 EFBBBF61 [﻿a] [﻿a]
+UTF-8 610D0AFF MalformedInputException Input length = 1 MalformedInputException Input length = 1
+UTF-8 C3 MalformedInputException Input length = 1 MalformedInputException Input length = 1
+UTF-8 E282 MalformedInputException Input length = 1 MalformedInputException Input length = 2
+UTF-8 F09F98 MalformedInputException Input length = 1 MalformedInputException Input length = 3
+UTF-16 0061D800 MalformedInputException Input length = 2 MalformedInputException Input length = 2
+UTF-16BE 0061D800 MalformedInputException Input length = 2 MalformedInputException Input length = 2
+UTF-16LE 0061D800 [愀Ø] [愀Ø]
+UTF-16 0061D8000062 MalformedInputException Input length = 4 MalformedInputException Input length = 4
+UTF-16BE 0061D8000062 MalformedInputException Input length = 4 MalformedInputException Input length = 4
+UTF-16LE 0061D8000062 [愀Ø戀] [愀Ø戀]
+UTF-16 0061DC00 MalformedInputException Input length = 2 MalformedInputException Input length = 2
+UTF-16BE 0061DC00 MalformedInputException Input length = 2 MalformedInputException Input length = 2
+UTF-16LE 0061DC00 [愀Ü] [愀Ü]
+UTF-16 0061DC000062 MalformedInputException Input length = 2 MalformedInputException Input length = 2
+UTF-16BE 0061DC000062 MalformedInputException Input length = 2 MalformedInputException Input length = 2
+UTF-16LE 0061DC000062 [愀Ü戀] [愀Ü戀]
+UTF-16 006100 MalformedInputException Input length = 1 MalformedInputException Input length = 1
+UTF-16BE 006100 MalformedInputException Input length = 1 MalformedInputException Input length = 1
+UTF-16LE 006100 MalformedInputException Input length = 1 MalformedInputException Input length = 1
+UTF-16 FEFF0061 [a] [a]
+UTF-16BE FEFF0061 [﻿a] [﻿a]
+UTF-16LE FEFF0061 [￾愀] [￾愀]
+UTF-16 FFFE6100 [a] [a]
+UTF-16BE FFFE6100 [￾愀] [￾愀]
+UTF-16LE FFFE6100 [﻿a] [﻿a]
+UTF-16 FFFE61 MalformedInputException Input length = 1 MalformedInputException Input length = 1
+UTF-16BE FFFE61 MalformedInputException Input length = 1 MalformedInputException Input length = 1
+UTF-16LE FFFE61 MalformedInputException Input length = 1 MalformedInputException Input length = 1
+UTF-16 D83DDE00 [😀] [😀]
+UTF-16BE D83DDE00 [😀] [😀]
+UTF-16LE D83DDE00 [㷘Þ] [㷘Þ]
+UTF-16 D83D MalformedInputException Input length = 2 MalformedInputException Input length = 2
+UTF-16BE D83D MalformedInputException Input length = 2 MalformedInputException Input length = 2
+UTF-16LE D83D [㷘] [㷘]
+US-ASCII 618062 MalformedInputException Input length = 1 MalformedInputException Input length = 1
+US-ASCII 61FF MalformedInputException Input length = 1 MalformedInputException Input length = 1
+ISO-8859-1 61FF [aÿ] [aÿ]
+ascii e-acute writeString java.nio.charset.UnmappableCharacterException: Input length = 1 exists=false
+ascii e-acute write java.nio.charset.UnmappableCharacterException: Input length = 1 exists=true 6F6B0A61
+ascii e-acute writer java.nio.charset.UnmappableCharacterException: Input length = 1 exists=true 6F6B61
+ascii emoji writeString java.nio.charset.UnmappableCharacterException: Input length = 2 exists=false
+ascii emoji write java.nio.charset.UnmappableCharacterException: Input length = 2 exists=true 6F6B0A61
+ascii emoji writer java.nio.charset.UnmappableCharacterException: Input length = 2 exists=true 6F6B61
+latin euro writeString java.nio.charset.UnmappableCharacterException: Input length = 1 exists=false
+latin euro write java.nio.charset.UnmappableCharacterException: Input length = 1 exists=true 6F6B0A61
+latin euro writer java.nio.charset.UnmappableCharacterException: Input length = 1 exists=true 6F6B61
+latin emoji writeString java.nio.charset.UnmappableCharacterException: Input length = 1 exists=false
+latin emoji write java.nio.charset.UnmappableCharacterException: Input length = 2 exists=true 6F6B0A
+latin emoji writer java.nio.charset.UnmappableCharacterException: Input length = 2 exists=true 6F6B
+utf8 lone high writeString java.nio.charset.UnmappableCharacterException: Input length = 1 exists=false
+utf8 lone high write java.nio.charset.MalformedInputException: Input length = 1 exists=true 6F6B0A61
+utf8 lone high writer java.nio.charset.MalformedInputException: Input length = 1 exists=true 6F6B61
+utf8 lone low writeString java.nio.charset.UnmappableCharacterException: Input length = 1 exists=false
+utf8 lone low write java.nio.charset.MalformedInputException: Input length = 1 exists=true 6F6B0A61
+utf8 lone low writer java.nio.charset.MalformedInputException: Input length = 1 exists=true 6F6B61
+utf8 high at end writeString java.nio.charset.UnmappableCharacterException: Input length = 1 exists=false
+utf8 high at end write java.nio.charset.MalformedInputException: Input length = 1 exists=true 6F6B0A61
+utf8 high at end writer java.nio.charset.MalformedInputException: Input length = 1 exists=true 6F6B61
+utf8 two highs writeString java.nio.charset.UnmappableCharacterException: Input length = 1 exists=false
+utf8 two highs write java.nio.charset.MalformedInputException: Input length = 1 exists=true 6F6B0A
+utf8 two highs writer java.nio.charset.MalformedInputException: Input length = 1 exists=true 6F6B
+utf16 lone writeString java.nio.charset.MalformedInputException: Input length = 1 exists=false
+utf16 lone write java.nio.charset.MalformedInputException: Input length = 1 exists=true FEFF006F006B000A0061
+utf16 lone writer java.nio.charset.MalformedInputException: Input length = 1 exists=true FEFF006F006B0061
+utf16 ok writeString ok FEFF00610062
+utf16 ok write ok FEFF006F006B000A00610062000A00610066007400650072000A
+utf16 ok writer ok FEFF006F006B0061006200610066007400650072
+utf16be ok writeString ok 00610062
+utf16be ok write ok 006F006B000A00610062000A00610066007400650072000A
+utf16be ok writer ok 006F006B0061006200610066007400650072

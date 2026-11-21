@@ -13647,8 +13647,9 @@ cases:
     # file-position is REAL on all four backends. Preview 1 queries and moves the
     # descriptor's own cursor through fd_seek; the component has no cursor (WASI 0.3
     # reads are offset-based) and goes through the adapter's tracked per-fd offset
-    # instead. The last form re-opens the same file as a CHARACTER stream, whose
-    # position is real too (next case).
+    # instead. A read at the end moves nothing, however often it is asked (the
+    # interpreter counted each one until 2026-11-21). The last form re-opens the same
+    # file as a CHARACTER stream, whose position is real too (next case).
     source: |
       (with-open-file (out "fp.bin" :direction :output :if-exists :supersede
                             :element-type '(unsigned-byte 8))
@@ -13661,6 +13662,9 @@ cases:
         (print (file-position in 5))
         (print (file-position in))
         (print (read-byte in))
+        (print (file-position in))
+        (file-position in 9)
+        (print (list (read-byte in) (read-byte in nil -1) (read-byte in nil -1)))
         (print (file-position in)))
       (with-open-file (in "fp.bin")
         (print (file-position in)))
@@ -13673,6 +13677,8 @@ cases:
       5
       5
       6
+      (9 -1 -1)
+      10
       0
 
   - name: file-position-of-a-character-file-stream-is-its-byte-offset
