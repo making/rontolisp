@@ -3573,7 +3573,9 @@ statement in `main`, as k70's table):
   `V`, `offsets()` `X x Z`, `pads()` `p`, `optionals()` `[`), each `|| localizes()`: a
   localized form's or a template's patterns are read where the program runs, so a program
   reaching `DateTimeFormatterBuilder.parts` keeps every part. A gate not taken throws the
-  subset's refusal, which no pattern of the program reaches.
+  subset's refusal, which no pattern of the program reaches. Left: a localized form naming
+  what its styles hold, `ofLocalizedDate(MEDIUM)` written and read 381,815 B against
+  `ofPattern("MMM d, y")`'s 337,012 (`.todo/k94`).
 - **What a program pays** (base -> k79): `LocalDate.parse` of a text, a zoned date-time in
   Tokyo, `plusDays`, `ISO_LOCAL_DATE_TIME.format`, YAVI's `Member.java` and `Booking.java`
   the same bytes; a date written by `uuuu-MM-dd` 281,671 -> 254,076, read 358,978 ->
