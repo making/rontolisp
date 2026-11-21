@@ -33,8 +33,8 @@ Scope of this item (the JVM, no rontolisp yet):
 - The module's own JUnit tests on the JVM against a real socket (fewer tests: one per
   behaviour family). Behaviour where the spec leaves room is measured against a real
   container (e.g. Tomcat or Jetty in a test scope) and written down.
-- `.kb/servlet-httpserver.md` (or the name you choose): what it is, the invariants, and what
-  the rontolisp side needs from it (k97 starts from that list).
+- A new note in `.kb` (`servlet-httpserver.md`, or the name you choose): what it is, the
+  invariants, and what the rontolisp side needs from it (k97 starts from that list).
 
 Do not change rontolisp in this item unless a gap blocks it; k97 compiles the module with
 rontolisp.
