@@ -372,7 +372,10 @@ does not hold is read as the region it holds that writes the name, or not at all
 that has written a zone's names for `ENGLISH` writes some of that zone's names for `UK`
 and `CANADA` as `ENGLISH` has them from then on (`Abidjan Daylight Time` where it wrote
 `Abidjan Daylight Saving Time` for `CANADA`); the names here are the ones it writes before
-that. The `DecimalStyle` of each of these locales is the standard one, and
+that. A name a JDK writes as an offset (`GMT-05:00`) is the offset the zone has where the JDK
+runs; here it is the one the tz database rontolisp was built with gives, as the rules are, so a
+change of a zone's offsets that comes after the build reaches the names with a later build.
+The `DecimalStyle` of each of these locales is the standard one, and
 `DecimalStyle.getAvailableLocales()` holds the five. The `Format` of `toFormat` has no
 `clone` (the subset has no `Cloneable`). In the text
 of a formatter, `parseDefaulting` shows as `Default(field,value)`, where a JDK shows the

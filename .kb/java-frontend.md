@@ -3132,7 +3132,21 @@ three only where it can make the part that writes it.** Provenance:
   and the fixed zones' are rules of `ZoneNames.fixed` the generator asserts; an offset, a
   prefixed offset (`UTC+09:00`) and `UT` are written as their ids, and so is `NARROW`. A
   name a JDK writes as `GMT-05:00` is the zone's offset now, not at the instant written
-  (`GMT` for Abidjan in 1900), so it is a string of the table.
+  (`GMT` for Abidjan in 1900), so it is a string of the table. **Measured 2026-11-21 (k80,
+  JDK 25.0.5, `clock_gettime` shifted by an `LD_PRELOAD` shim)**: that offset is the
+  standard offset at the JDK's clock -- `TimeZone.getRawOffset` equals
+  `ZoneRules.getStandardOffset(now)` for 604 zones at 61 clocks (June 15 of 1970 to 2030),
+  36,844 pairs, no difference, and it changes with the clock for 213 zones (Istanbul `+02:00`
+  at 2015-11, `+03:00` at 2016-11). A daylight name's offset is not `raw + getDSTSavings`: it
+  moves with the clock by what the zone's past daylight time was (Ndjamena `GMT+01:00` in
+  1970, `GMT+02:00` from 1990, `getDSTSavings` 0 throughout), a function not worked out. So
+  a date passing does fail `JavaZoneRulesTest`: run at a clock of 2024-06-15 it differs in 11
+  regions (Asuncion, Coyhaique, the Canadian ones Edmonton, Vancouver and the rest of their
+  kin), and the file is right again once regenerated after the change. What stays is the
+  snapshot: a program carries the names of the jar's tz database, as it carries its rules
+  (user docs, "A program holds the regions"). Not taken: computing the name where the program
+  runs (a clock read and the rules in every program writing one, and the daylight function
+  above to find, for a change none is pending of in 2026e).
 - **Which time's name is written** (a JDK's answers): of a value with an instant, its
   rules' `isDaylightSavings` but in 9 zones' spans, where a JDK writes the other name
   (Inuvik's summers of 1972 to 1978, and Edmonton, Vancouver, Winnipeg and their kin from
@@ -3311,9 +3325,10 @@ it reaches the member that makes it.** Provenance:
 - **The grid** (`Grid.java`, 998 lines): the interpreter (85 s), the JVM (6 s, a 379,403 B
   jar), wasm (5 s, 1,084,939 B) and the component (5 s) print a JDK's lines (the JDK 3 s); the
   k35, k43, k52 and k57 grids print theirs as before.
-- Not there: a zone's name written as an offset is the one of the table's making:
-  `.todo/k80`. The localized pattern of a requested template came with k77 ("java.time: the
-  localized pattern of a requested template").
+- Not there: a zone's name written as an offset is the one of the jar's tz database, where a
+  JDK writes the one it has when it runs (k80, "java.time: the names in words"). The
+  localized pattern of a requested template came with k77 ("java.time: the localized
+  pattern of a requested template").
 - Pins: java-spec `a-formatters-decimal-style-a-reading-from-a-position-the-fields-it-resolves-and-a-calendars-map`
   (standalone, 54 lines); `JavaLoweringTest#theLibraryIsJavaSourceLoweredAsFarAsTheProgramReaches`
   (the four questions).

@@ -367,6 +367,9 @@ ISO の形式は、デフォルトのロケールである `US` を使います�
 JDK は、あるゾーンの名前を `ENGLISH` について書いたあと、同じゾーンの `UK` と `CANADA` の名前の
 一部を `ENGLISH` のものとして書きます（`CANADA` で `Abidjan Daylight Saving Time` と書いていた
 ものを `Abidjan Daylight Time` と書く）。ここで書く名前は、その前に JDK が書くものです。
+JDK がオフセットとして書く名前（`GMT-05:00`）は、JDK が動いている時点でそのゾーンが持つオフセット
+です。ここでは、ルールと同じく、rontolisp がビルドされたときの tz データベースが与えるオフセットです。
+ビルドのあとに来るゾーンのオフセットの変更は、あとのビルドで名前に届きます。
 これらのロケールの `DecimalStyle` はどれも標準のもので、`DecimalStyle.getAvailableLocales()`
 はこの 5 つを返します。`toFormat` の `Format` には `clone` がありません（サブセットに
 `Cloneable` がないため）。フォーマッターの文字列表現では、

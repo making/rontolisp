@@ -571,8 +571,13 @@ class JavaZoneRulesTest {
 				Path out = Path.of("target", file.getKey());
 				Files.createDirectories(out.getParent());
 				Files.writeString(out, file.getValue());
+				// a name written as an offset is the one the JDK's clock gives: the same
+				// tz
+				// database and other names mean a change of a zone's offsets has passed
 				assertThat(text)
-					.as("copy " + out.toAbsolutePath() + " over " + SHIPPED.replace("zone-rules.txt", file.getKey()))
+					.as("copy " + out.toAbsolutePath() + " over " + SHIPPED.replace("zone-rules.txt", file.getKey())
+							+ (version().equals(held)
+									? " (the same tz database " + held + ": the clock passed a change)" : ""))
 					.isEqualTo(file.getValue());
 			}
 		}
