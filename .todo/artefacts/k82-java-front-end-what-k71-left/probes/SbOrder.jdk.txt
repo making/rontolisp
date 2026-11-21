@@ -1,0 +1,7 @@
+SbOrder.java:16: warning: [unchecked] unchecked call to compareTo(T) as a member of the raw type Comparable
+            ((Comparable) raw).compareTo("x");
+                                        ^
+  where T is a type-variable:
+    T extends Object declared in interface Comparable
+1 warning
+[apple, fig, pear] [a, b] apple 12 true ClassCastException pear

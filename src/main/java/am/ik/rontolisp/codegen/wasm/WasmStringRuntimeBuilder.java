@@ -1173,13 +1173,14 @@ final class WasmStringRuntimeBuilder {
 
 	/**
 	 * Builds {@code _charvec_p} (FUNC_CHARVEC_P): 1 when the value is a mutable character
-	 * vector, else 0. The SHAPE half of {@link #buildCharvecToStrBody()}, and the one
-	 * owner of the marker invariant -- a mutable character vector is the general array
-	 * representation ({@code TYPE_CELL} box, header {@code (dims . (meta . data))} with
-	 * {@code dims}/{@code data} both {@code TYPE_HASH_BUCKETS} arrays) whose meta offset
-	 * ({@code meta.cdr.cdr}) is the i31 {@code 1}. That marker is unambiguous, because an
-	 * ordinary array's offset is 0 and a displaced array (which can carry a real offset)
-	 * holds a {@code TYPE_CELL} target in its data slot, not a buckets array.
+	 * vector, else 0. The SHAPE half of {@link #buildCharvecToStrBody(boolean)}, and the
+	 * one owner of the marker invariant -- a mutable character vector is the general
+	 * array representation ({@code TYPE_CELL} box, header {@code (dims . (meta . data))}
+	 * with {@code dims}/{@code data} both {@code TYPE_HASH_BUCKETS} arrays) whose meta
+	 * offset ({@code meta.cdr.cdr}) is the i31 {@code 1}. That marker is unambiguous,
+	 * because an ordinary array's offset is 0 and a displaced array (which can carry a
+	 * real offset) holds a {@code TYPE_CELL} target in its data slot, not a buckets
+	 * array.
 	 *
 	 * <p>
 	 * The marker also IMPLIES RANK 1, which is why no reader of it checks the rank: a
@@ -1311,6 +1312,73 @@ final class WasmStringRuntimeBuilder {
 	}
 
 	/**
+	 * A low surrogate in {@code codeLocal} written right after a high one's three bytes
+	 * (the bytes before {@code curLocal}, past the quote at {@code startLocal}) is the
+	 * character the two spell, as a JVM string holds them: {@code codeLocal} becomes it
+	 * and {@code curLocal} steps back over the three bytes it replaces.
+	 */
+	private static void emitPairJoin(WasmWriter w, int codeLocal, int curLocal, int startLocal) {
+		get(w, codeLocal);
+		i32(w, 0xDC00);
+		w.write(Instruction.I32_SUB);
+		i32(w, 0x400);
+		w.write(Instruction.I32_LT_U);
+		get(w, curLocal);
+		get(w, startLocal);
+		w.write(Instruction.I32_SUB);
+		i32(w, 4);
+		w.write(Instruction.I32_GE_S);
+		w.write(Instruction.I32_AND);
+		w.write(Instruction.IF, 0x40);
+		get(w, curLocal);
+		i32(w, 3);
+		w.write(Instruction.I32_SUB);
+		w.write(Instruction.I32_LOAD8_U, 0x00, 0x00);
+		i32(w, 0xED);
+		w.write(Instruction.I32_EQ);
+		get(w, curLocal);
+		i32(w, 2);
+		w.write(Instruction.I32_SUB);
+		w.write(Instruction.I32_LOAD8_U, 0x00, 0x00);
+		i32(w, 0xF0);
+		w.write(Instruction.I32_AND);
+		i32(w, 0xA0);
+		w.write(Instruction.I32_EQ);
+		w.write(Instruction.I32_AND);
+		w.write(Instruction.IF, 0x40);
+		// 0x10000 + (high's ten bits << 10) + (code - 0xDC00), the ten bits the low
+		// four of its second byte and the six of its third
+		get(w, curLocal);
+		i32(w, 2);
+		w.write(Instruction.I32_SUB);
+		w.write(Instruction.I32_LOAD8_U, 0x00, 0x00);
+		i32(w, 0x0F);
+		w.write(Instruction.I32_AND);
+		i32(w, 16);
+		w.write(Instruction.I32_SHL);
+		get(w, curLocal);
+		i32(w, 1);
+		w.write(Instruction.I32_SUB);
+		w.write(Instruction.I32_LOAD8_U, 0x00, 0x00);
+		i32(w, 0x3F);
+		w.write(Instruction.I32_AND);
+		i32(w, 10);
+		w.write(Instruction.I32_SHL);
+		w.write(Instruction.I32_OR);
+		get(w, codeLocal);
+		w.write(Instruction.I32_ADD);
+		i32(w, 0x10000 - 0xDC00);
+		w.write(Instruction.I32_ADD);
+		set(w, codeLocal);
+		get(w, curLocal);
+		i32(w, 3);
+		w.write(Instruction.I32_SUB);
+		set(w, curLocal);
+		w.write(Instruction.END);
+		w.write(Instruction.END);
+	}
+
+	/**
 	 * Builds {@code _charvec_to_str} (FUNC_CHARVEC_TO_STR): normalizes a mutable
 	 * character vector into the equivalent quote-framed runtime string; any other value
 	 * is returned unchanged. Whether the value IS one is {@code _charvec_p}'s answer
@@ -1325,11 +1393,14 @@ final class WasmStringRuntimeBuilder {
 	 * {@code HEAP_PTR}), else {@code HEAP_PTR} -- and finalized via {@code _str_fresh}
 	 * without advancing either pointer. The scratch is grown to the worst case
 	 * ({@code n * 4 + 2}, one 4-byte UTF-8 sequence per character plus the two
-	 * surrounding quotes); the actual byte length is passed to {@code _str_fresh}.
+	 * surrounding quotes); the actual byte length is passed to {@code _str_fresh}. Where
+	 * pairs are joined, a low surrogate after a high one is the character the pair spells
+	 * ({@link #emitPairJoin}).
+	 * @param pairsJoined whether the halves of a pair are joined
 	 * @return the function body (signature {@code ((ref null eq))->(ref null eq)},
 	 * TYPE_CALLABLE_BASE + 0)
 	 */
-	static byte[] buildCharvecToStrBody() {
+	static byte[] buildCharvecToStrBody(boolean pairsJoined) {
 		ByteArrayOutputStream body = new am.ik.wasm.UnsynchronizedByteArrayOutputStream();
 		WasmWriter w = new WasmWriter(body);
 		// params: v = 0. locals: header = 1, meta = 2, data = 3 (ref null eq);
@@ -1483,6 +1554,9 @@ final class WasmStringRuntimeBuilder {
 		w.writeUnsignedLeb128(0);
 		w.write(Instruction.END);
 		set(w, code);
+		if (pairsJoined) {
+			emitPairJoin(w, code, cur, start);
+		}
 		emitUtf8Encode(w, code, cur);
 		get(w, i);
 		i32(w, 1);
@@ -1524,16 +1598,28 @@ final class WasmStringRuntimeBuilder {
 	 * subseq results), so their CONTENTS copy verbatim: the closing quote of the first
 	 * and the opening quote of the second are the only bytes dropped, and no capture-mode
 	 * rendering runs at all.
+	 *
+	 * <p>
+	 * Where pairs are joined, a first string ending with a high surrogate and a second
+	 * starting with a low one are the one character the two halves spell, as a JVM string
+	 * makes them: their two three-byte sequences become the pair's four bytes and the
+	 * count one less.
+	 * @param charvecPossible whether an operand can be a mutable character vector
+	 * @param pairsJoined whether the halves of a pair meeting at the seam are joined
 	 * @return the function body (signature {@code ((ref null eq),(ref null eq))->(ref
 	 * null eq)}, the two-string concatenation type)
 	 */
-	static byte[] buildStringConcatBody(boolean charvecPossible) {
+	static byte[] buildStringConcatBody(boolean charvecPossible, boolean pairsJoined) {
 		ByteArrayOutputStream body = new am.ik.wasm.UnsynchronizedByteArrayOutputStream();
 		WasmWriter w = new WasmWriter(body);
 		// params: a = 0, b = 1. locals: lenA = 2, lenB = 3, total = 4, id = 5, count = 6
-		// (i32); arrA = 7, arrB = 8, out = 9 (ref $str_bytes).
-		declareI32AndStrArrayLocals(w, 5, 3);
-		int lenA = 2, lenB = 3, total = 4, id = 5, count = 6, arrA = 7, arrB = 8, out = 9;
+		// and, where pairs are joined, seam = 7, code = 8 (i32); then arrA, arrB, out
+		// (ref
+		// $str_bytes).
+		int words = pairsJoined ? 7 : 5;
+		declareI32AndStrArrayLocals(w, words, 3);
+		int lenA = 2, lenB = 3, total = 4, id = 5, count = 6, seam = 7, code = 8, arrA = 2 + words, arrB = arrA + 1,
+				out = arrA + 2;
 		// Normalize both operands (the call site already does; _str_to_mem keeps the
 		// same belt-and-braces). Anything still not a TYPE_STRING traps on the cast
 		// below -- the contract the interpreter and the JVM backend enforce by
@@ -1549,12 +1635,22 @@ final class WasmStringRuntimeBuilder {
 		get(w, arrB);
 		w.write(Instruction.GC_PREFIX, Instruction.ARRAY_LEN);
 		set(w, lenB);
-		// total = lenA + lenB - 2 (both frames minus the two dropped quotes).
+		if (pairsJoined) {
+			emitSurrogateSeam(w, arrA, lenA, arrB, seam, code);
+		}
+		// total = lenA + lenB - 2 (both frames minus the two dropped quotes), two less
+		// at a seam.
 		get(w, lenA);
 		get(w, lenB);
 		w.write(Instruction.I32_ADD);
 		i32(w, 2);
 		w.write(Instruction.I32_SUB);
+		if (pairsJoined) {
+			get(w, seam);
+			get(w, seam);
+			w.write(Instruction.I32_ADD);
+			w.write(Instruction.I32_SUB);
+		}
 		set(w, total);
 		get(w, total);
 		w.write(Instruction.GC_PREFIX, Instruction.ARRAY_NEW_DEFAULT);
@@ -1574,6 +1670,7 @@ final class WasmStringRuntimeBuilder {
 		i32(w, QUOTE);
 		w.write(Instruction.GC_PREFIX, Instruction.ARRAY_SET);
 		w.writeUnsignedLeb128(WasmLispCompiler.TYPE_STR_BYTES);
+		// a's content but the three bytes of a seam
 		get(w, out);
 		i32(w, 1);
 		get(w, arrA);
@@ -1581,18 +1678,49 @@ final class WasmStringRuntimeBuilder {
 		get(w, lenA);
 		i32(w, 2);
 		w.write(Instruction.I32_SUB);
+		emitSeamBytes(w, pairsJoined, seam, Instruction.I32_SUB);
 		w.write(Instruction.GC_PREFIX, Instruction.ARRAY_COPY);
 		w.writeUnsignedLeb128(WasmLispCompiler.TYPE_STR_BYTES);
 		w.writeUnsignedLeb128(WasmLispCompiler.TYPE_STR_BYTES);
+		if (pairsJoined) {
+			// the pair's four bytes where a's three started
+			get(w, seam);
+			w.write(Instruction.IF, 0x40);
+			for (int k = 0; k < 4; k++) {
+				get(w, out);
+				get(w, lenA);
+				i32(w, 4 - k);
+				w.write(Instruction.I32_SUB);
+				get(w, code);
+				i32(w, 18 - 6 * k);
+				w.write(Instruction.I32_SHR_U);
+				if (k > 0) {
+					i32(w, 0x3F);
+					w.write(Instruction.I32_AND);
+				}
+				i32(w, k == 0 ? 0xF0 : 0x80);
+				w.write(Instruction.I32_OR);
+				w.write(Instruction.GC_PREFIX, Instruction.ARRAY_SET);
+				w.writeUnsignedLeb128(WasmLispCompiler.TYPE_STR_BYTES);
+			}
+			w.write(Instruction.END);
+		}
+		// b's content but the three bytes of a seam, after them
 		get(w, out);
 		get(w, lenA);
 		i32(w, 1);
 		w.write(Instruction.I32_SUB);
+		if (pairsJoined) {
+			get(w, seam);
+			w.write(Instruction.I32_ADD);
+		}
 		get(w, arrB);
 		i32(w, 1);
+		emitSeamBytes(w, pairsJoined, seam, Instruction.I32_ADD);
 		get(w, lenB);
 		i32(w, 2);
 		w.write(Instruction.I32_SUB);
+		emitSeamBytes(w, pairsJoined, seam, Instruction.I32_SUB);
 		w.write(Instruction.GC_PREFIX, Instruction.ARRAY_COPY);
 		w.writeUnsignedLeb128(WasmLispCompiler.TYPE_STR_BYTES);
 		w.writeUnsignedLeb128(WasmLispCompiler.TYPE_STR_BYTES);
@@ -1621,11 +1749,100 @@ final class WasmStringRuntimeBuilder {
 			w.writeUnsignedLeb128(CHAR_COUNT);
 		}
 		w.write(Instruction.I32_ADD);
+		if (pairsJoined) {
+			get(w, seam);
+			w.write(Instruction.I32_SUB);
+		}
 		w.write(Instruction.END);
 		set(w, count);
 		emitCountedRuntimeString(w, total, out, id, count);
 		w.write(Instruction.END); // function
 		return body.toByteArray();
+	}
+
+	/**
+	 * Sets {@code seamLocal} to 1 where the framed bytes of a end with a high surrogate's
+	 * three ({@code ED A0..AF xx}) and those of b start with a low one's
+	 * ({@code ED B0..BF xx}), and {@code codeLocal} to the code point the two spell; it
+	 * stays 0 otherwise.
+	 */
+	private static void emitSurrogateSeam(WasmWriter w, int arrA, int lenA, int arrB, int seamLocal, int codeLocal) {
+		// b's first byte an ED, which leads three, and a's content three bytes at least
+		emitSeamByte(w, arrB, lenA, -1);
+		i32(w, 0xED);
+		w.write(Instruction.I32_EQ);
+		get(w, lenA);
+		i32(w, 5);
+		w.write(Instruction.I32_GE_U);
+		w.write(Instruction.I32_AND);
+		w.write(Instruction.IF, 0x40);
+		// the byte at an offset from a's end (lenA - back) or from b's start
+		int[][] tests = { { arrA, 4, 0xFF, 0xED }, { arrA, 3, 0xF0, 0xA0 }, { arrB, -2, 0xF0, 0xB0 } };
+		for (int k = 0; k < tests.length; k++) {
+			emitSeamByte(w, tests[k][0], lenA, tests[k][1]);
+			if (tests[k][2] != 0xFF) {
+				i32(w, tests[k][2]);
+				w.write(Instruction.I32_AND);
+			}
+			i32(w, tests[k][3]);
+			w.write(Instruction.I32_EQ);
+			if (k > 0) {
+				w.write(Instruction.I32_AND);
+			}
+		}
+		w.write(Instruction.IF, 0x40);
+		// 0x10000 + ((high & 0x3FF) << 10) + (low & 0x3FF), each half's ten bits the low
+		// four of its second byte and the six of its third
+		i32(w, 0x10000);
+		int[][] halves = { { arrA, 3, 2, 10 }, { arrB, -2, -3, 0 } };
+		for (int[] half : halves) {
+			emitSeamByte(w, half[0], lenA, half[1]);
+			i32(w, 0x0F);
+			w.write(Instruction.I32_AND);
+			i32(w, 6 + half[3]);
+			w.write(Instruction.I32_SHL);
+			emitSeamByte(w, half[0], lenA, half[2]);
+			i32(w, 0x3F);
+			w.write(Instruction.I32_AND);
+			if (half[3] != 0) {
+				i32(w, half[3]);
+				w.write(Instruction.I32_SHL);
+			}
+			w.write(Instruction.I32_OR);
+			w.write(Instruction.I32_ADD);
+		}
+		set(w, codeLocal);
+		i32(w, 1);
+		set(w, seamLocal);
+		w.write(Instruction.END);
+		w.write(Instruction.END);
+	}
+
+	// Where pairs are joined, the three bytes of a seam taken from or added to what is on
+	// the stack (seam * 3, by the operator given).
+	private static void emitSeamBytes(WasmWriter w, boolean pairsJoined, int seam, int operator) {
+		if (pairsJoined) {
+			get(w, seam);
+			i32(w, 3);
+			w.write(Instruction.I32_MUL);
+			w.write(operator);
+		}
+	}
+
+	// Pushes a byte of a seam: arr[len - back] for a positive back, arr[-back] for a
+	// negative one.
+	private static void emitSeamByte(WasmWriter w, int arr, int lenLocal, int back) {
+		get(w, arr);
+		if (back > 0) {
+			get(w, lenLocal);
+			i32(w, back);
+			w.write(Instruction.I32_SUB);
+		}
+		else {
+			i32(w, -back);
+		}
+		w.write(Instruction.GC_PREFIX, Instruction.ARRAY_GET_U);
+		w.writeUnsignedLeb128(WasmLispCompiler.TYPE_STR_BYTES);
 	}
 
 	// Encodes the Unicode code point in codeLocal as 1-4 UTF-8 bytes at linear memory

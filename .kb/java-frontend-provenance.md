@@ -543,6 +543,15 @@ algorithm came from, and the answer goes in the file's header.
   not `Object`), when javac warns of a raw argument and in which order, the words of
   `translateEscapes`' refusal. The zeros of the decimal digits are Unicode's as a running JDK
   answers them, under the Unicode entry of `THIRD-PARTY-NOTICES.txt`.
+- **The copies of `copyOf`, the halves of a surrogate pair and `chars()` (k82,
+  2026-11-21).** Written from the API documentation (what `copyOf` and `chars()` answer) and
+  JDK 25's answers to probes (`.todo/artefacts/k82-java-front-end-what-k71-left/probes/`:
+  which of 46 collections each `copyOf` answers as it is, the empties' identity; text made
+  of UTF-16 units by appending, concatenating, inserting, deleting and reversing, and how a
+  JDK prints halves written apart). Nobody opened OpenJDK's source. What the documentation
+  does not state was read off the answers: which collections are kept (a part of a list, a
+  list holding nulls and a map's keys are copied), that the empty ones are one object, that
+  a JDK's encoder joins two halves printed one after the other.
 - **`StringJoiner`, `StringTokenizer`, `BitSet`, `Scanner`, `Readable`, `Buffer`,
   `CharBuffer` and the hexadecimal floats of a parse (k72, 2026-11-21).** Written from the API
   documentation (the classes' members; `BitSet.hashCode`'s formula; the grammar of a

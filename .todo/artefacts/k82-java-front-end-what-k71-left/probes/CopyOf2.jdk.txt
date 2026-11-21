@@ -1,0 +1,52 @@
+List of0 true true []
+List of1 true true [1]
+List of2 true true [1, 2]
+List of3 true true [1, 2, 3]
+List ofArray true true [1, 2, 3, 4]
+List copyOfArrayList true true [1, 2]
+List copyOfEmptyArrayList true true []
+List toUnmodifiableList true true [1, 2]
+List toUnmodifiableList0 true true []
+List toList false true [1, 2]
+List toList0 false true []
+List toListNull java.lang.NullPointerException
+List sub false true [1, 2]
+List sub0 false true []
+List subAll false true [1, 2, 3]
+List reversed false true [3, 2, 1]
+List unmodifiable false true [1, 2]
+List empty false true []
+List singleton false true [1]
+List nCopies false true [1, 1]
+List asList false true [1, 2]
+List window false true [1, 2]
+List streamToListOfSub false true [2, 3]
+Set of0 true true 0
+Set of1 true true 1
+Set of2 true true 2
+Set of3 true true 3
+Set copyOfHashSet true true 2
+Set copyOfDup true true 2
+Set toUnmodifiableSet true true 2
+Set toUnmodifiableSet0 true true 0
+Set keySet false true 2
+Set keySet1 false true 1
+Set unmodifiable false true 2
+Set empty false true 0
+Set singleton false true 1
+Map of0 true true 0
+Map of1 true true 1
+Map of2 true true 2
+Map ofEntries true true 2
+Map ofEntries0 true true 0
+Map copyOfHashMap true true 1
+Map toUnmodifiableMap true true 2
+Map toUnmodifiableMap0 true true 0
+Map unmodifiable false true 1
+Map empty false true 0
+Map singleton false true 1
+true true true
+true true true
+false true true
+true true true
+false false false

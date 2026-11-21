@@ -481,12 +481,13 @@ final class JavaIntrinsics {
 			}
 		}
 		if (named.name.equals(INT_STREAM) && (text || builder)) {
-			// a string's elements are its code points, so the two are one stream
-			JavaEmitter chars = (lowering, call) -> lowering.library(FLOWS, "chars",
-					List.of(text ? call.self() : runtimeCall("sb-string", call.self())));
+			// the UTF-16 units toCharArray answers, and the code points that are a
+			// string's elements
 			for (String name : List.of("chars", "codePoints")) {
+				JavaEmitter stream = (lowering, call) -> lowering.library(FLOWS, name,
+						List.of(text ? call.self() : runtimeCall("sb-string", call.self())));
 				intrinsic.methods.add(new JavaClass.Method(intrinsic, name, List.of(), new ClassType(named, List.of()),
-						false, false, null, intrinsic.name.equals(STRING_BUFFER) ? guarded(chars) : chars, false));
+						false, false, null, intrinsic.name.equals(STRING_BUFFER) ? guarded(stream) : stream, false));
 			}
 		}
 		if (named.name.equals(STREAM) && text) {

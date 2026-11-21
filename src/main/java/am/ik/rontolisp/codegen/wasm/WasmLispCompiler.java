@@ -897,6 +897,16 @@ public final class WasmLispCompiler implements LispCompiler {
 	// fixed runtime bodies emitted below.
 	private boolean charvecPossible = true;
 
+	// Whether the strings the runtime makes join the two halves of a surrogate pair
+	// meeting where they are made (a seam of a concatenation, a character vector made a
+	// string): the Java subset's rule, as a JVM string holds them, and so only where its
+	// run time is in the program (.kb/characters-code-points.md).
+	private boolean pairsJoined;
+
+	// The package and prefix of the Java subset's run-time functions (eval/java.lisp),
+	// which every program of the Java front end calls (its uncaught report at least).
+	private static final String JAVA_RUN_TIME_PREFIX = "RONTOLISP::%JAVA-";
+
 	// Whether a bit vector can exist at run time: the bit width of the element-type mask
 	// (LispMacroExpander.makeArrayElementTypeCodes). _equal compares two bit vectors and
 	// _hash folds one by the elements only then, so every other module keeps the bodies
@@ -4533,6 +4543,7 @@ public final class WasmLispCompiler implements LispCompiler {
 		// An operator this list has never heard of therefore OPENS the gate.
 		this.charvecPossible = usesEval || anyNameResolvable(program, usesRead, usesLoad)
 				|| !charvecFreeProgram(program, defunNames(program, defuns));
+		this.pairsJoined = defuns.stream().anyMatch(defun -> defun.name.startsWith(JAVA_RUN_TIME_PREFIX));
 
 		// Inject built-in function wrappers (user defuns take priority)
 		Set<String> userDefinedNames = new HashSet<>();
@@ -9400,7 +9411,7 @@ public final class WasmLispCompiler implements LispCompiler {
 					.addFunction(WasmRatioRuntimeBuilder.buildRatRoundingBody(3))
 					.addFunction(WasmRuntimeBuilder.buildToStringBody(FUNC_PRINC_VAL, 1))
 					.addFunction(WasmRuntimeBuilder.buildToStringBody(FUNC_PRINT_VAL, 1))
-					.addFunction(WasmStringRuntimeBuilder.buildStringConcatBody(this.charvecPossible))
+					.addFunction(WasmStringRuntimeBuilder.buildStringConcatBody(this.charvecPossible, this.pairsJoined))
 					.addFunction(WasmStringRuntimeBuilder.buildCaseConvertBody(true))
 					.addFunction(WasmStringRuntimeBuilder.buildCaseConvertBody(false))
 					.addFunction(WasmStringRuntimeBuilder.buildCapitalizeBody())
@@ -9481,7 +9492,7 @@ public final class WasmLispCompiler implements LispCompiler {
 				code.addFunction(WasmStringRuntimeBuilder.buildSymEscGcBody(stringTable.holdsFramedClUserName()));
 				// _charvec_to_str (FUNC_CHARVEC_TO_STR): normalize a mutable character
 				// vector into the equivalent runtime string.
-				code.addFunction(WasmStringRuntimeBuilder.buildCharvecToStrBody());
+				code.addFunction(WasmStringRuntimeBuilder.buildCharvecToStrBody(this.pairsJoined));
 				// _charvec_p (FUNC_CHARVEC_P): the shape half of the above -- is this
 				// value a mutable character vector? -- in constant time.
 				code.addFunction(WasmStringRuntimeBuilder.buildCharvecPBody());
@@ -9833,7 +9844,7 @@ public final class WasmLispCompiler implements LispCompiler {
 				code.addFunction(WasmArrayRuntimeBuilder.buildVecSyncBody());
 				// the bulk primitives (FUNC_BULK_BASE ..): shaken with their sites.
 				WasmBulkRuntimeBuilder.Flags bulkFlags = new WasmBulkRuntimeBuilder.Flags(this.usesIdentityHashTables,
-						this.charvecPossible, !this.optimize.prefersSizeOverSpeed());
+						this.charvecPossible, !this.optimize.prefersSizeOverSpeed(), this.pairsJoined);
 				// _lit_init and its parts: a literal counted as it is built where speed
 				// is asked for; and where the top level is the start function, it runs
 				// behind them.
@@ -15119,6 +15130,50 @@ public final class WasmLispCompiler implements LispCompiler {
 
 	static final class StringTable {
 
+		/**
+		 * The bytes the run time holds a text as: its UTF-8, where a surrogate with no
+		 * partner is a character of its own in three bytes, as the run time writes one
+		 * ({@code getBytes} would make it {@code ?}).
+		 * @param s the text
+		 * @return its bytes
+		 */
+		static byte[] encoded(String s) {
+			boolean alone = false;
+			for (int i = 0; i < s.length() && !alone; i++) {
+				char c = s.charAt(i);
+				if (Character.isSurrogate(c)) {
+					alone = !(Character.isHighSurrogate(c) && i + 1 < s.length()
+							&& Character.isLowSurrogate(s.charAt(i + 1)));
+					i += alone ? 0 : 1;
+				}
+			}
+			if (!alone) {
+				return s.getBytes(StandardCharsets.UTF_8);
+			}
+			ByteArrayOutputStream out = new ByteArrayOutputStream();
+			s.codePoints().forEach(code -> {
+				if (code < 0x80) {
+					out.write(code);
+				}
+				else if (code < 0x800) {
+					out.write(0xC0 | (code >> 6));
+					out.write(0x80 | (code & 0x3F));
+				}
+				else if (code < 0x10000) {
+					out.write(0xE0 | (code >> 12));
+					out.write(0x80 | ((code >> 6) & 0x3F));
+					out.write(0x80 | (code & 0x3F));
+				}
+				else {
+					out.write(0xF0 | (code >> 18));
+					out.write(0x80 | ((code >> 12) & 0x3F));
+					out.write(0x80 | ((code >> 6) & 0x3F));
+					out.write(0x80 | (code & 0x3F));
+				}
+			});
+			return out.toByteArray();
+		}
+
 		private final ByteArrayOutputStream data = new am.ik.wasm.UnsynchronizedByteArrayOutputStream();
 
 		private final Map<String, StringEntry> cache = new HashMap<>();
@@ -15404,7 +15459,7 @@ public final class WasmLispCompiler implements LispCompiler {
 			if (this.shakeable.contains(whole)) {
 				return addString(tail);
 			}
-			int prefixBytes = whole.substring(0, from).getBytes(StandardCharsets.UTF_8).length;
+			int prefixBytes = encoded(whole.substring(0, from)).length;
 			StringEntry entry = new StringEntry(container.offset() + prefixBytes, container.length() - prefixBytes);
 			this.cache.put(tail, entry);
 			return entry;
@@ -15448,7 +15503,7 @@ public final class WasmLispCompiler implements LispCompiler {
 			if (existing != null) {
 				return existing;
 			}
-			byte[] bytes = s.getBytes(StandardCharsets.UTF_8);
+			byte[] bytes = encoded(s);
 			int offset = this.nextOffset;
 			this.data.write(bytes, 0, bytes.length);
 			this.nextOffset += bytes.length;

@@ -648,6 +648,8 @@
   (vector-push-extend (code-char code) builder)
   builder)
 
+;; The text a builder holds: where a high surrogate is followed by a low one, the
+;; character the two spell (%normalize-string joins them on every backend).
 (defun rontolisp::%java-sb-string (builder)
   (%normalize-string (subseq builder 0 (length builder))))
 
@@ -1478,19 +1480,11 @@
   (let ((builder (rontolisp::%java-sb-new))
         (i offset)
         (end (if count (+ offset count) (length codes))))
-    ;; a surrogate pair is the one character it encodes
+    ;; a surrogate pair is the one character it encodes, which the string made of the
+    ;; units is (%normalize-string)
     (while (< i end)
-      (let ((code (aref codes i)))
-        (if (and (>= code 55296) (< code 56320) (< (+ i 1) end)
-                 (>= (aref codes (+ i 1)) 56320) (< (aref codes (+ i 1)) 57344))
-            (progn
-              (vector-push-extend (code-char
-                                   (+ 65536 (ash (- code 55296) 10)
-                                      (- (aref codes (+ i 1)) 56320))) builder)
-              (setq i (+ i 2)))
-            (progn
-              (vector-push-extend (code-char code) builder)
-              (setq i (+ i 1))))))
+      (vector-push-extend (code-char (aref codes i)) builder)
+      (setq i (+ i 1)))
     (rontolisp::%java-sb-string builder)))
 
 ;; An array of the elements of a list.

@@ -14,8 +14,15 @@ public final class Flows {
     private Flows() {
     }
 
-    // String.chars and String.codePoints: a string's elements are its code points
+    // String.chars: the UTF-16 units toCharArray answers, which a builder appended them
+    // to joins again
     public static IntStream chars(String s) {
+        char[] units = s.toCharArray();
+        return IntFlow.range(0, units.length - 1L).map(i -> units[i]);
+    }
+
+    // String.codePoints: a string's elements are its code points
+    public static IntStream codePoints(String s) {
         return IntFlow.range(0, s.length() - 1L).map(i -> s.charAt(i));
     }
 

@@ -97,8 +97,10 @@ final class WasmBulkRuntimeBuilder {
 	 * @param identityHash whether a cons and a cell carry the identity-hash slot
 	 * @param charvecPossible whether the module can hold a mutable character vector
 	 * @param speed whether the module trades bytes for speed
+	 * @param pairsJoined whether the halves of a surrogate pair meeting at a seam are the
+	 * character they spell ({@code WasmLispCompiler.pairsJoined})
 	 */
-	record Flags(boolean identityHash, boolean charvecPossible, boolean speed) {
+	record Flags(boolean identityHash, boolean charvecPossible, boolean speed, boolean pairsJoined) {
 	}
 
 	/**
@@ -126,7 +128,7 @@ final class WasmBulkRuntimeBuilder {
 			case SPLIT -> buildSplit(flags);
 			case JOIN -> buildJoin(flags);
 			case SORT -> buildSort();
-			case CAT -> buildCat();
+			case CAT -> buildCat(flags.pairsJoined());
 			case COUNT -> buildCount();
 			default -> throw new IllegalArgumentException("no bulk runtime function " + i);
 		};
@@ -456,8 +458,12 @@ final class WasmBulkRuntimeBuilder {
 	// with it). What a chain of %string-concat over %princ-piece leaves answers, with one
 	// byte array and one string made where each link and each fixnum's text made a pair
 	// (WasmStringConcatCompiler). The lengths are summed first, the characters with them
-	// while every string has its count.
-	private static byte[] buildCat() {
+	// while every string has its count. Where pairs are joined (Flags.pairsJoined), a
+	// string after the first that starts with a low surrogate may meet a high one there,
+	// which is the character the two spell: such a call joins its pieces two by two
+	// through _string_concat, which knows the seam, a fixnum written by a call of its own
+	// first.
+	private static byte[] buildCat(boolean pairsJoined) {
 		Asm a = new Asm(4);
 		int out = a.local(Kind.BYTES);
 		int[] bytes = new int[4];
@@ -476,6 +482,8 @@ final class WasmBulkRuntimeBuilder {
 		int q = a.local(Kind.I32);
 		int i = a.local(Kind.I32);
 		int one = a.local(Kind.I32);
+		int seam = pairsJoined ? a.local(Kind.I32) : -1;
+		int joined = pairsJoined ? a.local(Kind.EQ) : -1;
 		a.i32(1).set(one);
 		a.i32(2).set(total);
 		for (int k = 0; k < 4; k++) {
@@ -498,8 +506,30 @@ final class WasmBulkRuntimeBuilder {
 			a.tee(bytes[k]).arrayLen().i32(2).op(Instruction.I32_SUB).set(len[k]);
 			a.get(k).refCast(STRING).structGet(STRING, CHAR_COUNT).set(v);
 			addCount(a, chars, v);
+			if (k > 0 && pairsJoined) {
+				// a low surrogate's ED B0..BF first (an ED leads three bytes, so they are
+				// there)
+				a.get(bytes[k]).i32(1).arrayGetU(BYTES).i32(0xED).op(Instruction.I32_EQ).ifVoid();
+				a.get(bytes[k]).i32(2).arrayGetU(BYTES).i32(0xF0).op(Instruction.I32_AND);
+				a.i32(0xB0).op(Instruction.I32_EQ).get(seam).op(Instruction.I32_OR).set(seam);
+				a.end();
+			}
 			a.end();
 			a.get(total).get(len[k]).op(Instruction.I32_ADD).set(total);
+			a.end();
+		}
+		if (pairsJoined) {
+			a.get(seam).ifVoid();
+			catPiece(a, 0);
+			a.set(joined);
+			for (int k = 1; k < 4; k++) {
+				a.get(k).isNull().op(Instruction.I32_EQZ).ifVoid();
+				a.get(joined);
+				catPiece(a, k);
+				a.call(WasmLispCompiler.FUNC_STRING_CONCAT).set(joined);
+				a.end();
+			}
+			a.get(joined).ret();
 			a.end();
 		}
 		a.get(total).arrayNewDefault(BYTES).set(out);
@@ -530,6 +560,15 @@ final class WasmBulkRuntimeBuilder {
 		}
 		WasmStringRuntimeBuilder.emitCountedRuntimeString(a.w, total, out, id, chars);
 		return a.finish();
+	}
+
+	// Pushes a piece of _str_cat as a string: a fixnum's text through a call of its own.
+	private static void catPiece(Asm a, int piece) {
+		a.get(piece).refTest(I31).ifEq();
+		a.get(piece).refNull().refNull().refNull().call(WasmLispCompiler.FUNC_BULK_BASE + CAT);
+		a.elseArm();
+		a.get(piece).refCast(STRING);
+		a.end();
 	}
 
 	// --- sort ------------------------------------------------------------------

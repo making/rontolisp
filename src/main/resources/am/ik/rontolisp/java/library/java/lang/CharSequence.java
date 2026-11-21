@@ -23,6 +23,6 @@ public interface CharSequence {
     }
 
     default IntStream codePoints() {
-        return Flows.chars(toString());
+        return Flows.codePoints(toString());
     }
 }

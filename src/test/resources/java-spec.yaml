@@ -6413,6 +6413,13 @@ cases:
               Enumeration<String> none = Collections.emptyEnumeration();
               Iterator<Integer> walked = Collections.enumeration(List.of(1, 2)).asIterator();
               System.out.println(one + " " + one.get("k") + " " + one.getOrDefault("j", 0) + " " + one.keySet() + one.values() + one.entrySet() + " " + one.equals(Map.of("k", 1)) + " " + one.hashCode() + " " + (Collections.emptyList() == Collections.emptyList()) + " " + Collections.emptyMap().keySet().equals(Set.of()) + " " + none.hasMoreElements() + none.asIterator().hasNext() + " " + walked.next() + walked.next() + walked.hasNext() + " " + Collections.nCopies(3, "ab").lastIndexOf("ab") + Collections.nCopies(4, "x").subList(1, 3) + " " + Collections.emptyListIterator().previousIndex());
+              // copyOf answers a collection of List.of's, Set.of's and Map.of's own kind as
+              // it is, and copies a part of one, one holding nulls, a map's keys and a view
+              List<Integer> listed = List.of(1, 2), single = List.of(3), part = listed.subList(0, 1), nulls = Stream.of(1, 2).toList(), collected = Stream.of(1, 2).collect(Collectors.toUnmodifiableList());
+              Set<Integer> set = Set.of(1, 2), copied = Set.copyOf(listed);
+              Map<Integer, Integer> map = Map.of(1, 2), entries = Map.ofEntries(Map.entry(3, 4));
+              Set<Integer> keys = map.keySet();
+              System.out.println((List.copyOf(listed) == listed) + " " + (List.copyOf(single) == single) + " " + (List.copyOf(collected) == collected) + " " + (List.copyOf(part) == part) + " " + (List.copyOf(nulls) == nulls) + " " + (List.copyOf(Collections.unmodifiableList(listed)) == listed) + " " + (Set.copyOf(set) == set) + " " + (Set.copyOf(copied) == copied) + " " + (Set.copyOf(keys) == keys) + " " + (Set.copyOf(Collections.unmodifiableSet(set)) == set) + " " + (Map.copyOf(map) == map) + " " + (Map.copyOf(entries) == entries) + " " + (Map.copyOf(Collections.unmodifiableMap(map)) == map) + " " + List.copyOf(part) + Set.copyOf(keys) + Map.copyOf(Collections.unmodifiableMap(map)));
           }
 
           // a priority queue is a binary heap in an array: its text and its walk are the
@@ -6644,6 +6651,7 @@ cases:
       java.util.NoSuchElementException: No value present
       false, false, [2], false, false false, null null, UnsupportedOperationException, UnsupportedOperationException, IndexOutOfBoundsException Index 2 out of bounds for length 2, IndexOutOfBoundsException Index: 0, IndexOutOfBoundsException Index: 1, Size: 1, UnsupportedOperationException, UnsupportedOperationException, NoSuchElementException, IllegalStateException, UnsupportedOperationException, NullPointerException, ArrayIndexOutOfBoundsException Index 3 out of bounds for length 3, IndexOutOfBoundsException Index 2 out of bounds for length 2, IndexOutOfBoundsException Index: 5, Size: 2, UnsupportedOperationException, ArrayIndexOutOfBoundsException Index 2 out of bounds for length 2, UnsupportedOperationException, ClassCastException, ClassCastException, ArrayIndexOutOfBoundsException Index 3 out of bounds for length 3, UnsupportedOperationException, true 1 java.util.ImmutableCollections$ListN, 
       {k=1} 1 0 [k][1][k=1] true 106 true true falsefalse 12false 2[x, x] -1
+      true true true false false false true true false false true true false [1][1]{1=2}
       [1, 1, 2, 3, 3, 8, 7, 5, 6, 9] 1 1123356789 true [1, 1, 2, 5, 3, 8, 7, 9, 6] true [1, 1, 5, 3, 7, 9] [1, 2, 3, 6, 5, 4, 7, 8, 9] true6
       1 3 2 5 9 7x 8x 6 4x | [1, 3, 2, 5, 9, 6] hightop[Chore[name=mid, rank=5], Chore[name=low, rank=1]] [c, b, a]c true
       IllegalArgumentException, NullPointerException, NoSuchElementException, IllegalStateException, ConcurrentModificationException, ClassCastException, IllegalArgumentException, 
@@ -10559,6 +10567,27 @@ cases:
                       System.out.println(ex);
                   }
               }
+              halves();
+          }
+
+          // the two halves of a pair meeting where text is built are the character they
+          // spell: appended one by one, concatenated, put in, brought together by a
+          // deletion or a reversal; chars() answers the halves
+          static void halves() {
+              String smile = "a\uD83D\uDE00b";
+              StringBuilder appended = new StringBuilder();
+              String added = "";
+              for (char unit : smile.toCharArray()) {
+                  appended.append(unit);
+                  added += unit;
+              }
+              StringBuilder streamed = new StringBuilder();
+              smile.chars().forEach(unit -> streamed.append((char) unit));
+              String high = String.valueOf((char) 0xD83D), low = String.valueOf((char) 0xDE00);
+              StringBuilder put = new StringBuilder("ab").insert(1, low).insert(1, (char) 0xD83D);
+              StringBuilder cut = new StringBuilder().append((char) 0xD83D).append('x').append(low).deleteCharAt(1);
+              StringBuilder turned = new StringBuilder().append(low).append(high).reverse();
+              System.out.println(appended + " " + added + " " + streamed + " " + put + " " + cut + " " + turned + " " + (high + low) + high.concat(low) + String.join("", high, low) + " " + appended.toString().equals(smile) + added.equals(smile) + streamed.toString().equals(smile) + (high + low).equals("\uD83D\uDE00") + " " + smile.chars().count() + " " + smile.chars().sum() + " " + added.codePointCount(0, added.length()) + " " + added.hashCode() + " " + added.codePointAt(1) + " " + new String(smile.toCharArray()).equals(smile));
           }
       }
     expected: |
@@ -10584,6 +10613,7 @@ cases:
       a/  b/|a// b/|x	yA 0z |ǅQ 4304 98 3
       java.lang.IllegalArgumentException: Invalid escape sequence: \q \\u0071
       java.lang.IndexOutOfBoundsException: Range [2, 1) out of bounds for length 3
+      a😀b a😀b a😀b a😀b 😀 😀 😀😀😀 truetruetruetrue 4 112384 3 57849694 128512 true
   # java.util.regex is the engine every front end shares (eval/regex.lisp): Pattern and
   # Matcher over it, the String members that take a pattern, the refusals as the
   # library's exceptions. A split by a constant text with no operator needs no engine.

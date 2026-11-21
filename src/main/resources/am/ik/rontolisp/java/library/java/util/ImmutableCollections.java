@@ -15,15 +15,20 @@ final class ImmutableCollections {
 
     // What the spliterator of each reports, as a JDK's does: the held collection's, the
     // default of its interface, or a collection's of one element (List.of(e), Set.of(e)).
+    // The kinds below NULLS are those of List.of's own lists, which List.copyOf answers as
+    // they are.
     static final int HELD = 0;
 
     static final int OWN = 1;
 
+    static final int ONE = 2;
+
     // the list of Stream.toList() and of a gatherer's windows: a list of List.of's kind
     // that holds nulls, which reports as OWN
-    static final int NULLS = 2;
+    static final int NULLS = 3;
 
-    static final int ONE = 3;
+    // a part of a list of List.of's kind, which reports as OWN
+    static final int PART = 4;
 
     private ImmutableCollections() {
     }
@@ -43,7 +48,7 @@ final class ImmutableCollections {
 
         private final Object[] held;
 
-        private final int how;
+        final int how;
 
         ListN(Object[] held) {
             this(held, OWN);
@@ -99,7 +104,7 @@ final class ImmutableCollections {
             }
             Object[] part = new Object[to - from];
             System.arraycopy(held, from, part, 0, to - from);
-            return new ImmutableCollections.SubList<>(part, how == NULLS ? NULLS : OWN);
+            return new ImmutableCollections.SubList<>(part, how == NULLS ? NULLS : PART);
         }
 
         // the array's elements from one index to another, as a view: what
@@ -356,7 +361,7 @@ final class ImmutableCollections {
 
         private final Map<K, V> held;
 
-        private final int how;
+        final int how;
 
         MapN(Map<K, V> held) {
             this(held, OWN);

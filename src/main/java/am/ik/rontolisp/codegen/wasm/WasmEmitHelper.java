@@ -1350,7 +1350,7 @@ final class WasmEmitHelper {
 	 * intern, make-symbol) so a fill-pointered/adjustable character vector behaves as a
 	 * string there -- and NOTHING at all when
 	 * {@link WasmLispCompiler.Ctx#charvecPossible} says the program can never make one.
-	 * See {@link WasmStringRuntimeBuilder#buildCharvecToStrBody()}.
+	 * See {@link WasmStringRuntimeBuilder#buildCharvecToStrBody(boolean)}.
 	 * @param ctx the compilation context (its writer receives the instructions)
 	 */
 	/**

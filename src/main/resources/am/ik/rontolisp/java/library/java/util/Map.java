@@ -169,7 +169,11 @@ public interface Map<K, V> {
         return new ImmutableCollections.Pair<>(key, value);
     }
 
+    // a map of this kind is answered as it is, a view is copied
     static <K, V> Map<K, V> copyOf(Map<? extends K, ? extends V> m) {
+        if (m instanceof ImmutableCollections.MapN<?, ?> map && map.how != ImmutableCollections.HELD) {
+            return (Map<K, V>) map;
+        }
         HashMap<K, V> held = new HashMap<>();
         for (Map.Entry<? extends K, ? extends V> entry : m.entrySet()) {
             if (entry.getKey() == null || entry.getValue() == null) {

@@ -201,6 +201,39 @@ other side of that line: they DO map as `String` does, in a library helper of th
   `<0x80 / <0xE0 / <0xF0 / else` ladder); a truncated tail falls back to the lead byte as a bare
   CHARACTER on both the string-stream and WASI fd paths, matching the interpreter.
 
+## The two halves of a surrogate pair meeting (2026-11-21)
+A surrogate (U+D800..U+DFFF) is a CHARACTER like any code point, and a string may hold one
+alone. **Where a string is MADE of pieces, a high surrogate followed by a low one is the one
+character the pair spells, on every backend** -- what a JVM string, which is UTF-16, does by
+its nature, and the rule the Java front end needs for text made of `toCharArray`'s units
+([java-frontend.md](java-frontend.md), "The copies of `copyOf` and the halves of a surrogate
+pair"). Where it happens:
+- JVM: a `java.lang.String` built from the halves (a concatenation, `subseq` of a character
+  vector) holds them as a valid pair, which `codePointCount` and every index read as one.
+- Interpreter: a concatenation is a Java string already; `%normalize-string` (what a
+  builder's `subseq` goes through) answers a string holding a high surrogate followed by a
+  low one as the string read back from its Java text (`Environment`). A mutable string, a
+  `LispString` of code points, keeps them apart, as the compile backends' character vectors
+  do.
+- WASM, in a module holding the Java subset's run time (`WasmLispCompiler.pairsJoined`: a
+  defun of `eval/java.lisp`, which every such program has): `_charvec_to_str` encodes a low
+  surrogate that follows a high one's three bytes as the pair's four, over them
+  (`WasmStringRuntimeBuilder.emitPairJoin`); `_string_concat` checks the seam
+  (`emitSurrogateSeam`: b's first byte `ED`, a's last three `ED A0..AF xx`, b's second
+  `B0..BF`) and writes four bytes for six, the count one less; `_str_cat` hands a call whose
+  piece after the first starts with `ED B0..BF` to `_string_concat` two by two
+  (`WasmBulkRuntimeBuilder.buildCat`). Any other module is byte for byte what it was. A
+  string constant holding a surrogate alone is its three bytes in every module
+  (`StringTable.encoded`; `getBytes(UTF_8)` made it `?`).
+- Not joined: a mutable character vector itself (`length`, `aref` see the halves); a WASM
+  module of another language (a CL `concatenate` of the two halves is two characters there
+  and one on the JVM and the interpreter, whose strings are Java's -- older than this rule);
+  what is written out on WASM -- a surrogate alone is its three bytes there, where the JVM's
+  and the interpreter's encoders write `?` and join two halves written one after the other.
+- Measured 2026-11-21 (wasm, the Java size programs): `_string_concat` +261 B, `_str_cat`
+  +249 B, `_charvec_to_str` +101 B, +611 to +688 B a program; a Lisp, a Scheme, a Starlark
+  and two Clojure programs the same bytes as before.
+
 ## Java interop (JVM compile path)
 `JavaBridgeTemplate`: a length-1 `int[]{cp}` coerces to `char`/`Character` when the parameter is
 char-typed AND `Character.isBmpCodePoint(cp)`, and to `int`/`Integer` (the only path a

@@ -50,8 +50,8 @@ collectors and the inference they need, `Name.class::isInstance` / `::cast`: k12
 (2026-11-19); a library read as source from the program's source path and lowered as far
 as the program reaches it, annotation types and type annotations, an exact method
 reference in a call's applicability: k24 (2026-11-19); what comes after is `.todo/k15`,
-`k16`, `k17`, `k18`, `k19`, `k20`, `k21`, `k22`, `k82` and `k85` .. `k91` (what k00, k11, k06, k07,
-k08, k10, k12, k26, k47, k55, k60, k71 and k72 left); YAVI compiled to wasm in both of its styles, the milestone k24 was
+`k16`, `k17`, `k18`, `k19`, `k20`, `k21`, `k22`, `k95` and `k85` .. `k91` (what k00, k11, k06, k07,
+k08, k10, k12, k26, k47, k55, k60, k71, k72 and k82 left); YAVI compiled to wasm in both of its styles, the milestone k24 was
 asked for, and where its bytes go: k33 (2026-11-20; "YAVI compiled to wasm" below); the
 Maven plugin's `wasm` goal reading a project's
 dependencies from their sources jars, a session reading the source path: k32 (2026-11-20);
@@ -89,7 +89,11 @@ element, of one and of n copies of `Collections`, `singletonMap`, the refusals o
 `List.of`'s list, a bridge's cast and `PriorityQueue`: k60 (2026-11-20; "The collections of
 Collections, a bridge's cast and PriorityQueue" below); `StringJoiner`, `StringTokenizer`,
 `BitSet`, `Scanner`, `Readable` and `CharBuffer`, hexadecimal floats in a parse: k72
-(2026-11-21; "A joiner, a tokenizer, a bit set, a scanner and a char buffer" below).
+(2026-11-21; "A joiner, a tokenizer, a bit set, a scanner and a char buffer" below);
+`List.copyOf`, `Set.copyOf` and `Map.copyOf` answering a collection of their own kind, the
+halves of a surrogate pair joined where text is made on every backend, `chars()` as the
+UTF-16 units: k82 (2026-11-21; "The copies of `copyOf` and the halves of a surrogate pair"
+below).
 
 ## Where it sits
 
@@ -799,7 +803,7 @@ first measurement).
   The refusal has no cause (a JDK's is its parser's exception, `deviations.md`). Measured
   (wasm P1): a program storing one entry 213,706 B, loading one 229,934 (`store` of one
   244,487, unchanged).
-- **Left** (`.todo/k82`, its locale bullet): the candidate locales of a script and a
+- **Left** (`.todo/k95`, its locale bullet): the candidate locales of a script and a
   variant and the Norwegian and Chinese cases `Control`'s documentation states, once
   `Locale` has such locales.
 - **Beside it** (k53): a qualified name of a JDK package naming no class the subset has,
@@ -1641,7 +1645,7 @@ measured programs.
 - A method reference naming a class fits a functional interface by its arity when a call has
   several candidates (`takes`): `thenComparing(Point::label)` against `thenComparing(Comparator)`.
 - Sizes on wasm (2026-11-17, before / after): a list added to and read 3,732 / 25,592; one
-  printed 43,929 / 56,779; a `HashMap` put and read 37,802 / 57,847. `.todo/k82` holds what is
+  printed 43,929 / 56,779; a `HashMap` put and read 37,802 / 57,847. `.todo/k95` holds what is
   left and the leads.
 - **The library is Java a JDK compiles** (j79, decided by measuring): javac of JDK 25 takes
   all 139 files as a patch of its own `java.base` (`--patch-module java.base=<library>`) with
@@ -1778,7 +1782,7 @@ measured programs.
   adjustments, the arithmetic over 17 durations, 103 texts through `parse` with each
   refusal's message, index and cause -- prints a JDK 25's lines on the four backends
   (`.todo/artefacts/k05-java-front-end-what-the-everyday-members-and-utf-16-slice-left/Dur.java`).
-  Not there: `dividedBy` (`.todo/k82`). `between`, `of` / `get` of a `TemporalUnit` and
+  Not there: `dividedBy` (`.todo/k95`). `between`, `of` / `get` of a `TemporalUnit` and
   `truncatedTo` came with the rest of `java.time` (k35, "java.time" below), which left
   a program of a `Duration` alone as it was (155,029 B of wasm before and after).
   `Thread.sleep(Duration)` is there (a duration below zero is no sleep, zero is one an
@@ -1858,7 +1862,7 @@ measured programs.
   first, so an array too short keeps the high one's place) / `codePointAt` of an array
   / `reverseBytes`, `OptionalLong` and `HttpHeaders.firstValueAsLong`: each in
   `Support` or a source class, 866 probe lines identical to JDK 25 on four backends
-  (`Members.java` beside `Dur.java`). Still refused: `.todo/k82`.
+  (`Members.java` beside `Dur.java`). Still refused: `.todo/k95`.
 
 ## The sorted collections (2026-11-20, k47)
 
@@ -2122,7 +2126,14 @@ from the API documentation and JDK 25's answers to probes
   collection is not (a queue of one `Object` is made). Its spliterator is
   `SIZED|SUBSIZED|NONNULL` and does not split. Sizes: a program adding and polling 138,238 B
   of wasm; 1,000,000 adds and polls of `Integer`s 5.0 s on wasm, 3.7 s as a JVM class, 0.57
-  s under a JDK.
+  s under a JDK. **Measured again 2026-11-21 (k82), and that premise does not hold**: the
+  same `Bench.java` is 1.55 to 1.70 s on wasm, 1.5 to 1.7 s as a JVM class and 0.35 s under a
+  JDK; with the draws taken out of the timing (`Bench2.java` of the k82 artefacts) the
+  queue is 1.41 to 1.47 s on wasm, 1.49 to 1.71 s on the JVM, 0.32 s under a JDK -- 0.7 us
+  an add and a poll, 4.4 times a JDK's, the JVM backend's own figure. Nothing about the
+  heap is slower on wasm than elsewhere; a guest profile (`wasmtime --profile=guest`)
+  puts a third of the samples in one small function, a 64-bit subtraction with an
+  overflow test (the module has no names, so its callers were not named).
 - **Measured** (wasm bytes; the size programs of k12, k26, k47 and k55): unchanged but those
   above and a program over `List.of`, smaller (`MapOnly` 137,639 -> 137,302, `FlatOnly`
   127,939 -> 126,933, `SzRemoveAll` 157,547 -> 156,534, `SzUnmodSet` 104,824 -> 104,124).
@@ -2132,7 +2143,7 @@ from the API documentation and JDK 25's answers to probes
   (some 300 B in a program asking them), `Map.of`'s keys and values as `AbstractMap`'s views
   (500 B), `Arrays.asList`'s iterator of its own for the words `remove` (0.9 to 1.4 KB in a
   program walking it and another list).
-- **Left** (`deviations.md`, `.todo/k82`): a list of `List.of` of one or two refuses an index
+- **Left** (`deviations.md`, `.todo/k95`): a list of `List.of` of one or two refuses an index
   with the array's words; `List.of`'s iterator's `remove()` before `next()` is
   `IllegalStateException`; `Set.of` and `Map.of` answer a null, and `Map.of`'s views refuse a
   change that changes nothing; `Arrays.asList` refuses a removal with no message
@@ -2214,6 +2225,74 @@ are `.todo/artefacts/k71-java-front-end-what-k60-left/`.
   `the-boxes-parse-print-and-compare-and-math-is-strict` (the digits),
   `a-string-has-its-everyday-surface-and-two-constants-of-a-text-are-one` (the members);
   `JavaLoweringTest#theLoweringTable` (the zeros).
+
+## The copies of `copyOf` and the halves of a surrogate pair (2026-11-21, k82)
+
+**Invariant: `List.copyOf`, `Set.copyOf` and `Map.copyOf` answer a collection of `List.of`'s,
+`Set.of`'s and `Map.of`'s own kind as it is, as a JDK does; where text is made of UTF-16
+units -- `new String(char[])`, a concatenation, the `toString` of a builder they were
+appended to -- a high surrogate followed by a low one is the one character the two spell,
+on every backend, as a JVM string makes it; `chars()` answers the units `toCharArray`
+does.** Written from the API documentation and JDK 25's answers to probes
+([java-frontend-provenance.md](java-frontend-provenance.md)); the probes are
+`.todo/artefacts/k82-java-front-end-what-k71-left/`.
+
+- **`copyOf`**: `List.copyOf` answers a `ListN` whose kind is below `NULLS` (`OWN`, `ONE`:
+  the lists of `List.of`, `List.copyOf` and `Collectors.toUnmodifiableList`), and copies a
+  part of one (`PART`, a kind of its own now, which reports as `OWN`) and a list holding
+  nulls (`Stream.toList()`, a window). `Set.copyOf` answers a `SetN` that is no view
+  (`how != HELD`) and holds a `HashSet` of its own -- a `Map.of` map's keys hold the map's
+  key view; `Map.copyOf` a `MapN` that is no view. `CopyOf2.java`: 52 lines, the copies of
+  23 lists, 12 sets and 11 maps, a JDK's on the four backends. Cost (wasm):
+  `SzCopyOf` (a record copying its list) 135,202 -> 135,501 B (`List.copyOf` +236, the
+  kind's accessor +47); the size programs of k12 .. k71 +5 B or unchanged.
+- **Measured and not made: the empty `List.of()`, `Set.of()` and `Map.of()` as one object
+  each** (a JDK's are, and `List.copyOf` of an empty list and `Map.ofEntries()` answer them;
+  `toList()` of an empty stream is one of its own). As static fields of `ListN` and two
+  holder classes: `SzListOf` 118,015 -> 118,292 B (`List.of` +119, the eager initialization
+  +170), every `List.of` program +150 to +500 B, `SzAsList` +812 -- the global's value set
+  holds its default ahead of the initialization, so the fold keeps a cast in every `toArray`
+  a `List.of` list reaches (+42 B each) and two of them that were one function are two.
+- **The halves of a pair.** Before: the JVM joined them wherever a string was made (its
+  strings are UTF-16); the interpreter in a concatenation (a Java string) but not where a
+  builder's code points became a string; wasm nowhere (j98's `Halves.java`: length 2, 1 and
+  no `equals`; `Emoji.java`: appending `toCharArray`'s units printed the six bytes of two
+  surrogates on wasm). Now the point where all four make a string joins them: wasm's
+  `_charvec_to_str` (`WasmStringRuntimeBuilder.emitPairJoin`), `_string_concat` (a seam's
+  two three-byte sequences become the pair's four bytes) and `_str_cat` (a call whose piece
+  after the first starts with a low surrogate is joined two by two through
+  `_string_concat`, a fixnum piece's text made first), all three only in a module holding
+  this front end's run time (`WasmLispCompiler.pairsJoined`); the interpreter's
+  `%normalize-string` (the string read back from its Java text). A builder keeps a unit
+  appended alone as it came: its `length` and `charAt` count the halves as two, as a JDK's
+  do, and `toString` joins them; `new String(char[])` is such a builder's string (its own
+  join is gone). A string constant holding a surrogate with no partner keeps it on wasm
+  (`WasmLispCompiler.StringTable.encoded`: `getBytes` had made it `?`). `Seams.java`: chains
+  of concatenation with halves at every seam, the four backends' lines but for what is
+  printed alone (below). Cost (wasm, the 49 size programs against 2077268c9): +611 to +688
+  B (`_string_concat` +261, `_str_cat` +249, `_charvec_to_str` +101, the rest indices),
+  `SzCopyOf` +824 with its copy; a Scheme, a Starlark and two Clojure examples and a Lisp
+  program concatenating compile to the same bytes as before. Drafts taken out: a join at
+  every change of a builder in `java.lisp` (`%java-sb-seam` 1,544 B, the cut it needs 1,707
+  B, `%schar-set-runtime` 368 B: +5 KB in every builder program), `_str_cat` writing each
+  seam in place (+904 B), its fallback without a cast of a string piece (`TYPE-OF` +140 B:
+  the fold met an i31 in `_string_concat`'s parameter), the three joins in every module (a
+  program in any language paid them).
+- **`chars()`** is `Flows.chars` over `toCharArray`'s units, `codePoints()` the code points
+  (`Chars.java`). It answered the code points, so `(char)` of an element outside the first
+  plane lost its high bits: `"😀".chars()` appended back as `(char)` was U+F600 on every
+  backend.
+- **Left** (`.todo/k95`): written to the standard output, a surrogate with no partner is
+  `?` and two halves printed one after the other are their character on the interpreter
+  and the JVM (the host's encoder holds a high surrogate), as under a JDK, and three bytes
+  each on wasm (`PrintHalves.java`); `getBytes` of one is its three bytes on every backend
+  where a JDK writes `?`.
+- **Measured and not made: a `StringBuilder` as a `Comparable`** (the JDK's since 11):
+  `SzTreeSet` 141,714 -> 142,099 B (`Comparable.compareTo`'s arm and `%java-sb-p`, 297 B),
+  in every program that dispatches `compareTo` and makes a builder.
+- Pins: java-spec `a-deque-an-optional-the-utilities-and-the-older-classes` (`immutables()`:
+  the copies), `a-string-has-its-everyday-surface-and-two-constants-of-a-text-are-one`
+  (`halves()`).
 
 ## A joiner, a tokenizer, a bit set, a scanner and a char buffer (2026-11-21, k72)
 
@@ -2693,7 +2772,7 @@ documentation; what it leaves open is a JDK 25's answers to a grid. `java.time.c
   fixed clock, a field's predicate), texts, values already of the type and numbers for
   the year -- prints a JDK's 77 lines on the four: wasm 1,256,341 B.
 - The classes k35 left came with k52 ("java.time: what the formatter left" below).
-  `Duration.dividedBy` stays `.todo/k82`'s. The formatter and the queries came with k43
+  `Duration.dividedBy` stays `.todo/k95`'s. The formatter and the queries came with k43
   ("java.time: the formatter" below).
 - Pins: java-spec `dates-times-and-instants-are-read-from-their-texts-and-computed-with`
   (146 lines of the grid's kinds); a class the subset lacks is `java.util.Currency` and
@@ -3803,11 +3882,13 @@ holds none of it.** No files: `File`, `FileReader`, `java.nio.file` stay refused
 - **A writer holds the high surrogate a STRING ends in** (j87), as it held one an array
   ends in: `write("a\ud83d")` then `write("\ude00")` is the character's four bytes.
   Still open: a string holding a surrogate with no partner encodes to its three bytes
-  where a JDK writes `?` (`%java-utf8-bytes` is the host's `string-to-octets`), and a
-  string CONSTANT holding one is `?` on wasm. Measured 2026-11-18 (j98): the two halves
-  of a pair appended to a `StringBuilder` one `char` after the other are a string of
-  length 2 on the interpreter, 1 on the JVM (a JDK: 2 units, here one character), and
-  on wasm no `equals` of the character they spell (`.todo/k82`).
+  where a JDK writes `?` (`%java-utf8-bytes` is the host's `string-to-octets`;
+  `.todo/k95`). Measured 2026-11-18 (j98): the two halves of a pair appended to a
+  `StringBuilder` one `char` after the other were a string of length 2 on the
+  interpreter, 1 on the JVM (a JDK: 2 units, here one character), and on wasm no
+  `equals` of the character they spell; since k82 they are the one character on every
+  backend, and a string constant holding a surrogate alone keeps it on wasm ("The
+  copies of `copyOf` and the halves of a surrogate pair" below).
 - **`Double.longBitsToDouble`, `Float.intBitsToFloat`** are `%java-bits-binary` over
   `%java-nearest-binary` (exact, the subnormals included).
 - **Measured** (2026-11-17, the box and method of "Measured" below; wasm / class bytes, then
@@ -3964,7 +4045,7 @@ the probes are `.todo/artefacts/k12-java-front-end-what-the-time-limits-and-dura
   (`JavaLoweringTest#theLibraryIsJavaSourceLoweredAsFarAsTheProgramReaches`), but its
   class table reads 97 files of the library where it read 46 -- `Collection` names
   `Stream`, and a class's member types are read with it: 1.89 -> 1.95 s for a program of
-  one list on the interpreter (`.todo/k82`).
+  one list on the interpreter (`.todo/k95`).
 - **`String.compareTo(null)` throws** (k12: it answered 1, found by `sorted()` over a
   `null`): `%java-string-compare` and `-ignore-case` test their argument, 23 B of wasm
   in a program comparing strings.
@@ -4027,7 +4108,7 @@ the probes are `.todo/artefacts/k12-java-front-end-what-the-time-limits-and-dura
   stream's spliterator differs from a JDK's in the marks named in `deviations.md`, in
   its estimate where the count is not known (`Long.MAX_VALUE`; a JDK's is its
   source's), in being no source's own (`StreamSupport.stream(s, false).spliterator()
-  != s`), and `sorted()` always takes every element. Lead (`.todo/k82`): marks kept
+  != s`), and `sorted()` always takes every element. Lead (`.todo/k95`): marks kept
   only in a program that asks for one, which needs a member of the library lowered by
   what the program reaches, as the third function of a format is.
 - **The streams of a `Random`** (k26; `IntFlow.drawn` and its kin: so many elements of
@@ -4051,7 +4132,7 @@ the probes are `.todo/artefacts/k12-java-front-end-what-the-time-limits-and-dura
   `ConcurrentHashMap` with two more marks (`Collectors.grouped`, `once`, `merged`):
   `CONCURRENT`, `UNORDERED`, and `IDENTITY_FINISH` where the downstream has it. A JDK
   checks no argument of them for `null` when the collector is made (`Conmap.java`).
-- **Not there** (`.todo/k82`): a pipeline run in halves (`parallel()` is a flag), the
+- **Not there** (`.todo/k95`): a pipeline run in halves (`parallel()` is a flag), the
   marks of a stream's spliterator, a collector's `finisher` skipped under
   `IDENTITY_FINISH`.
 
@@ -4178,7 +4259,7 @@ member) or is refused where the request is sent (`deviations.md`, "The HTTP clie
   and in the client), with one 489,891 B. A program's own `HttpRequest` class stating a
   `timeout()` is refused by name where no builder was given one. A component that
   serves cannot time a request (an `IOException` with fetch's refusal: `.todo/148`).
-- **Not made** (`.todo/k82`): bodies as they arrive (`ofInputStream` reads a body
+- **Not made** (`.todo/k95`): bodies as they arrive (`ofInputStream` reads a body
   already in, `ofLines`, a program's own `BodySubscriber`), the `--host-fetch` reactor
   as a leg, `URI`'s constructors of several parts.
 

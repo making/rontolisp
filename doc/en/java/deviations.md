@@ -2,18 +2,25 @@
 
 The subset is partial by design. Where a program that the subset accepts behaves
 differently from the language specification is listed here, and it is the same on every
-backend but for the [threads](#threads) of a `.wasm`.
+backend but for the [threads](#threads) of a `.wasm` and the half of a surrogate pair it
+writes alone (with the strings, below).
 
 ## What differs
 
 **A string's elements are code points.** `length`, `charAt` and `substring` count Unicode
 code points where the language counts UTF-16 units, so they differ for a character outside
-the Basic Multilingual Plane. `hashCode` is the specified number, and `toCharArray` answers
-the UTF-16 units, which `new String(char[])` reads back. `toUpperCase` and `toLowerCase`
-change one character into one: `"ß".toUpperCase()` is `ß`, where a JDK answers `SS`. A
-surrogate with no partner in a string is its three bytes in UTF-8, where a JDK writes `?`.
-`Character.getNumericValue` of a character that is a number and no digit (`'Ⅷ'`, `'²'`,
-`'½'`) is -1, where a JDK answers 8, 2 and -2.
+the Basic Multilingual Plane. `hashCode` is the specified number. `toCharArray` and `chars()`
+answer the UTF-16 units, and where text is made of them -- `new String(char[])`, a
+concatenation, the `toString` of a `StringBuilder` they were appended to -- a high surrogate
+followed by a low one is the one character the two spell, so the text is the one the units
+came from. A `StringBuilder` holds a unit appended alone as it came: its `length` and
+`charAt` count the two halves of a pair appended one by one as two. `toUpperCase` and
+`toLowerCase` change one character into one: `"ß".toUpperCase()` is `ß`, where a JDK answers
+`SS`. A surrogate with no partner in a string is its three bytes in UTF-8, where a JDK writes
+`?`. Written to the standard output, such a surrogate is `?` and the two halves of a pair
+printed one after the other are the character they spell, as under a JDK, but on wasm,
+where each is its three bytes. `Character.getNumericValue` of a character that is a number
+and no digit (`'Ⅷ'`, `'²'`, `'½'`) is -1, where a JDK answers 8, 2 and -2.
 
 ```java
 void main() {
@@ -455,18 +462,17 @@ JDK's `InvalidPropertiesFormatException` has, but with no cause. The line of the
 **A stream runs in order on the thread that asks for its result.** `parallel()` and
 `parallelStream()` are kept (`isParallel()` answers `true`) and change nothing else: the
 elements go through one at a time in the source's order, and a collector's `combiner` and
-the third argument of `collect` and `reduce` are never called. `String.chars()` and
-`codePoints()` are one stream, of code points. A stream made inside `flatMap` is closed
-once its last element is taken or the stream stops asking (`findFirst`, `limit`, a match,
-`takeWhile`), as under a JDK; it is not closed where a later stage throws, where a JDK
-closes it. `iterator()` and `Stream.concat` take the elements of such a stream one at a
-time, where a JDK takes all of them before it hands on the first. A collector's
-`finisher` is always called, whatever its `characteristics()` say, and a collector made
-of a collector of the program's own class (`mapping`, `groupingBy`) reports none of that
-one's characteristics. A spliterator of the subset's classes never splits: `trySplit` answers
+the third argument of `collect` and `reduce` are never called. A stream made inside
+`flatMap` is closed once its last element is taken or the stream stops asking (`findFirst`,
+`limit`, a match, `takeWhile`), as under a JDK; it is not closed where a later stage throws,
+where a JDK closes it. `iterator()` and `Stream.concat` take the elements of such a stream
+one at a time, where a JDK takes all of them before it hands on the first. A collector's
+`finisher` is always called, whatever its `characteristics()` say, and a collector made of a
+collector of the program's own class (`mapping`, `groupingBy`) reports none of that one's
+characteristics. A spliterator of the subset's classes never splits: `trySplit` answers
 `null`. A collection changed while its spliterator is read throws
-`ConcurrentModificationException` before the next element, where a JDK hands that
-element on first.
+`ConcurrentModificationException` before the next element, where a JDK hands that element on
+first.
 
 **`mapMulti` and a gatherer hold what they give for one element until the later stages
 ask for it.** The function of `mapMulti` runs to its end for an element before a later

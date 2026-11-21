@@ -30,7 +30,13 @@ public interface Set<E> extends Collection<E> {
                 held.size() == 1 ? ImmutableCollections.ONE : ImmutableCollections.OWN);
     }
 
+    // a set of this kind is answered as it is: one holding a set of its own, which a
+    // map's keys and a view do not
     static <E> Set<E> copyOf(Collection<? extends E> c) {
+        if (c instanceof ImmutableCollections.SetN<?> set && set.how != ImmutableCollections.HELD
+                && set.held instanceof HashSet) {
+            return (Set<E>) set;
+        }
         HashSet<E> held = new HashSet<>();
         for (E element : c) {
             if (element == null) {

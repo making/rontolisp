@@ -106,7 +106,12 @@ public interface List<E> extends SequencedCollection<E> {
                 held.length == 1 ? ImmutableCollections.ONE : ImmutableCollections.OWN);
     }
 
+    // a list of this kind is answered as it is; a part of one and a list holding nulls
+    // are copied
     static <E> List<E> copyOf(Collection<? extends E> c) {
+        if (c instanceof ImmutableCollections.ListN<?> listed && listed.how < ImmutableCollections.NULLS) {
+            return (List<E>) listed;
+        }
         Object[] held = c.toArray();
         for (int i = 0; i < held.length; i++) {
             if (held[i] == null) {

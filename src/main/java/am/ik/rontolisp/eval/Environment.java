@@ -5268,12 +5268,25 @@ public final class Environment implements Scope {
 			};
 		}));
 		// %normalize-string: the transport boundary's explicit render. The interpreter
-		// has no framed-vs-charvec distinction, so there is nothing to normalize and
-		// the argument answers itself; the compile backends route a mutable character
-		// vector through their normalizer and pass anything else through unchanged.
-		// Strings only; identity and mutability of the result are unspecified.
+		// has no framed-vs-charvec distinction, so the argument answers itself; the
+		// compile backends route a mutable character vector through their normalizer
+		// and pass anything else through unchanged. A high surrogate followed by a low
+		// one is the character the pair spells, as a JVM string reads them and the WASM
+		// normalizer joins them in a program of the Java subset: here the string read
+		// back from its Java text. Strings only; identity and mutability of the result
+		// are unspecified.
 		env.defineFunction(LispNames.NORMALIZE_STRING, new LispFunction(LispNames.NORMALIZE_STRING, args -> {
 			requireArgCount(LispNames.NORMALIZE_STRING, args, 1);
+			if (args.get(0) instanceof LispString string) {
+				for (int i = 1; i < string.length(); i++) {
+					int low = string.codePointAt(i);
+					int high = string.codePointAt(i - 1);
+					if (low >= Character.MIN_LOW_SURROGATE && low <= Character.MAX_LOW_SURROGATE
+							&& high >= Character.MIN_HIGH_SURROGATE && high <= Character.MAX_HIGH_SURROGATE) {
+						return new LispString(string.value());
+					}
+				}
+			}
 			return args.get(0);
 		}));
 		// %substring: the characters [start, end) of a string, as a string nothing
