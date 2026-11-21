@@ -432,10 +432,19 @@ UTF-8 のバイト列として読みます。そのため、テキストでな�
 デコードします。U+FFFD の個数は JDK 25 と同じです。`UTF-16` の `PrintStream` の `charset()` は、
 最初の出力のあと、同じ名前の別のオブジェクトを返します。
 
-**クラスオブジェクトはクラスが何であるかを答えるだけで、リフレクションはありません。**
-`Class` は、名前、スーパークラス、値がインスタンスかどうかの検査、キャスト、列挙型の定数を
-返します。名前によるクラスの取得（`Class.forName`）、クラスのメンバー、コンストラクタ、
-アノテーションの取得、`getInterfaces()` は、コンパイル時に名前を示して拒否されます。
+**クラスオブジェクトはクラスが何であるかを答え、クラスの中身についてはメソッドの名前だけを答えます。**
+`Class` は、名前、スーパークラス、値がインスタンスかどうかの検査、キャスト、列挙型の定数、
+宣言するメソッドを返します。`getDeclaredMethods` は、クラスのソースが宣言するメソッドごとに
+`Method` を返し、続けて言語が暗黙に宣言するメソッド（列挙型の `values` と `valueOf`、レコードの
+アクセサー、`toString`、`hashCode`、`equals`）を返します。JDK の順序は JDK 独自のものであり、
+JDK の配列にはコンパイラーが追加するメソッド（ラムダ式の本体、ブリッジ、列挙型の `$values`）も
+含まれます。`Method` は名前と宣言するクラスを返し、同じメソッドを表す別の `Method` と等価です。
+`Method` の `toString` は実行時に拒否されます。JDK のクラスはこのサブセット独自のソースであり、
+JDK とはメソッドが異なるので、JDK のクラスの `getDeclaredMethods` は実行時に拒否されます。
+ソースパスにあるライブラリのクラスは答えます。それ以外のリフレクション、つまり名前による
+クラスの取得（`Class.forName`）、クラスのそれ以外のメンバー（`getMethods`、フィールド、
+コンストラクタ）、アノテーション、メソッドの型、修飾子、呼び出し、`getInterfaces()` は、
+コンパイル時に名前を示して拒否されます。
 JDK のクラスのスーパークラスは、このサブセットでの宣言に従います。
 `StringBuilder.class.getSuperclass()` は `Object` です（JDK では、間に JDK 独自のクラスが
 あります）。`isAssignableFrom` は、このサブセットのクラスが宣言するインターフェースで判定します
@@ -771,8 +780,9 @@ WebSocket です。`version(..)` で指定した値は保持され、問い合�
 どれも、構文の名前と位置を示すエラーになります。
 
 - `assert`。
-- リフレクション。`Class.forName`、クラスのメンバー、コンストラクタ、アノテーションの取得
-  （`getMethods`、`getDeclaredFields`、`newInstance`）、`getInterfaces()`。
+- リフレクション。`Class.forName`、`getDeclaredMethods` 以外のクラスのメンバー、コンストラクタ、
+  アノテーションの取得（`getMethods`、`getDeclaredFields`、`newInstance`）、`Method` の名前と
+  宣言するクラス以外、`getInterfaces()`。
 - `long`、`float`、`double`、`boolean` に対する `switch`。修飾した `super` を通すメソッド参照と
   フィールド（`Interface.super::m`、`Outer.super.x`）。
 - `String`、`StringBuilder`、ボックスを継承するクラス。

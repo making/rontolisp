@@ -143,27 +143,51 @@ second context a server. Open items: `.todo/l03` (sessions), `.todo/l04` (asynch
 `ServletContext.log` writes to `System.err`. A form read into parameters is at most 2 MiB
 (`Request.MAX_FORM_SIZE`).
 
-## What the rontolisp side needs (measured 2026-11-21 on `f485c352e`; `.todo/k97` starts here)
+## What the rontolisp side needs (measured 2026-11-21 on `f485c352e`; made by k97 the same day)
 
 Measured by compiling a servlet program with `--java-source-path
 servlet-httpserver/src/main/java:jakarta.servlet-api-6.1.0-sources.jar` and working past each
-refusal on scratch copies of the two source trees. **Seven refusals, six of them in the API's
-sources (which are not ours to edit, so the front end has to take them), and with them worked
-around the program serves** on the interpreter and as a component under `wasmtime serve` 49.0.0.
+refusal on scratch copies of the two source trees: **seven refusals, six of them in the API's
+sources** (not ours to edit, so the front end takes them). k97 made five in the front end; the
+hello world needs no other, and serves on the four targets.
 
-| Refused | Where | Reached by |
-|---|---|---|
-| the modifier `transient` | `GenericServlet.java:53`, `GenericFilter.java:52`, `ServletRequestEvent.java:32` | every servlet |
-| `java.util.EventObject` | `ServletContextEvent` and the other events | `WebContext.start()` |
-| `java.util.EventListener` | the listener interfaces, `WebContext` | `WebContext.start()` |
-| `java.lang.reflect.Method` (`Class.getDeclaredMethods()`, `getSuperclass()`, `Method.getName()`) | `HttpServlet.doOptions` -> `getAllDeclaredMethods` | every `HttpServlet`, through `service` |
-| `java.io.CharConversionException` | `ServletOutputStream.print(String)` | `HttpServlet.doTrace` |
-| `Cloneable` / `Object.clone()` | `Cookie` | a program naming `Cookie` (`.todo/k16`) |
-| `Locale.forLanguageTag(String)` | this module's `Fields.locales` | `getLocale()` / `getLocales()` |
+| Refused | Where | Reached by | Since k97 |
+|---|---|---|---|
+| the modifier `transient` | `GenericServlet.java:53`, `GenericFilter.java:52`, `ServletRequestEvent.java:32` | every servlet | taken: a field's, meaning nothing (no serialization); refused on a method, a class, a constructor, an initializer and an interface's field as javac refuses it |
+| `java.util.EventObject` | `ServletContextEvent` and the other events | `WebContext.start()` | library source (`toString` is the class's binary name and `[source=..]`, a JDK 25's) |
+| `java.util.EventListener` | the listener interfaces, `WebContext` | `WebContext.start()` | library source |
+| `java.lang.reflect.Method` (`Class.getDeclaredMethods()`, `getSuperclass()`, `Method.getName()`) | `HttpServlet.doOptions` -> `getAllDeclaredMethods` | every `HttpServlet`, through `service` | the names of a class's declared methods (`.kb/java-frontend.md`, "A class as a value") |
+| `java.io.CharConversionException` | `ServletOutputStream.print(String)` | `HttpServlet.doTrace` | library source |
+| `Cloneable` / `Object.clone()` | `Cookie` | a program naming `Cookie` | `.todo/k16` (`cannot find symbol: class Cloneable` at `Cookie.java:60`) |
+| `Locale.forLanguageTag(String)` | this module's `Fields.locales` | `getLocale()` / `getLocales()` | `.todo/l08`: legitimate Java, so the front end's, and a family (a `Locale` of any language and every consumer of one) |
 
-- `doOptions` is the one that needs a decision: it asks which `doXxx` methods the servlet's
-  class and the classes above it DECLARE, by name (`.todo/k89`: reflection over what the
-  lowering knows).
+- **`doOptions` was measured before it was decided.** Every `HttpServlet` reaches it through
+  `service`, so without it no servlet program compiles; the names alone are what it reads.
+  The hello world with `doOptions`' reflection cut out of a scratch copy is 941,069 B as a
+  component, with the names 951,279 (+10,210: `Class.getDeclaredMethods()` 953 B of code,
+  `%declared-methods` 184 -- one string a class object --, `Method`'s `equals` and `hashCode`
+  668, the class objects of the servlet's class and the three above it, `doOptions` and
+  `getAllDeclaredMethods` themselves, and the resume bodies they add). A first form making
+  a `Method` per name in the lowered code was 3,728 B for the 29 names of three classes;
+  one string a class split by `Class` is the form kept. The rest of reflection stays
+  `.todo/k89`'s.
+- **Pinned by** `FetchSpecE2eTest#javaHttpServer`, the program `servlet` of
+  `java-http-server-spec.yaml` (`sourcePath:` this module, `sourceDep:` the API: the four
+  legs read both as source, the JDK leg runs the module javac compiled against the API's
+  jar): a listener, a filter on every path, servlets by an exact path, a prefix and an
+  extension, a form, a forward and an include, the 405 of the API's message bundle, OPTIONS,
+  HEAD, TRACE, a redirect, `sendError`, an exception, a response its buffer committed, a
+  204, the context root's redirect, a 404 and the stop; every leg answers the JDK's 19
+  responses and logs the JDK's lines (the servlet's `init` and `destroy`, the context's).
+  Its helper is `note`, not `log`: inside a servlet the simple name `log` is
+  `GenericServlet.log`, the context's (JLS 15.12.1, the innermost class with a member of the
+  name), which writes to `System.err` -- on every leg, as under a JDK.
+- **A real container, by hand** (not a test): the same servlets registered by the same calls
+  through a `ServletContainerInitializer` of embedded Tomcat 11.0.27 answer every
+  application line the same (bodies, parameters, forward, include, filter, listener,
+  redirect, the 405 message); what differs is the container's own -- its error pages,
+  `Content-Language: en`, OPTIONS without `TRACE` (its `allowTrace` is false), and
+  `setBufferSize(16)` leaving the response uncommitted.
 - What already worked, unchanged: the API's `ResourceBundle.getBundle` of its
   `LocalStrings.properties` out of the source root (the 405 of an unsupported method says
   `HTTP method POST is not supported by this URL`), `MessageFormat`, `Cookie`'s
@@ -172,18 +196,30 @@ around the program serves** on the interpreter and as a component under `wasmtim
   fields and a field added twice sent apart, a form and a reader, the chunked 20,000-octet
   body. Not asked: whether a request field sent twice is two values or one joined
   (`.todo/k15`).
-- **Sizes** (component bytes): a program of one servlet answering `Hello, world!` 961,157;
-  one of two servlets, a filter, a listener, cookies, dates, dispatches 1,191,534. A served
-  `com.sun.net.httpserver` hello is 432,210 (`.kb/java-frontend.md`, "Sizes"), so the servlet
-  layer is ~530 KB for one servlet: not yet broken down (k97's "pay only for what you use").
+- **Sizes** (2026-11-21, k97's tree, wasmtime 49.0.0): a program of one servlet answering
+  `Hello, world!` is 951,279 B as a component, 12,505,528 as a `--native` executable and
+  1,095,323 as a class; the corpus program (five servlets, a filter, a listener) 1,073,291 /
+  13,632,056 / 1,255,618. A `com.sun.net.httpserver` hello on the same tree is 476,625 /
+  8,212,072. **The program pays for what it reaches** of the API and the container: of the
+  hello component's 780,804 B of code (`-Drontolisp.wasm.debug-func-sizes`), the API is
+  8,262 (61 of its functions) and the container 34,719; the library classes they reach are
+  125,109 (`ConcurrentHashMap` 10,955, `HashMap` 9,834, `MessageFormat` 9,579 and
+  `Properties` 5,458 for the API's message bundle, `URI` 9,476, `ThreadPoolExecutor` 6,363
+  for the container's own pool); the rest is the run time, the funcall dispatch (113,980:
+  `_dispatch_spread` alone 36 KB, growing with the functions) and the resume bodies of a
+  program whose requests are threads (94,425, where the plain hello has 31,807:
+  `.todo/k15`, `.todo/k19`).
 - **What a component answers differently, by the transport and not by the container**:
   `wasi:http` hands no `Host` field and no peer, so `getServerName()` is `localhost`,
   `getServerPort()` 80, `getRemoteAddr()` `0.0.0.0`; every response with a body is
-  `transfer-encoding: chunked` on the wire whatever length the container told.
+  `transfer-encoding: chunked` on the wire whatever length the container told. A
+  `--native` executable writes no `Date` field. The reason phrase of a 302 is the JDK
+  server's `Temporary Redirect` on the interpreter and the JVM, `Found` on the other two.
 - The container starts a cached thread pool unless `setExecutor` is called; what that costs a
   compiled program against a plain call is `.todo/k15`'s question.
 - A module of its own is compiled from its `-sources.jar`, which its build attaches
   (`maven-source-plugin`), or from `servlet-httpserver/src/main/java` as a directory root.
+  User doc: `doc/*/java/servlet.md`.
 
 ## Tests
 

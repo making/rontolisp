@@ -248,11 +248,14 @@ class FetchSpecE2eTest {
 	 * {@code endless} marks a program no request stops, which is ended once asked;
 	 * {@code listening} is the line saying its port (its one group); {@code unshown} the
 	 * lines of a response body left out, what the client and the transports add on their
-	 * own.
+	 * own. {@code sourcePath} are directories of the repository and {@code sourceDep}
+	 * Maven coordinates of the libraries it uses: on the source path of every leg (a
+	 * coordinate's sources jar), and compiled by javac onto the JDK leg's class path (a
+	 * coordinate's jar).
 	 */
 	record Served(String name, String file, @Nullable String source, @Nullable String example, @Nullable String log,
 			@Nullable Boolean endless, @Nullable String listening, @Nullable List<String> unshown,
-			List<Asked> requests) {
+			@Nullable List<String> sourcePath, @Nullable List<String> sourceDep, List<Asked> requests) {
 
 		String text() throws IOException {
 			return (this.example != null) ? Files.readString(Path.of("examples", this.example), StandardCharsets.UTF_8)
@@ -266,6 +269,67 @@ class FetchSpecE2eTest {
 	}
 
 	record ServedPrograms(List<Served> programs) {
+	}
+
+	/**
+	 * A served program's libraries: the options every leg compiling it takes, the jars
+	 * the JDK leg runs it with.
+	 */
+	record Libraries(List<String> options, List<Path> jars) {
+
+		static Libraries of(Served program) throws am.ik.maven.MavenResolutionException {
+			List<String> roots = new ArrayList<>();
+			if (program.sourcePath() != null) {
+				for (String directory : program.sourcePath()) {
+					roots.add(Path.of(directory).toAbsolutePath().toString());
+				}
+			}
+			List<Path> jars = new ArrayList<>();
+			if (program.sourceDep() != null) {
+				am.ik.maven.MavenResolver maven = ExamplesE2eTest.mavenResolver();
+				for (String coordinate : program.sourceDep()) {
+					am.ik.maven.Artifact artifact = am.ik.maven.Artifact.parse(coordinate);
+					jars.add(maven.artifact(artifact));
+					roots.add(
+							maven
+								.artifact(new am.ik.maven.Artifact(artifact.groupId(), artifact.artifactId(),
+										artifact.version(), "sources", "jar"))
+								.toString());
+				}
+			}
+			return new Libraries(roots.isEmpty() ? List.of()
+					: List.of("--java-source-path", String.join(java.io.File.pathSeparator, roots)), jars);
+		}
+
+		/**
+		 * The JDK leg's class path: the jars, and the program's source path compiled
+		 * against them into a directory of the leg's; {@code null} for no library.
+		 */
+		@Nullable String classPath(Served program, Path dir) throws Exception {
+			List<String> entries = new ArrayList<>();
+			for (Path jar : this.jars) {
+				entries.add(jar.toString());
+			}
+			if (program.sourcePath() != null) {
+				Path classes = Files.createDirectories(dir.resolve("library-classes"));
+				List<String> command = new ArrayList<>(List
+					.of(Path.of(System.getProperty("java.home"), "bin", "javac").toString(), "-d", classes.toString()));
+				if (!entries.isEmpty()) {
+					command.addAll(List.of("-cp", String.join(java.io.File.pathSeparator, entries)));
+				}
+				for (String directory : program.sourcePath()) {
+					try (Stream<Path> files = Files.walk(Path.of(directory))) {
+						files.filter(file -> file.toString().endsWith(".java"))
+							.sorted()
+							.forEach(file -> command.add(file.toAbsolutePath().toString()));
+					}
+				}
+				exec(dir, command);
+				entries.add(classes.toString());
+			}
+			return entries.isEmpty() ? null : String.join(java.io.File.pathSeparator, entries);
+		}
+
 	}
 
 	/** What one leg of a served program gave: each response, its log, how it ended. */
@@ -680,9 +744,20 @@ class FetchSpecE2eTest {
 		}
 		List<DynamicNode> programs = new ArrayList<>();
 		for (Served program : spec.programs()) {
+			Libraries libraries;
+			try {
+				libraries = Libraries.of(program);
+			}
+			catch (am.ik.maven.MavenResolutionException ex) {
+				// offline, with no copy in the local repository
+				programs.add(dynamicContainer(program.name(), Stream.of(dynamicTest("(skipped)",
+						() -> abort(program.name() + "'s libraries cannot be had: " + ex.getMessage())))));
+				continue;
+			}
 			Map<String, Callable<Answers>> runs = new java.util.LinkedHashMap<>();
 			for (String leg : legs) {
-				runs.put(leg, started(program.name() + "-served-" + leg, () -> serve(leg, program, originUrl)));
+				runs.put(leg,
+						started(program.name() + "-served-" + leg, () -> serve(leg, program, libraries, originUrl)));
 			}
 			List<DynamicNode> ran = new ArrayList<>();
 			runs.forEach((leg, run) -> ran.add(servedLeg(leg, program, run)));
@@ -731,7 +806,7 @@ class FetchSpecE2eTest {
 	// Starts a program as a server on one leg, asks it the requests in turn and ends
 	// it: the last request stops a program that can stop; the host's is destroyed. A
 	// file in a package is under its directories.
-	private static Answers serve(String leg, Served program, String originUrl) throws Exception {
+	private static Answers serve(String leg, Served program, Libraries libraries, String originUrl) throws Exception {
 		String name = Path.of(program.file()).getFileName().toString();
 		String stem = name.substring(0, name.lastIndexOf('.'));
 		Path dir = Files.createDirectories(workDir.resolve(stem + "-served-" + leg));
@@ -748,23 +823,30 @@ class FetchSpecE2eTest {
 					.replace(PORT_MARK, Integer.toString(reserved)),
 				StandardCharsets.UTF_8);
 		String launcher = Path.of(System.getProperty("java.home"), "bin", "java").toString();
-		List<String> command;
+		List<String> command = new ArrayList<>();
+		List<String> options = libraries.options();
 		if (leg.equals(JDK)) {
-			command = List.of(launcher, source.toString());
+			command.add(launcher);
+			String classPath = libraries.classPath(program, dir);
+			if (classPath != null) {
+				command.addAll(List.of("-cp", classPath));
+			}
+			command.add(source.toString());
 		}
 		else if (leg.equals(Leg.INTERPRETER.key())) {
-			command = (BINARY != null) ? List.of(Path.of(BINARY).toAbsolutePath().toString(), source.toString())
-					: List.of(launcher, "-cp", System.getProperty("java.class.path"),
-							"am.ik.rontolisp.cli.RontoLispCli", source.toString());
+			command.addAll((BINARY != null) ? List.of(Path.of(BINARY).toAbsolutePath().toString()) : List.of(launcher,
+					"-cp", System.getProperty("java.class.path"), "am.ik.rontolisp.cli.RontoLispCli"));
+			command.addAll(options);
+			command.add(source.toString());
 		}
 		else if (leg.equals(Leg.JVM.key())) {
-			compile(source, dir.resolve("Served.class"), "--class-name", "Served");
+			compile(source, dir.resolve("Served.class"), with(options, "--class-name", "Served"));
 			command = List.of(launcher, "-cp", dir.toString(), "Served");
 		}
 		else if (nativeLeg) {
 			Path executable = executableOf(dir, stem);
 			try {
-				compile(source, executable, "--native");
+				compile(source, executable, with(options, "--native"));
 			}
 			catch (UnsupportedOperationException ex) {
 				String message = String.valueOf(ex.getMessage());
@@ -780,7 +862,7 @@ class FetchSpecE2eTest {
 				throw new Skipped("no usable wasmtime on PATH");
 			}
 			Path served = dir.resolve(stem + ".wasm");
-			compile(source, served, "--component");
+			compile(source, served, with(options, "--component"));
 			command = List.of("wasmtime", "serve", "-W", "gc=y", "-W", "exceptions=y", "-S", "cli=y", "--addr",
 					"127.0.0.1:0", served.toString());
 		}
@@ -822,6 +904,13 @@ class FetchSpecE2eTest {
 		finally {
 			process.destroyForcibly().waitFor();
 		}
+	}
+
+	// The flags of a compile, then the options of a served program's libraries.
+	private static String[] with(List<String> options, String... flags) {
+		List<String> all = new ArrayList<>(List.of(flags));
+		all.addAll(options);
+		return all.toArray(String[]::new);
 	}
 
 	// A response without the lines the program leaves unshown.

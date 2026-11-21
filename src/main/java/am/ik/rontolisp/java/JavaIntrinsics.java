@@ -1996,6 +1996,11 @@ final class JavaIntrinsics {
 		natives.put("java.lang.Class.test0(Object,Object)", (lowering, call) -> call("if",
 				call("funcall", call.argument(0), call.argument(1)), JavaForms.T, JavaForms.NIL));
 		natives.put("java.lang.Class.constants0(Object)", (lowering, call) -> call("funcall", call.argument(0)));
+		natives.put("java.lang.Class.methods0(Class)",
+				(lowering, call) -> list(new LispSymbol("%declared-methods"), call.argument(0)));
+		natives.put("java.lang.Class.method0(Class,String,int)",
+				(lowering, call) -> lowering.library("java.lang.reflect.Method", "declared",
+						List.of(call.argument(0), call.argument(1), call.argument(2))));
 		String thread = THREAD + ".";
 		natives.put(thread + "carrier0(Thread)", runtime("thread-carrier"));
 		natives.put(thread + "adopt0(Thread)", runtime("thread-adopt"));

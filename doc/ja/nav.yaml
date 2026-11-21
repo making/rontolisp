@@ -355,5 +355,7 @@ sections:
         title: 概要
       - file: java/classes.md
         title: 使える JDK のクラス
+      - file: java/servlet.md
+        title: Servlet アプリケーション
       - file: java/deviations.md
         title: 言語との差異

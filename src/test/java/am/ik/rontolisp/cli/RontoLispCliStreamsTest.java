@@ -837,6 +837,11 @@ class RontoLispCliStreamsTest {
 				"--source-language", "java")[2])
 			.contains("UnsupportedOperationException: the format type Number of MessageFormat is not supported by the"
 					+ " experimental Java subset yet");
+		// and the methods a JDK class declares, which are not the library's
+		assertThat(runReporting("-e", "void main() { IO.println(String.class.getDeclaredMethods().length); }",
+				"--source-language", "java")[2])
+			.contains("UnsupportedOperationException: getDeclaredMethods() of java.lang.String is not supported by the"
+					+ " experimental Java subset yet");
 		// System.exit ends the program with its status, after what it printed
 		assertThat(runReporting("-e", "void main() { IO.println(\"out\"); System.exit(3); IO.println(\"no\"); }",
 				"--source-language", "java"))

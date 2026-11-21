@@ -95,7 +95,13 @@ halves of a surrogate pair joined where text is made on every backend, `chars()`
 UTF-16 units: k82 (2026-11-21; "The copies of `copyOf` and the halves of a surrogate pair"
 below); files (`File`, the file streams and readers, `RandomAccessFile`, a scanner, a print
 stream and a formatter of a file, `java.nio.file`'s `Path` and `Files`) and the strict
-codecs of `Files`: k86 (2026-11-21; "Files" below).
+codecs of `Files`: k86 (2026-11-21; "Files" below); the modifier `transient`,
+`java.util.EventObject` and `EventListener`, `java.io.CharConversionException` and the
+names of a class's declared methods (`Class.getDeclaredMethods`, a `Method` of its name),
+which a Servlet program over `servlet-httpserver/` and the Jakarta Servlet API's sources
+jar needed, and that program on the four targets: k97 (2026-11-21;
+`.kb/servlet-httpserver.md`, "What the rontolisp side needs"; `.todo/l08` and `k16` are
+what it left).
 
 ## Where it sits
 
@@ -457,6 +463,12 @@ is refused by name where it is reached, never where a class is read.** Asked for
   (`java-spec.yaml` `a-program-uses-a-library-read-as-source-from-its-source-path`:
   `library:` is zipped to a sources jar for the four legs and compiled by javac for the
   JDK leg, `provided:` is what javac alone reads).
+- **The second library: the Jakarta Servlet API 6.1 with the container of
+  `servlet-httpserver/`** (k97, 2026-11-21; `.kb/servlet-httpserver.md`, "What the
+  rontolisp side needs"). Seven refusals, five of them made here (`transient`,
+  `EventObject`, `EventListener`, `CharConversionException`, the declared methods' names);
+  a program of one servlet reaches 61 functions of the API. The served corpus reads the
+  API's sources jar through `am.ik.maven` in the test and skips where it cannot be had.
 
 ## Resources (2026-11-20, k53; a computed name, bundles, services: k58; URLs, a computed service: k69; directories, the playground's uploads, a bundle class only a computed name finds: k75)
 
@@ -1093,6 +1105,10 @@ goal compiles the program `src/main/java` holds to a `.wasm`, which collides wit
   instance of a class UNDER `Name`, as a member's implicit receiver is, so an anonymous
   `new Step<..>() { .. Step.this.apply(a) .. }` made in a default method of `Step` named
   itself and ran for ever (YAVI's `Arguments1Validator.this.validate(..)`).
+- **`transient`** (k97, 2026-11-21) is taken on a field and means nothing: nothing
+  serializes. On a method, a class, a constructor and a field of an interface it is javac's
+  `modifier transient not allowed here` (with `private`, `protected` and `volatile` on an
+  interface's field, which were taken until then); `strictfp` stays refused by name.
 - **`super.m()`, `Outer.super.m()`, `I.super.m()`** call one body directly (`superCall`): the
   superclass's, the superclass's of the class around on the instance around, the default of an
   interface the class names in its `implements`. `I.super::m` stays refused.
@@ -2870,7 +2886,7 @@ documentation; what it leaves open is a JDK 25's answers to a grid. `java.time.c
   ("java.time: the formatter" below).
 - Pins: java-spec `dates-times-and-instants-are-read-from-their-texts-and-computed-with`
   (146 lines of the grid's kinds); a class the subset lacks is `java.util.Currency` and
-  `java.util.EventListener` in `JavaLoweringTest#aLibraryOfTheSourcePathIsLoweredAsFarAsTheProgramReaches`
+  `java.util.Observer` (`EventListener` until k97 made it) in `JavaLoweringTest#aLibraryOfTheSourcePathIsLoweredAsFarAsTheProgramReaches`
   and in the library of `a-program-uses-a-library-read-as-source-from-its-source-path`
   (it was `java.time.LocalDate`).
 
@@ -4687,7 +4703,9 @@ class of a package of our own was needed (`deviations.md`, "The HTTP server").
   whole; its program `httpbin` is `examples/java/httpbin/Httpbin.java` read as it stands
   (`example:`), bound to the `PORT` the harness sets, never stopped (`endless:`), with
   the `Host` and `User-agent` lines of a body left out (`unshown:`): every leg answers the
-  JDK's seven bodies byte for byte, k13), `HttpHandlerTest#stoppableSeamServesJoinsAndStops` (the stop by a handler),
+  JDK's seven bodies byte for byte, k13; its program `servlet` is a Servlet application on
+  `servlet-httpserver/` read with the API's sources jar, `sourcePath:` / `sourceDep:`, k97),
+  `HttpHandlerTest#stoppableSeamServesJoinsAndStops` (the stop by a handler),
   `#directiveSupportsTheDelayedResponse` (the writer on the interpreter's mirror),
   `JavaLoweringTest#theLibraryIsJavaSourceLoweredAsFarAsTheProgramReaches` (the begin
   form, the wait after `main` on the host, and on one stack the scheduler's entry, the
@@ -4959,6 +4977,29 @@ no object.** What YAVI's schema example asked (`Map<Class<?>, ..>`, `type == Map
   static type's, else the vector's, and each is one of the seven a vector tells or of
   the array types `arrayClass` was asked (`arrayRecords`) -- so the `cond` over those is
   complete. `getClass()` of an exact array type (`int[]`) is its literal's object.
+- **The methods a class declares, by name** (k97, 2026-11-21; `HttpServlet.doOptions` asks
+  them of every servlet: `.kb/servlet-httpserver.md`). `getDeclaredMethods()` asks the
+  native `methods0`, `(|%declared-methods| class)`, a function made only where the program
+  reaches the member (`declaredMethodsFunction`, last of `classObjects`; with no class
+  object, a `cond` of no arm): of each class object made, one string of the names, a space
+  between two -- the methods the source declares in its order (`declaredMethods`, from the
+  syntax, so the front end's own and a lazily added `values()` are not among them), then
+  what JLS 8.9.3 and 8.10.3 declare implicitly (an enum's `values` and `valueOf`, a
+  record's accessors, `toString`, `hashCode`, `equals` it does not declare); `""` for an
+  array or a primitive type (a JDK's answer); `NIL` for an intrinsic class or the library's
+  own (its source is not the JDK's), which `getDeclaredMethods` refuses where the program
+  runs. `Class` cuts the string and makes each `Method` through the native `method0` --
+  a call of `Method.declared`, package-private, so the library compiles under javac without
+  a constructor public that a JDK's is not. A `Method` holds its class, its name and its
+  place among the names: `equals` is the same class and place (so a method is equal to
+  itself from another call, as a JDK's), `hashCode` the specified exclusive-or of the two
+  names' hash codes, `toString` refused where the program runs (its text needs the erased
+  types and the modifiers, `.todo/k89`). Measured against JDK 25 over enums, records,
+  interfaces, an anonymous class, overloads and a generic method: the same names but the
+  ones javac adds of its own (`lambda$count$0`, a bridge, `$values`), which this has not
+  (`deviations.md`); a JDK's order is unspecified and differs. Cost: nothing in a program
+  that does not reach the member (byte-identical); a first form making a `Method` per name
+  in the lowered code was 3,728 B of wasm for 29 names, the string a class 184.
 - **A class object initializes nothing; an enum's constants do.** A literal reads a
   variable; `getEnumConstants()` calls `values()`, whose function initializes. For the
   order of initialization what holds an enum's class object calls its `values()`, as
@@ -4969,7 +5010,8 @@ no object.** What YAVI's schema example asked (`Map<Class<?>, ..>`, `type == Map
 - **`==` of two parameterizations no value has both of** is the compiler's `incomparable
   types: Class<String> and Class<Integer>` (`distinctArguments`: one class, at some place
   two types that are neither wildcards nor type variables and differ; any generic class).
-- **Not the language's** (`deviations.md`): no reflection and no `getInterfaces()` (an
+- **Not the language's** (`deviations.md`): no reflection but the names of the declared
+  methods, and no `getInterfaces()` (an
   intrinsic class implements the interfaces the program names, `meets`, so the answer
   would be the program's); the class above a library class is this library's
   (`StringBuilder` under `Object`); `synchronized (Name.class)` still holds the

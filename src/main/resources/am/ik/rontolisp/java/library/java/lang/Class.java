@@ -4,14 +4,15 @@
 package java.lang;
 
 import java.io.InputStream;
+import java.lang.reflect.Method;
 
 // The object standing for a class, an interface, an array type or a primitive type. The
 // lowering makes one of each type a program has as a value -- a class literal or
 // getClass() read as anything but a comparison with another or its name -- before
 // anything of the program runs, with what the program asks of one: the classes above it
 // where a member reads them, the test of an instance where isInstance or cast is
-// reached, the constants where getEnumConstants is. It has no reflection: no member, no
-// constructor and no class by name.
+// reached, the constants where getEnumConstants is. Of reflection it has the names of
+// the methods a class declares; no other member, no constructor and no class by name.
 public final class Class<T> {
 
     private final String name;
@@ -152,6 +153,33 @@ public final class Class<T> {
         return constants == null ? null : (T[]) constants0(constants);
     }
 
+    // the methods the class's source declares, the ones the language declares with them
+    // (an enum's values and valueOf, a record's accessors and Object's three) after
+    // them; none of an array or a primitive type. A class of the JDK has the methods of
+    // a source that is not this library's
+    public Method[] getDeclaredMethods() {
+        String names = methods0(this);
+        if (names == null) {
+            throw new UnsupportedOperationException(
+                    "getDeclaredMethods() of " + name + " is not supported by the experimental Java subset yet");
+        }
+        int count = names.isEmpty() ? 0 : 1;
+        for (int at = 0; at < names.length(); at++) {
+            if (names.charAt(at) == ' ') {
+                count++;
+            }
+        }
+        Method[] declared = new Method[count];
+        int start = 0;
+        for (int index = 0; index < count; index++) {
+            int end = names.indexOf(' ', start);
+            end = end < 0 ? names.length() : end;
+            declared[index] = method0(this, names.substring(start, end), index);
+            start = end + 1;
+        }
+        return declared;
+    }
+
     // a resource beside the class, as its loader finds it: a name with no leading '/' in
     // the class's package. The lowering finds it, so the name is a constant; a class of
     // the JDK and a primitive type have none of the program's
@@ -184,4 +212,11 @@ public final class Class<T> {
     private static native boolean test0(Object test, Object value);
 
     private static native Object[] constants0(Object constants);
+
+    // the names of the methods the class declares, a space between two; null for a class
+    // whose methods are not known
+    private static native String methods0(Class<?> type);
+
+    // a new object standing for the method of the class at that place among them
+    private static native Method method0(Class<?> type, String name, int index);
 }

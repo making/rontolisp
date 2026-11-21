@@ -756,6 +756,8 @@ void main() throws IOException, InterruptedException {
 A server on its own, and how to run it on each target, is
 [`examples/java/http`](https://github.com/making/rontolisp/tree/develop/examples/java/http).
 What the transports cannot give and what is not there:
-[Deviations](deviations.md#the-http-server).
+[Deviations](deviations.md#the-http-server). A program written against the Jakarta Servlet
+API serves through this server on a container compiled with it: [A Servlet
+application](servlet.md).
 
 What differs from the language and what is refused: [Deviations](deviations.md).

@@ -760,6 +760,8 @@ void main() throws IOException, InterruptedException {
 サーバーだけのプログラムと、各ターゲットでの実行手順は
 [`examples/java/http`](https://github.com/making/rontolisp/tree/develop/examples/java/http)
 にあります。トランスポートが提供できないものと、用意していないメンバーは
-[言語との差異](deviations.md#the-http-server)にあります。
+[言語との差異](deviations.md#the-http-server)にあります。Jakarta Servlet API に対して書いた
+プログラムも、一緒にコンパイルしたコンテナを通してこのサーバーで動きます
+（[Servlet アプリケーション](servlet.md)）。
 
 言語と動作が異なる点と、拒否される構文は[言語との差異](deviations.md)にあります。

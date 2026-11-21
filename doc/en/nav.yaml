@@ -355,5 +355,7 @@ sections:
         title: Overview
       - file: java/classes.md
         title: The JDK classes
+      - file: java/servlet.md
+        title: A Servlet application
       - file: java/deviations.md
         title: Deviations

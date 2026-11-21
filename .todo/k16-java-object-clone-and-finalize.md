@@ -43,3 +43,16 @@ What a JDK 25 and javac answer: `.todo/artefacts/k06-java-front-end-what-the-che
   need not). javac's `[removal]` warning is one of those not printed (`deviations.md`).
 - Probes: the j99 `compare.sh` over `clone/K2`..`K9`; `K1` as a java-spec case on four
   backends. Docs: the overview's `Object` row, `deviations.md`.
+
+## A Servlet program's cookies wait for it (k97, 2026-11-21)
+
+`jakarta.servlet.http.Cookie` (the API's sources jar, not ours to edit) is
+`implements Cloneable, Serializable` and its public `clone()` calls `super.clone()` and
+catches `CloneNotSupportedException`. So every Servlet program naming a cookie -- `new
+Cookie(..)`, `request.getCookies()` (the container makes them) -- is refused at the API's
+`Cookie.java:60` with `cannot find symbol: class Cloneable` (a JDK class the library lacks
+is `cannot find symbol` when its simple name is `java.lang`'s, not "is not supported":
+worth fixing with this item). What `Cookie` needs is the `super.clone()` of a class whose
+superclass is `Object`; what a whole `Cloneable` needs is above. The k97 corpus program
+(`java-http-server-spec.yaml`, `servlet`) names no cookie; add a cookie request there once
+this lands (`.kb/servlet-httpserver.md`).

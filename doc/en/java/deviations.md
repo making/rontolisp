@@ -440,10 +440,20 @@ throws `IOException` there.
 many as a JDK 25 writes. After its first print, `charset()` of a `PrintStream` in `UTF-16`
 answers another object of the same name.
 
-**A class object says what a class is and reaches nothing in it.** A `Class` answers its
-names, the class above it, whether a value is an instance, a cast and an enum's constants.
-It has no reflection: a class by name (`Class.forName`), the members, constructors and
-annotations of a class and `getInterfaces()` are refused by name. The classes above a
+**A class object says what a class is, and of what is in it the names of its methods.** A
+`Class` answers its names, the class above it, whether a value is an instance, a cast, an
+enum's constants and the methods it declares. `getDeclaredMethods` answers a `Method` for
+each method the class's source declares, then for the ones the language declares with
+them (an enum's `values` and `valueOf`, a record's accessors, `toString`, `hashCode` and
+`equals`); a JDK's order is its own, and its array also holds the methods its compiler adds
+(a lambda's body, a bridge, an enum's `$values`). A `Method` answers its name and its class,
+and equals another standing for the same method; its `toString` is refused where the
+program runs. A class of the JDK is the subset's own source and has other methods than
+the JDK's, so `getDeclaredMethods` of one is refused where the program runs; a class of a
+library on the source path answers. The rest of reflection is refused by name: a class by
+name (`Class.forName`), the other members of a class (`getMethods`, its fields and
+constructors), its annotations, the types, modifiers and call of a method, and
+`getInterfaces()`. The classes above a
 JDK class are the subset's: `StringBuilder.class.getSuperclass()` is `Object`, where
 a JDK has a class of its own between the two, and `isAssignableFrom` knows the interfaces
 the subset's classes declare (a `String` is a `Comparable` and a `CharSequence`).
@@ -758,8 +768,9 @@ the transport binds. `InetAddress.getLocalHost` and the reverse lookups are not 
 Each of these is an error naming the construct and its position.
 
 - `assert`.
-- Reflection: `Class.forName`, the members, constructors and annotations of a class
-  (`getMethods`, `getDeclaredFields`, `newInstance`), `getInterfaces()`.
+- Reflection: `Class.forName`, the members, constructors and annotations of a class but
+  `getDeclaredMethods` (`getMethods`, `getDeclaredFields`, `newInstance`), of a `Method` all
+  but its name and its class, `getInterfaces()`.
 - A `switch` over a `long`, a `float`, a `double` or a `boolean`; a method reference and a
   field through a qualified `super` (`Interface.super::m`, `Outer.super.x`).
 - A class extending `String`, `StringBuilder` or a box.

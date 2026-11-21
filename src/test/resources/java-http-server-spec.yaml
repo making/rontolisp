@@ -17,7 +17,10 @@
 # A program may be an example instead of a source (`example`, a path under examples/),
 # which binds the port of its PORT environment variable, says it on the line
 # `listening` matches, and is ended once asked when it is `endless`; `unshown` are the
-# lines of a body left out, by pattern.
+# lines of a body left out, by pattern. `sourcePath` (directories of the repository) and
+# `sourceDep` (Maven coordinates) are the libraries a program uses: read as source on every
+# leg, the coordinates' sources jars; compiled by javac onto the JDK leg's class path, beside
+# the coordinates' jars.
 programs:
   - name: server
     file: Server.java
@@ -991,3 +994,312 @@ programs:
             "error": "not found",
             "path": "/get/more"
           }
+  # A Servlet application on the container of servlet-httpserver/ (.kb/servlet-httpserver.md),
+  # read as source with the API's sources jar: the JDK leg runs the container javac
+  # compiled. The listener, a filter on every path, servlets mapped by an exact path, a
+  # prefix and an extension, a form, a forward and an include, the 405 page of the API's
+  # message bundle, OPTIONS (which asks the servlet's class the methods it declares), the
+  # error pages and a response committed by its buffer.
+  - name: servlet
+    file: Servlets.java
+    sourcePath: [servlet-httpserver/src/main/java]
+    sourceDep: [jakarta.servlet:jakarta.servlet-api:6.1.0]
+    unshown: ['^Host: ', '^User-agent: ']
+    source: |
+      import java.io.IOException;
+      import java.io.PrintWriter;
+      import java.net.InetSocketAddress;
+      import java.util.Collections;
+      import java.util.concurrent.CountDownLatch;
+
+      import am.ik.servlet.httpserver.ServletHttpServer;
+      import jakarta.servlet.FilterChain;
+      import jakarta.servlet.ServletContext;
+      import jakarta.servlet.ServletContextEvent;
+      import jakarta.servlet.ServletContextListener;
+      import jakarta.servlet.ServletException;
+      import jakarta.servlet.http.HttpFilter;
+      import jakarta.servlet.http.HttpServlet;
+      import jakarta.servlet.http.HttpServletRequest;
+      import jakarta.servlet.http.HttpServletResponse;
+
+      public class Servlets {
+
+          static final CountDownLatch STOPPED = new CountDownLatch(1);
+
+          // not log: a servlet's simple name log is GenericServlet.log, the context's
+          static synchronized void note(String line) {
+              System.out.println("| " + line);
+          }
+
+          static class Hello extends HttpServlet {
+
+              @Override
+              public void init() {
+                  note("init " + getServletName());
+              }
+
+              @Override
+              protected void doGet(HttpServletRequest request, HttpServletResponse response) throws IOException {
+                  String name = request.getParameter("name");
+                  response.setContentType("text/plain");
+                  response.getWriter().println("Hello, " + (name == null ? "world" : name) + "!");
+              }
+
+              @Override
+              protected void doPost(HttpServletRequest request, HttpServletResponse response) throws IOException {
+                  response.setContentType("text/plain;charset=UTF-8");
+                  PrintWriter out = response.getWriter();
+                  for (String name : Collections.list(request.getParameterNames())) {
+                      out.println(name + " = " + String.join(", ", request.getParameterValues(name)));
+                  }
+              }
+
+              @Override
+              public void destroy() {
+                  note("destroy " + getServletName());
+              }
+
+          }
+
+          static class Show extends HttpServlet {
+
+              @Override
+              protected void doGet(HttpServletRequest request, HttpServletResponse response) throws IOException {
+                  response.setContentType("text/plain");
+                  PrintWriter out = response.getWriter();
+                  out.println(request.getMethod() + " " + request.getRequestURI() + " query " + request.getQueryString());
+                  out.println("context " + request.getContextPath() + " servlet " + request.getServletPath() + " info "
+                          + request.getPathInfo());
+                  out.println("custom " + request.getHeader("X-Custom") + " filtered " + request.getAttribute("filtered"));
+                  out.println("mapping " + request.getHttpServletMapping().getMappingMatch() + " "
+                          + request.getHttpServletMapping().getPattern());
+              }
+
+          }
+
+          static class Dispatch extends HttpServlet {
+
+              @Override
+              protected void doGet(HttpServletRequest request, HttpServletResponse response)
+                      throws IOException, ServletException {
+                  if (request.getPathInfo().equals("/forward")) {
+                      request.getRequestDispatcher("/hello?name=forwarded").forward(request, response);
+                      return;
+                  }
+                  response.setContentType("text/plain");
+                  PrintWriter out = response.getWriter();
+                  out.println("before");
+                  request.getRequestDispatcher("/hello?name=included").include(request, response);
+                  out.println("after");
+              }
+
+          }
+
+          static class Answers extends HttpServlet {
+
+              @Override
+              protected void doGet(HttpServletRequest request, HttpServletResponse response)
+                      throws IOException, ServletException {
+                  switch (request.getPathInfo()) {
+                      case "/redirect" -> response.sendRedirect("../hello?name=redirected");
+                      case "/error" -> response.sendError(HttpServletResponse.SC_CONFLICT, "in conflict");
+                      case "/thrown" -> throw new ServletException("no answer");
+                      case "/committed" -> {
+                          response.setBufferSize(16);
+                          response.setContentType("text/plain");
+                          PrintWriter out = response.getWriter();
+                          out.print("a line longer than the buffer\n");
+                          out.println("committed " + response.isCommitted());
+                      }
+                      default -> response.setStatus(HttpServletResponse.SC_NO_CONTENT);
+                  }
+              }
+
+          }
+
+          static class Stop extends HttpServlet {
+
+              @Override
+              protected void doGet(HttpServletRequest request, HttpServletResponse response) throws IOException {
+                  response.setContentType("text/plain");
+                  response.getWriter().println("bye");
+                  STOPPED.countDown();
+              }
+
+          }
+
+          static class Mark extends HttpFilter {
+
+              @Override
+              protected void doFilter(HttpServletRequest request, HttpServletResponse response, FilterChain chain)
+                      throws IOException, ServletException {
+                  response.setHeader("X-Filtered", "yes");
+                  request.setAttribute("filtered", "by " + getFilterName());
+                  chain.doFilter(request, response);
+              }
+
+          }
+
+          static class Life implements ServletContextListener {
+
+              @Override
+              public void contextInitialized(ServletContextEvent event) {
+                  note("context " + event.getServletContext().getContextPath() + " initialized, its own event's source "
+                          + (event.getSource() == event.getServletContext()));
+              }
+
+              @Override
+              public void contextDestroyed(ServletContextEvent event) {
+                  note("context " + event.getServletContext().getContextPath() + " destroyed");
+              }
+
+          }
+
+          public static void main(String[] args) throws Exception {
+              ServletHttpServer server = new ServletHttpServer(new InetSocketAddress("127.0.0.1", @PORT@), "/app");
+              ServletContext context = server.getServletContext();
+              context.addListener(new Life());
+              context.addFilter("mark", new Mark()).addMappingForUrlPatterns(null, false, "/*");
+              context.addServlet("hello", new Hello()).addMapping("/hello");
+              context.addServlet("show", new Show()).addMapping("/show/*", "*.do");
+              context.addServlet("dispatch", new Dispatch()).addMapping("/dispatch/*");
+              context.addServlet("answers", new Answers()).addMapping("/answers/*");
+              context.addServlet("stop", new Stop()).addMapping("/stop");
+              server.start();
+              System.out.println("listening " + server.getPort());
+              // the program's own thread waits while the server serves
+              STOPPED.await();
+              server.stop(5);
+              note("stopped");
+          }
+
+      }
+    log: |
+      | context /app initialized, its own event's source true
+      | init hello
+      | destroy hello
+      | context /app destroyed
+      | stopped
+    requests:
+      - name: a-servlet-answers-a-text
+        request: GET /app/hello
+        show: [content-type, x-filtered]
+        expected: |
+          200
+          content-type: text/plain;charset=ISO-8859-1
+          x-filtered: yes
+          Hello, world!
+      - name: a-parameter-of-the-query
+        request: GET /app/hello?name=rontolisp
+        expected: |
+          200
+          Hello, rontolisp!
+      - name: the-parameters-of-a-form
+        request: POST /app/hello
+        headers: {Content-Type: application/x-www-form-urlencoded}
+        body: name=form&tag=a&tag=b
+        show: [content-type]
+        expected: |
+          200
+          content-type: text/plain;charset=UTF-8
+          name = form
+          tag = a, b
+      - name: a-method-the-servlet-has-no-body-for-is-the-api-s-message
+        request: PUT /app/hello
+        show: [content-type]
+        expected: |
+          405
+          content-type: text/html;charset=UTF-8
+          <!doctype html><html><head><title>405 Method Not Allowed</title></head><body><h1>405 Method Not Allowed</h1><p>HTTP method PUT is not supported by this URL</p></body></html>
+      - name: options-names-the-methods-the-servlet-s-class-declares
+        request: OPTIONS /app/hello
+        show: [allow]
+        expected: |
+          200
+          allow: GET, HEAD, POST, TRACE, OPTIONS
+      - name: a-head-has-no-body
+        request: HEAD /app/hello
+        show: [content-type]
+        expected: |
+          200
+          content-type: text/plain;charset=ISO-8859-1
+      # the body's lines end in CR LF, as a message/http does
+      - name: trace-echoes-the-request
+        request: TRACE /app/show/x
+        headers: {X-Custom: traced}
+        show: [content-type]
+        expected: "200\ncontent-type: message/http\nTRACE /app/show/x HTTP/1.1\r\nX-custom: traced\r\nContent-length: 0\r\n"
+      - name: a-prefix-mapping-and-the-request-s-paths
+        request: GET /app/show/a/b?q=1&r=2
+        headers: {X-Custom: custom}
+        expected: |
+          200
+          GET /app/show/a/b query q=1&r=2
+          context /app servlet /show info /a/b
+          custom custom filtered by mark
+          mapping PATH /show/*
+      - name: an-extension-mapping
+        request: GET /app/page.do
+        expected: |
+          200
+          GET /app/page.do query null
+          context /app servlet /page.do info null
+          custom null filtered by mark
+          mapping EXTENSION *.do
+      - name: a-forward
+        request: GET /app/dispatch/forward
+        expected: |
+          200
+          Hello, forwarded!
+      - name: an-include
+        request: GET /app/dispatch/include
+        expected: |
+          200
+          before
+          Hello, included!
+          after
+      - name: a-redirect
+        request: GET /app/answers/redirect
+        show: [location]
+        expected: |
+          302
+          location: ../hello?name=redirected
+      - name: an-error-page
+        request: GET /app/answers/error
+        expected: |
+          409
+          <!doctype html><html><head><title>409 Conflict</title></head><body><h1>409 Conflict</h1><p>in conflict</p></body></html>
+      - name: what-a-servlet-throws-is-a-500
+        request: GET /app/answers/thrown
+        expected: |
+          500
+          <!doctype html><html><head><title>500 Internal Server Error</title></head><body><h1>500 Internal Server Error</h1></body></html>
+      - name: a-response-its-buffer-committed
+        request: GET /app/answers/committed
+        expected: |
+          200
+          a line longer than the buffer
+          committed true
+      - name: no-content
+        request: GET /app/answers/none
+        show: [x-filtered]
+        expected: |
+          204
+          x-filtered: yes
+      - name: the-context-root-without-its-slash
+        request: GET /app
+        show: [location]
+        expected: |
+          302
+          location: /app/
+      - name: a-path-no-servlet-is-mapped-to
+        request: GET /app/nothing
+        expected: |
+          404
+          <!doctype html><html><head><title>404 Not Found</title></head><body><h1>404 Not Found</h1></body></html>
+      - name: a-servlet-counts-the-stop-down
+        request: GET /app/stop
+        expected: |
+          200
+          bye

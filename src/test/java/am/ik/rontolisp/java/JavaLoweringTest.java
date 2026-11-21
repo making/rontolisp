@@ -1474,7 +1474,7 @@ class JavaLoweringTest {
 				{ "void main() { assert true; }", "1:15: an assert statement" },
 				{ "void main() { switch (1L) { default -> { } } }", "1:15: a switch over long" },
 				{ "void main() { IO.println(String.class.getInterfaces()); }", "1:39: Class.getInterfaces()" },
-				{ "class A { transient int x; } void main() { }", "1:11: the modifier transient" },
+				{ "class A { strictfp void m() { } } void main() { }", "1:11: the modifier strictfp" },
 				{ "import java.util.concurrent.DelayQueue; void main() { DelayQueue<?> q = null; }",
 						"1:55: the class java.util.concurrent.DelayQueue" },
 				{ "interface I { default void m() { } } class A implements I { Runnable r = I.super::m; } void main() { }",
@@ -1527,6 +1527,7 @@ class JavaLoweringTest {
 				{ "void main() { int x = 1; int x = 2; }", "1:30: variable x is already defined" },
 				{ "class A { synchronized int x; } void main() { }", "1:28: modifier synchronized not allowed here" },
 				{ "class A { volatile void m() { } } void main() { }", "1:25: modifier volatile not allowed here" },
+				{ "interface I { transient int X = 1; } void main() { }", "1:29: modifier transient not allowed here" },
 				{ "interface I { synchronized void m(); } void main() { }",
 						"1:33: modifier synchronized not allowed here" },
 				{ "class A { final volatile int x = 1; } void main() { }",
@@ -1682,7 +1683,7 @@ class JavaLoweringTest {
 				class Hidden { static int three() { return 3; } }
 				""", "lib/Clocked.java", """
 				package lib;
-				public class Clocked implements java.util.EventListener { }
+				public class Clocked implements java.util.Observer { }
 				""", "lib/Mark.java",
 				"package lib; public @interface Mark { String value() default \"\"; int[] at() default { 1 }; }");
 		JavaFiles files = new JavaFiles() {
@@ -1736,7 +1737,7 @@ class JavaLoweringTest {
 								+ " Java subset yet" },
 				// a class under one nobody has is one nobody has
 				{ "new lib.Clocked();",
-						"lib.jar!/lib/Clocked.java:2:33: the class java.util.EventListener is not supported by"
+						"lib.jar!/lib/Clocked.java:2:33: the class java.util.Observer is not supported by"
 								+ " the experimental Java subset yet" },
 				// the library's classes are checked for access as the program's are; one
 				// declared in the file of another is found, as its class file would be

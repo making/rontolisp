@@ -7581,6 +7581,9 @@ final class JavaLowering implements JavaEmitter.Context {
 
 	private static final String CLASS = "java.lang.Class";
 
+	/** The function answering the methods a class object's class declares. */
+	private static final LispSymbol DECLARED_METHODS = new LispSymbol("%declared-methods");
+
 	private static final LispSymbol ARRAY_CLASS = new LispSymbol("%array-class");
 
 	/** The bits of {@code Class}'s {@code kind}, as the library's source names them. */
@@ -8308,6 +8311,11 @@ final class JavaLowering implements JavaEmitter.Context {
 	private void classObjects(List<LispVal> forms, List<JavaClass> deepestFirst) {
 		this.classInits = List.of();
 		if (this.classes.classValues.isEmpty() && this.classes.classOfs.isEmpty()) {
+			if (this.classes.reached.stream()
+				.anyMatch(method -> method.name.equals("getDeclaredMethods") && method.owner.name.equals(CLASS))) {
+				// asked of no object: of a null one
+				forms.add(declaredMethodsFunction(Map.of()));
+			}
 			return;
 		}
 		JavaClass type = this.classes.library(CLASS);
@@ -8336,8 +8344,82 @@ final class JavaLowering implements JavaEmitter.Context {
 		for (JavaType asked : List.copyOf(this.classes.classValues)) {
 			classObject(asked, reached, made, inits, forms);
 		}
+		if (reached.contains("getDeclaredMethods")) {
+			forms.add(declaredMethodsFunction(made));
+		}
 		this.effects = saved;
 		this.classInits = inits;
+	}
+
+	/**
+	 * The function {@code Class.getDeclaredMethods()} asks: for each class object made,
+	 * the names of the methods its class declares, a space between two; {@code NIL} for a
+	 * class whose methods are not known.
+	 * @param made the variables holding the objects, by type
+	 */
+	private static LispVal declaredMethodsFunction(Map<JavaType, LispVal> made) {
+		List<LispVal> arms = new ArrayList<>(List.of(cl("cond")));
+		for (Map.Entry<JavaType, LispVal> object : made.entrySet()) {
+			List<String> names = declaredMethods(object.getKey());
+			if (names != null) {
+				arms.add(list(list(cl("eq"), RECEIVER, object.getValue()), string(String.join(" ", names))));
+			}
+		}
+		return list(cl("defun"), DECLARED_METHODS, list(RECEIVER), list(arms));
+	}
+
+	/**
+	 * The names of the methods a type declares, as a JDK's reflection answers them: the
+	 * ones its source declares, in their order, then the ones the language declares
+	 * implicitly (JLS 8.9.3, 8.10.3) -- an enum's {@code values} and {@code valueOf}, a
+	 * record's accessors and {@code toString}, {@code hashCode} and {@code equals} it
+	 * leaves out --; none for an array or a primitive type. A compiler adds methods of
+	 * its own (a lambda's body, a bridge), which are not among them. {@code null} for an
+	 * intrinsic class and the library's own: the JDK's class is not that source.
+	 */
+	private static @Nullable List<String> declaredMethods(JavaType type) {
+		if (!(type instanceof ClassType named)) {
+			return List.of();
+		}
+		JavaClass declaration = named.declaration();
+		JavaSyntax.ClassDeclaration source = declaration.declaration;
+		if (declaration.intrinsic || source == null || declaration.source == null || declaration.source.library()) {
+			return null;
+		}
+		List<String> names = new ArrayList<>();
+		Set<String> unary = new HashSet<>();
+		boolean equals = false;
+		for (JavaSyntax.Method method : source.methods()) {
+			if (!method.name().equals("<init>")) {
+				names.add(method.name());
+				if (method.parameters().isEmpty()) {
+					unary.add(method.name());
+				}
+				else if (method.name().equals("equals") && method.parameters().size() == 1) {
+					equals = true;
+				}
+			}
+		}
+		if (declaration.isRecord) {
+			for (JavaSyntax.Parameter component : source.components()) {
+				if (unary.add(component.name())) {
+					names.add(component.name());
+				}
+			}
+			for (String member : List.of("toString", "hashCode")) {
+				if (unary.add(member)) {
+					names.add(member);
+				}
+			}
+			if (!equals) {
+				names.add("equals");
+			}
+		}
+		if (declaration.isEnum) {
+			names.add("values");
+			names.add("valueOf");
+		}
+		return names;
 	}
 
 	private static JavaType raw(JavaClass declaration) {

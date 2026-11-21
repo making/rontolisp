@@ -97,9 +97,9 @@ final class JavaParser {
 			"double");
 
 	private static final Set<String> MODIFIERS = Set.of("public", "protected", "private", "static", "final", "abstract",
-			"synchronized", "volatile");
+			"synchronized", "volatile", "transient");
 
-	private static final Set<String> REFUSED_MODIFIERS = Set.of("transient", "strictfp");
+	private static final Set<String> REFUSED_MODIFIERS = Set.of("strictfp");
 
 	private static final List<List<String>> LEVELS = List.of(List.of("||"), List.of("&&"), List.of("|"), List.of("^"),
 			List.of("&"), List.of("==", "!="), List.of("<", ">", "<=", ">=", "instanceof"), List.of("<<", ">>", ">>>"),
@@ -734,7 +734,7 @@ final class JavaParser {
 				: at("interface") ? JavaSyntax.Kind.INTERFACE : JavaSyntax.Kind.CLASS;
 		this.p++;
 		int pos = current().offset();
-		allowed(modifiers, pos, "synchronized", "volatile");
+		allowed(modifiers, pos, "synchronized", "volatile", "transient");
 		String name = identifier();
 		List<JavaSyntax.TypeParameter> typeParameters = typeParameters();
 		if (kind == JavaSyntax.Kind.ENUM && !typeParameters.isEmpty()) {
@@ -903,7 +903,7 @@ final class JavaParser {
 				throw error("an interface has no initializer block");
 			}
 			int pos = current().offset();
-			allowed(modifiers, pos, "synchronized", "volatile");
+			allowed(modifiers, pos, "synchronized", "volatile", "transient");
 			into.initializers.add(new Initializer(pos, modifiers.contains("static"), block()));
 			return;
 		}
@@ -917,7 +917,7 @@ final class JavaParser {
 				throw error("an interface has no constructor");
 			}
 			int pos = current().offset();
-			allowed(modifiers, pos, "synchronized", "volatile");
+			allowed(modifiers, pos, "synchronized", "volatile", "transient");
 			this.p++;
 			if (at("{")) {
 				if (kind != JavaSyntax.Kind.RECORD) {
@@ -938,7 +938,7 @@ final class JavaParser {
 		int pos = current().offset();
 		String name = identifier();
 		if (at("(")) {
-			allowed(modifiers, pos, "volatile");
+			allowed(modifiers, pos, "volatile", "transient");
 			if (modifiers.contains("synchronized") && (inInterface || modifiers.contains("abstract"))) {
 				throw new LispReadException(inInterface ? "modifier synchronized not allowed here"
 						: "illegal combination of modifiers: abstract and synchronized", location(pos));
@@ -965,6 +965,10 @@ final class JavaParser {
 			throw error("expected '(' but found " + current().shown());
 		}
 		allowed(modifiers, pos, "synchronized");
+		if (inInterface) {
+			// a field of an interface is a constant
+			allowed(modifiers, pos, "private", "protected", "volatile", "transient");
+		}
 		if (modifiers.contains("volatile") && modifiers.contains("final")) {
 			throw new LispReadException("illegal combination of modifiers: final and volatile", location(pos));
 		}

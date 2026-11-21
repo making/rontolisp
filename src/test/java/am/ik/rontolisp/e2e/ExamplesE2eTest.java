@@ -1208,7 +1208,7 @@ class ExamplesE2eTest {
 	 * The resolver {@code --java-source-dep} builds: Maven's settings and local
 	 * repository, then Maven Central for releases.
 	 */
-	private static MavenResolver mavenResolver() {
+	static MavenResolver mavenResolver() {
 		MavenSettings settings;
 		try {
 			settings = MavenSettings.readGlobalAndUser();

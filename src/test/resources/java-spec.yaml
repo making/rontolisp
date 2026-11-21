@@ -6211,6 +6211,7 @@ cases:
               joiners();
               tokens();
               bits();
+              events();
               try {
                   properties();
               } catch (IOException ex) {
@@ -6322,6 +6323,32 @@ cases:
                   }
               }
               System.out.println();
+          }
+
+          // an event of java.util: its source and its text, a listener of it
+          static class Changed extends java.util.EventObject {
+              private final transient int count;
+
+              Changed(Object source, int count) {
+                  super(source);
+                  this.count = count;
+              }
+          }
+
+          interface Watcher extends java.util.EventListener {
+              void changed(Changed event);
+          }
+
+          static void events() {
+              Changed changed = new Changed("table", 3);
+              Watcher watcher = event -> System.out.print(event + " " + event.getSource() + " " + event.count + " ");
+              watcher.changed(changed);
+              java.util.EventListener listener = watcher;
+              try {
+                  new Changed(null, 0);
+              } catch (IllegalArgumentException ex) {
+                  System.out.println(ex.getMessage() + " " + (listener instanceof Watcher) + " " + (changed instanceof Serializable) + " " + new java.util.EventObject(1));
+              }
           }
 
           static void later() {
@@ -6665,6 +6692,7 @@ cases:
       0 2 3 5 64 | 64 5 3 2 0 1 65 1 74 [0, 2, 3, 5, 64]
       128 128 256 0 true true
       NegativeArraySizeException nbits < 0: -1; IndexOutOfBoundsException bitIndex < 0: -1; IndexOutOfBoundsException fromIndex: 5 > toIndex: 3; IndexOutOfBoundsException fromIndex < 0: -2; IndexOutOfBoundsException fromIndex < -1: -2; 
+      OlderAndUtil$Changed[source=table] table 3 null source true true java.util.EventObject[source=1]
       a=b -> [a]=[b] | a = b  -> [a]=[b ] |   a:b -> [a]=[b] | a b c -> [a]=[b c] | a<9>b -> [a]=[b] | a<c>b -> [a]=[b]
       a= -> [a]=[] | a -> [a]=[] | =b -> []=[b] | :b -> []=[b] |   -> | a==b -> [a]=[=b]
       a=:b -> [a]=[:b] | a :=b -> [a]=[=b] | a  =  = b -> [a]=[= b] | a\ b=c -> [a b]=[c] | a\=b=c -> [a=b]=[c] | a\:b:c -> [a:b]=[c]
@@ -11466,6 +11494,12 @@ cases:
               catch (UncheckedIOException e) {
                   System.out.println(e.getMessage() + " " + e.getCause());
               }
+              try {
+                  throw new CharConversionException("not a character");
+              }
+              catch (IOException e) {
+                  System.out.println(e);
+              }
           }
       }
     expected: |
@@ -11506,6 +11540,7 @@ cases:
       10
       10 10
       wrapped java.io.IOException: inner
+      java.io.CharConversionException: not a character
   # The rest of java.io over arrays and other streams: the null streams, CharArrayReader
   # and CharArrayWriter, the two that take back what was read, SequenceInputStream,
   # LineNumberReader -- whose count at the end of the input, after a skip and across a
@@ -13023,18 +13058,22 @@ standalone:
   # comparison with another or its name: one object a type -- a class, an interface,
   # an enum, a record, an array type, a primitive type and void --, the key of a map,
   # asked its names, the classes above it, whether a value is an instance, a cast, its
-  # enum constants; the object of what a value is, through Object, an interface and a
-  # class, of the boxes, a string and an array whose type was widened; a class object
-  # initializes nothing and an enum's constants do. A file of its own: the corpus
+  # enum constants, the names of the methods it declares (none a compiler adds of its
+  # own: a name with a $); the object of what a value is, through Object, an interface
+  # and a class, of the boxes, a string and an array whose type was widened; a class
+  # object initializes nothing and an enum's constants do. A file of its own: the corpus
   # program compares classes and asks their names, and holds no class object.
   - name: a-class-is-a-value
     file: Classes.java
     source: |
+      import java.lang.reflect.Method;
       import java.util.ArrayList;
       import java.util.HashMap;
       import java.util.LinkedHashMap;
       import java.util.List;
       import java.util.Map;
+      import java.util.Set;
+      import java.util.TreeSet;
       import java.util.function.Function;
 
       public class Classes {
@@ -13144,6 +13183,16 @@ standalone:
               }
           }
 
+          static String declared(Class<?> type) {
+              Set<String> names = new TreeSet<>();
+              for (Method method : type.getDeclaredMethods()) {
+                  if (method.getName().indexOf('$') < 0) {
+                      names.add(method.getName());
+                  }
+              }
+              return names.toString();
+          }
+
           public static void main(String[] args) {
               Class<String> text = String.class;
               Class<?> any = text;
@@ -13225,6 +13274,16 @@ standalone:
                       + (objects.get(objects.size() - 1).getClass() == long[].class) + " " + (int.class == Integer.class)
                       + " " + int[].class.getName() + " " + void.class.getSimpleName());
               System.out.println(loud.getEnumConstants()[1]);
+              // the methods a class declares, by name
+              for (Class<?> type : List.of(Shape.class, Ring.class, Level.class, Level.HIGH.getClass(), Point.class,
+                      Classes.class, int[].class, int.class)) {
+                  System.out.print(type.getName() + declared(type) + " ");
+              }
+              Method[] once = Level.HIGH.getClass().getDeclaredMethods();
+              Method again = Level.HIGH.getClass().getDeclaredMethods()[0];
+              System.out.println(once.length + " " + once[0].getName() + " " + once[0].equals(again) + " " + (once[0] != again)
+                      + " " + (once[0].hashCode() == ("Classes$Level$1".hashCode() ^ "toString".hashCode())) + " "
+                      + (once[0].getDeclaringClass() == Level.HIGH.getClass()));
               failing("null", () -> System.out.println(((Object) null).getClass().getName()));
               failing("a null class", () -> System.out.println(Object.class.isAssignableFrom(null)));
           }
@@ -13281,6 +13340,7 @@ standalone:
       Loud true 3 text null java.lang.StringBuilder true java.util.Map.Entry null Classes.Point[] true false [I void
       the enum is initialized
       TWO
+      Classes$Shape[] Classes$Ring[compareTo] Classes$Level[valueOf, values] Classes$Level$1[toString] Classes$Point[equals, hashCode, toString, x, y] Classes[above, declared, failing, first, flags, kind, main] [I[] int[] 1 toString true true true true
       null: java.lang.NullPointerException
       a null class: java.lang.NullPointerException
   # A thread is the host's where the target has threads and runs on the stack of the
