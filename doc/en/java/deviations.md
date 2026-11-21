@@ -310,9 +310,16 @@ read; a JDK hands it the scanner's buffer, positioned after what the scanner sti
 outside the Basic Multilingual Plane is one element of it, where a JDK's is two. `order()` is
 refused by name.
 
-**`String.format` has the conversions [The JDK classes](classes.md) lists**; any other is an
-error naming it. The only locales are the root and the English ones, which format as
-`String.format` without a locale does; the default locale is `Locale.US`.
+**A format refuses a specifier when it reaches it.** A JDK reads the whole control first, so a
+`Formatter` it refuses has appended nothing; here it has appended what came before. The flags
+and precisions `%d`, `%x`, `%o`, `%e`, `%f`, `%c`, `%b` and `%s` do not take (`%#d`, `%,x`,
+`%.2d`, `%#s` of a value that is no `Formattable`) are not refused, and the relative index
+`%<s` is not taken. A converted argument is appended as one text with its padding, where a
+JDK appends each character of the padding by itself. `%tZ` and `%tc` of a `long` or a `Date`
+name the zone as `Date.toString()` does. The only locales are the root and the English ones,
+which format as `String.format` without a locale does; the default locale is `Locale.US`, and
+it is the locale of the `Formatter` a `Formattable` given to `String.format` writes itself
+into.
 
 **A `MessageFormat` has no format types.** A pattern naming one (`{0,number}`, `{0,date}`,
 `{0,choice,...}`) is refused by name when it is read, with an

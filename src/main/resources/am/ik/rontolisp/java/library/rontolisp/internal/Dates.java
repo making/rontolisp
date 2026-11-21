@@ -53,7 +53,8 @@ public final class Dates {
     /**
      * An instant's fields in the host's zone: the year of its era, the month (1 to 12),
      * the day, the day of the week (0 is Sunday), the hour, minute, second and
-     * millisecond, and the offset in seconds.
+     * millisecond, the offset in seconds, and the day of the year, counted from the
+     * year's first day in the calendar of that day (1582 has 355).
      */
     public static long[] fields(long millis) {
         long offset = zone(Math.floorDiv(millis, 1000L)) >> 1;
@@ -76,7 +77,7 @@ public final class Dates {
         }
         return new long[] { year > 0 ? year : 1 - year, month, day - monthStart(year, month, julian) + 1,
                 Math.floorMod(day + 4, 7L), ofDay / 3600000L, ofDay / 60000L % 60, ofDay / 1000L % 60, ofDay % 1000L,
-                offset };
+                offset, day - yearStart(year, julian || yearStart(year, true) < GREGORIAN) + 1 };
     }
 
     /**

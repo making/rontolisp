@@ -552,6 +552,17 @@ algorithm came from, and the answer goes in the file's header.
   does not state was read off the answers: which collections are kept (a part of a list, a
   list holding nulls and a map's keys are copied), that the empty ones are one object, that
   a JDK's encoder joins two halves printed one after the other.
+- **`Formatter`, `Formattable` and the conversions `%g`, `%a`, `%t` (k85, 2026-11-21).**
+  Written from the API documentation (the members, the conversions and their flag table,
+  the date and time letters) and JDK 25's answers to probes
+  (`.todo/artefacts/k85-java-library-a-formatter-of-its-own/probes/`: every letter of `%t`
+  over each class, `%g` and `%a` of 75 values, every specifier's refusal, what a `Formatter`
+  appends and when). Nobody opened OpenJDK's source, and the shape is its own: the run
+  time's single pass with one function of the library behind it, a `%t` letter a print of
+  fields asked by number. What the documentation does not state was read off the answers:
+  the order and words of the refusals, the letter a composite refuses under, the year `F`
+  writes, the zeros of `%a`'s width, the rounding of a `BigDecimal` zero by `%g`, the
+  `Formatter` a `Formattable` is handed.
 - **`StringJoiner`, `StringTokenizer`, `BitSet`, `Scanner`, `Readable`, `Buffer`,
   `CharBuffer` and the hexadecimal floats of a parse (k72, 2026-11-21).** Written from the API
   documentation (the classes' members; `BitSet.hashCode`'s formula; the grammar of a

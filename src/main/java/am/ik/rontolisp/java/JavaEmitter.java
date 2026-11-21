@@ -88,15 +88,12 @@ interface JavaEmitter {
 		 */
 		LispVal stringFunction();
 
-		/** The function answering any value's {@code hashCode()}. */
-		LispVal hashFunction();
-
 		/**
-		 * The function answering a conversion of {@code String.format} for a number
-		 * written by its own digits (a {@code BigInteger}, a {@code BigDecimal}),
-		 * {@code nil} in a program that makes no such number.
+		 * The function answering the conversions of a format the run time leaves to the
+		 * library ({@code java.util.Conversions.more}), {@code nil} in a program whose
+		 * controls name none of them and that makes no class they read.
 		 */
-		LispVal exactFunction();
+		LispVal formatFunction();
 
 		/**
 		 * A call of a static method of the library's Java source: a member written in
@@ -199,6 +196,38 @@ interface JavaEmitter {
 
 		/** Whether a pattern of the program can name one of these letters. */
 		boolean namesLetter(String letters);
+
+		/**
+		 * Notes the control of a format the program writes where this is called: the
+		 * conversions a constant one holds are ones its controls can name, and one
+		 * computed where it runs ({@code null} here) can name them all.
+		 */
+		void namesFormat(@Nullable String control);
+
+		/**
+		 * Notes the arguments of a format the program writes where this is called: an
+		 * array its variable arity made, whose elements' types tell whether one can be a
+		 * {@code long} or a {@code Date}, or an array given as it is, which can.
+		 */
+		void formatsArguments(Typed arguments);
+
+		/**
+		 * Whether a format of the program can be given a {@code long} or a {@code Date}.
+		 */
+		boolean formatsMillis();
+
+		/**
+		 * Whether a control of the program can name a conversion: {@code h}, {@code g},
+		 * {@code a} or {@code t} of either case, or {@code Z} for a {@code %t} writing a
+		 * zone's name ({@code %tZ}, {@code %tc}).
+		 */
+		boolean namesConversion(char conversion);
+
+		/**
+		 * Whether the program makes an instance of a class under the library's class of
+		 * this name, asked by name: a program that has not read that class makes none.
+		 */
+		boolean makesUnder(String name);
 
 		/** Whether the program makes an instance of the library's class of this name. */
 		boolean makesClass(String name);

@@ -1628,8 +1628,8 @@ measured programs.
   the initialization left the form with k63, "Static initialization"). `new Object()` is `(make-array 0 :fill-pointer 0)`: no other value
   of a program is a vector with a fill pointer that is no string.
 - **`String.format`** is `%java-format` over the argument array and the program's `%string`
-  (and, where the program makes a `BigInteger` or a `BigDecimal`, the function writing
-  one by its digits: "java.math");
+  (and, where the program can need one, the function answering the conversions the run time
+  leaves to the library: "java.util.Formatter and the conversions a format lacked");
   `%f`/`%e` round the SHORTEST digits half up (`0.15` at one place is `0.2`, measured against
   the JDK), which is why they start from `%java-double-string`. `Double.parseDouble` is exact
   integer arithmetic then `%java-nearest-double` (ties to even, subnormals); `doubleToLongBits`
@@ -1757,10 +1757,10 @@ measured programs.
   `toUpperCase` / `toLowerCase` (the host's fold is uniform), and `digit` /
   `getNumericValue`, which asked the host until k71 ("A raw argument, `Stream.toList()`, the
   digits and the members met" below: a list of Unicode's zeros, one rule everywhere).
-- **`%h` hands the format the program's `hashCode()` only where the control may ask**
-  (`JavaIntrinsics.formatted`): `%java-format` takes the function as its fourth argument,
-  `nil` when the control is a constant with no `%h`. The arm itself is 401 B in every
-  program that formats (154,299 -> 154,700 B).
+- **`%h` is a branch of `java.util.Conversions.more`** since k85 ("java.util.Formatter and
+  the conversions a format lacked"); before, `%java-format` took the program's `hashCode()`
+  function where the control could ask, and the arm was 401 B in every program that formats
+  (154,299 -> 154,700 B).
 - **A field of an intrinsic class naming a source class** joins the class as its members
   do (`named` / `meets`; `select` brings it): `String.CASE_INSENSITIVE_ORDER`, read
   through `rontolisp.internal.CaseInsensitive.order()`.
@@ -2409,7 +2409,7 @@ backends by the `four.sh` above them, the JDK's lines in `*.jdk.txt`).
   wasm 7.84 s, of which reading the 10 MB through an `InputStreamReader` is 5.63 s
   (`StandardInput` asks the host for a character at a time; `ReadChars.java`);
   `BufferedReader` and `StringTokenizer` 0.95 / 2.81 / 13.62 s.
-- **Left**: a `Formatter` of its own `.todo/k85`; files, with `Scanner` of a `File` and a
+- **Left**: files, with `Scanner` of a `File` and a
   `Path`, `.todo/k86`; `java.text` `.todo/k87`; the other buffers, `CharBuffer.order()` with
   them, `.todo/k88`; reflection and weak references `.todo/k89`; `BigInteger`'s primes
   `.todo/k90`; the standard input on wasm read a character a host call `.todo/k91`; the
@@ -2545,6 +2545,99 @@ order of an index error and the refusal, the iterators, `ArrayList`'s own count)
   `clear()`), `JavaLoweringTest#theLibraryIsJavaSourceLoweredAsFarAsTheProgramReaches`
   (`ArrayList`'s struct holds no `changes`).
 
+## java.util.Formatter and the conversions a format lacked (2026-11-21, k85)
+
+**Invariant: every conversion of a format is written and refused as a JDK 25 writes and
+refuses it -- `%java-format` writes `%s %d %x %o %f %e %c %b %n %%`, one Java method of the
+library (`java.util.Conversions.more`) the rest -- and a program holds a branch of that
+method only where a control of its own can name the conversion and it makes what the branch
+reads.** Written from the API documentation; what it leaves open is a JDK's answers (the
+probes of `.todo/artefacts/k85-java-library-a-formatter-of-its-own/`).
+
+- **The shape**: `String.format` is `%java-format` = `%java-format-to` into a builder;
+  `Formatter.format` is `%java-format-to` over the `Formatter` with an appender,
+  `Formatter.put`: a run of the control is `append(control, start, end)`, a converted
+  argument one `append` of its padded text (a JDK appends each character of the padding by
+  itself), and an `IOException` of an append is kept for `ioException()` while the format
+  goes on with the next piece, as a JDK's does. A `Formatter` of an `OutputStream` is a
+  `BufferedWriter` over an `OutputStreamWriter`, as a JDK's. The run time hands
+  `Conversions.more` the conversion's code, the letter after `t`/`T`, the flags as written
+  and the index apart (an index's digits are no flags: `%10$5d`), the width (0 for none),
+  the precision (-1) and what the format is written to;
+  `nil` answers nothing, then the run time converts. The function is `nil` in a program
+  needing no branch (`JavaLowering.formatFunction`); it replaced k26's function of a
+  number's digits and the function of `%h`.
+- **The questions** (`JavaIntrinsics.FORMAT_CONVERSIONS`, `FORMAT_ARGUMENTS`, `MILLIS`),
+  answered while the method is lowered, so a branch not taken is in no program:
+  `hashes()`, `generals()`, `hexes()`, `times()`, `zoneTexts()` (`%tZ`, `%tc`) by the
+  conversions the program's controls name (`JavaLowering.namesFormat`; a constant names its
+  own, a parameter of a static or private method what every call passes, as a pattern's
+  letters do, anything else all of them). The library's own formats of a computed control
+  name nothing: `printf` and `format` of `PrintStream`, `PrintWriter` and `Formatter` name
+  their control where the program calls them (`JavaIntrinsics.FORMAT_CONTROLS`, which a
+  method reference reaches as a call). `exacts()`, `dates()`, `temporals()`,
+  `formattables()` by whether the program makes a class under `Exact`, `Date`,
+  `TemporalAccessor`, `Formattable` (`makesUnder`, asked by name). `millis()` by whether a
+  format can be given a `long` or a `Date` (`formatsArguments`: an argument of the
+  primitive or of a class above `Long` or `Date` or under `Date`, or an array given as it
+  is; a variable arity's array keeps its elements' types by its form): reading the host's
+  zone is some 62 KB a program of `java.time` values needs not.
+- **A refusal is the run time's raise** (`Conversions.refuse` is `%java-raise`):
+  `JavaLowering.FORMAT_RAISED` joins `RAISED` in a program whose controls can name one of
+  these conversions, and a class whose constructors take no message has a static
+  `raised(String)` the catch makes it with. Measured: a program formatting `%h` with
+  `throw new` refusals was 195,388 B, with raises 168,278 B (the condition report and its
+  printer come with a thrown object).
+- **What a JDK answered**:
+  - `%g` (Lisp, `%java-format-general`): the shortest digits rounded half up to the
+    precision's significant digits (6 for none, 1 for 0); `%f`'s form where the rounded
+    number is from 10^-4 up to 10^precision and for 0.0, `%e`'s elsewhere; `,` and `(`
+    apply, `#` is refused. A `BigDecimal`'s zero is `%f`'s at scale 0 and `%e`'s at any
+    other (`0.00` is `0.00000e-02`).
+  - `%a` (Java): `Double.toHexString`'s digits for no precision, a float read as its
+    double; a precision of 1 to 12 rounds the fraction half to even, a subnormal's after its
+    first bit (`0x1.8p-1073`), 13 or more keeps a subnormal's `0x0.` form; the zeros of a
+    width stand after `0x` and are counted without the zeros a precision adds past the
+    digits (`%020.3a` of 1.0 is 22 characters).
+  - `%t` (Java): a `long` and a `Date` read as `Date` reads them (`Dates.fields`, now with
+    the day of the year: 1582 has 355 days), `%ts` the milliseconds divided toward zero; a
+    `TemporalAccessor` by `ChronoField`s, a field it lacks refused as
+    `IllegalFormatConversionException` under the letter asking (`R` and `T` ask `H`, `r`
+    `I`, `D` `m`, `F` its year as `F` then `m` and `d`, `c` `a`, `b`, `d`, `H`, `Z`, `Y`).
+    `Y`, `C`, `y` are the year of the era (`-12345` is `12346`), `F`'s year ISO's
+    (`+12345`, `-0005`); `%tZ` an offset's id or a region's short name, which equals a
+    formatter's `z` in `Locale.US` on all 1,812 zones and instants asked
+    (`probes/ZoneNames.java`).
+  - The refusals' order: of `%g` and `%a` Clojure's table (- or 0 with no width, `+` with a
+    space or `-` with `0`, a flag not taken); of `%t` a precision, a letter unknown
+    (`Conversion = 'tq'` for `%Tq` too), a flag but `-`, `-` with no width; of `%h` `#`, `-`
+    with no width, any other flag. `MissingFormatWidthException` writes the flags in their
+    order, then the index (`%-1$g`), `T`'s letter in capitals (`%-TC`).
+  - Also: a null array of arguments is a null for each specifier; a null under a precision
+    is cut (`%.1g` is `n`); `%E`, `%X` and `%C` of null and `%E` of an infinity are in
+    capitals; a mismatch names the conversion in lower case (`e != java.lang.String`): the
+    run time wrote each otherwise before. A `Formattable` writes itself into a new
+    `Formatter` over the same output, of the locale the format was given.
+- **Measured** (wasm bytes, base -> now; `sizes/` of the artefacts): a program formatting
+  `%d` and `%s` 153,831 -> 153,771 (the `%h` arm out, the appender and the `%t` letter in),
+  by `printf` 153,929 -> 153,876, by a `PrintStream` of its own 164,936 -> 159,124 (its
+  computed control no longer brings the hash); a `BigInteger` 190,439 -> 190,734; `%h`
+  159,634 -> 168,224; `%g` 166,544; `%a` 169,790; `%tF` of a long 255,781 (the host's
+  zone), of a `LocalDate` 279,117, `%tc` of a `ZonedDateTime` in a region 372,157 (the
+  zone's names); a computed control of ints and strings 159,987 -> 177,181; a `Formatter`
+  186,426; a `Formattable` 194,761. The size programs of k12 .. k71 are the same bytes but
+  those that format (`Fo` -60 B, `FoBig` +281 B).
+- **The grid** (`probes/Grid.java`, 9,885 lines) prints a JDK's lines on the four backends
+  under `TZ=UTC` but the 512 refusals of `%s`; `Appended.java` and `Pieces.java` a JDK's
+  but the padding and the refusal before appending.
+- **Not there** (`.todo/k95`): the refusals of the flags and precisions `%d`, `%x`, `%o`,
+  `%e`, `%f`, `%c`, `%b`, `%s` do not take, and every refusal made before a `Formatter`
+  appends anything; the relative index `%<s`; a `Formatter` of a file (`.todo/k86`).
+- Pins: java-spec `a-formatter-writes-to-an-appendable-and-a-format-has-every-conversion`
+  (standalone: it holds a region and makes a `Formattable`; the refusals as counts and a
+  hash per conversion); `JavaLoweringTest#theLibraryIsJavaSourceLoweredAsFarAsTheProgramReaches`
+  (the branches a `BigInteger` and a `LocalDate` bring, the `NIL` of a program needing none).
+
 ## java.math (2026-11-20, k31)
 
 `BigInteger`, `BigDecimal`, `MathContext` and `RoundingMode` are Java source
@@ -2635,11 +2728,10 @@ leaves open is a JDK 25's answers to a grid.
 - **`String.format` writes the two by their own digits** (k26, 2026-11-20): `%d`, `%x`,
   `%X` and `%o` of a `BigInteger`, `%f`, `%e` and `%E` of a `BigDecimal`, and the
   `IllegalFormatConversionException` naming the class for the conversions each does not
-  take. The lowering hands `%java-format` a third function beside `%string` and the hash:
-  `(lambda (conversion flags width precision argument) (%java-format-exact .. (Exact.read
-  argument)))`, and only in a program that MADE a class under `rontolisp.internal.Exact`
-  (`JavaLowering.exactFunction`, asked by name so that no file is read for the question;
-  `nil` otherwise). `Exact.digits()` answers `#(integer scale)`, the scale `null` for a
+  take. The function writing them is a branch of `java.util.Conversions.more` since k85,
+  held only in a program that MADE a class under `rontolisp.internal.Exact` (asked by name
+  so that no file is read for the question; "java.util.Formatter and the conversions a
+  format lacked"). `Exact.digits()` answers `#(integer scale)`, the scale `null` for a
   `BigInteger`. Learned from a JDK 25 over 1,006 lines (`Fmt.java` of the k26 artefacts):
   `%x` / `%o` write the sign ahead of the digits (`-ff`, `-0xff`, `(ff)`), the zeros of
   a width stand between the prefix and the digits; `%f` / `%e` round half up; a zero's

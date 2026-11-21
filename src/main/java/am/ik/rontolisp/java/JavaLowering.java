@@ -333,6 +333,20 @@ final class JavaLowering implements JavaEmitter.Context {
 			"java.util.IllegalFormatConversionException", "java.util.UnknownFormatConversionException",
 			"java.util.MissingFormatArgumentException", "java.lang.RuntimeException");
 
+	/** The classes and interfaces above {@code Long} or {@code java.util.Date}. */
+	private static final Set<String> MILLIS_HOLDERS = Set.of("java.lang.Object", "java.lang.Number",
+			"java.lang.Comparable", "java.io.Serializable", "java.lang.Cloneable", "java.lang.constant.Constable",
+			"java.lang.constant.ConstantDesc", "java.lang.Long", "java.util.Date");
+
+	/**
+	 * The refusals of the conversions of a format the run time leaves to the library
+	 * ({@code java.util.Conversions}), raised as the run time's own, in a program whose
+	 * controls can name those conversions.
+	 */
+	static final List<String> FORMAT_RAISED = List.of("java.util.FormatFlagsConversionMismatchException",
+			"java.util.IllegalFormatFlagsException", "java.util.IllegalFormatPrecisionException",
+			"java.util.MissingFormatWidthException");
+
 	/**
 	 * The classes whose intrinsic and {@code native} members read or write what is
 	 * outside the program: a static initialization calling one is not run ahead.
@@ -424,6 +438,11 @@ final class JavaLowering implements JavaEmitter.Context {
 
 	/** The string forms known to be no {@code null}. */
 	private final Set<LispVal> nonNull = Collections.newSetFromMap(new IdentityHashMap<>());
+
+	/**
+	 * The types of the elements of an array a call's variable arity made, by its form.
+	 */
+	private final Map<LispVal, List<JavaType>> spread = new IdentityHashMap<>();
 
 	private int temporaries;
 
@@ -2247,13 +2266,28 @@ final class JavaLowering implements JavaEmitter.Context {
 			List<LispVal> arms = new ArrayList<>();
 			arms.add(cl("cond"));
 			for (String name : this.caughtRaised) {
-				arms.add(list(call("equal", call("car", entry), string(name)),
-						form(creator(name), creatorArguments(name, call("cdr", entry)))));
+				arms.add(list(call("equal", call("car", entry), string(name)), raisedObject(name, call("cdr", entry))));
 			}
 			forms.add(list(cl("defun"), LISP_ERROR, list(condition),
 					JavaForms.let(entry, runtimeCall("exception-of", condition), List.of(list(arms)))));
 		}
 		return forms;
+	}
+
+	/**
+	 * A library exception of the run time's message: its static {@code raised(String)},
+	 * where its constructors take no message, else its constructor of a message.
+	 */
+	private LispVal raisedObject(String exception, LispVal message) {
+		JavaClass owner = this.classes.library(exception);
+		for (Method method : owner.methods) {
+			if (method.isStatic && method.name.equals("raised") && method.parameters.equals(List.of(this.stringType))) {
+				called(method);
+				uses(owner);
+				return form(JavaNames.function(method), List.of(message));
+			}
+		}
+		return form(creator(exception), creatorArguments(exception, message));
 	}
 
 	/**
@@ -3542,43 +3576,116 @@ final class JavaLowering implements JavaEmitter.Context {
 	}
 
 	@Override
-	public LispVal hashFunction() {
-		this.generated.add(OBJECT_HASH);
-		return function(OBJECT_HASH);
+	public LispVal formatFunction() {
+		if (!namesConversion('h') && !namesConversion('g') && !namesConversion('a') && !namesConversion('t')
+				&& !makesUnder(JavaIntrinsics.EXACT) && !makesUnder(JavaIntrinsics.FORMATTABLE)) {
+			return NIL;
+		}
+		List<LispVal> parameters = new ArrayList<>();
+		for (int i = 0; i < 8; i++) {
+			parameters.add(temporary());
+		}
+		return list(cl("lambda"), list(parameters), library(JavaIntrinsics.CONVERSIONS, "more", parameters));
 	}
 
 	@Override
-	public LispVal exactFunction() {
-		// asked by name: a program that formats and names no such number reads no file
-		// for the question
-		JavaClass exact = null;
-		for (JavaClass declaration : this.classes.all()) {
-			if (declaration.name.equals(JavaIntrinsics.EXACT)) {
-				exact = declaration;
-			}
+	public void namesFormat(@Nullable String control) {
+		if (this.classes.everyFormat || (control == null && this.unit.source().library())) {
+			// the library's own formats pass on a control a call of the program's named
+			return;
 		}
-		if (exact == null) {
-			return NIL;
+		boolean named = false;
+		if (control == null) {
+			this.classes.everyFormat = true;
+			named = true;
 		}
-		for (JavaClass made : List.copyOf(this.classes.made)) {
-			if (made.isSubclassOf(exact)) {
-				for (Method method : exact.methods) {
-					if (method.isStatic && method.name.equals("read")) {
-						called(method);
-						uses(exact);
-						List<LispVal> parameters = List.of(temporary(), temporary(), temporary(), temporary());
-						LispSymbol argument = temporary();
-						List<LispVal> given = new ArrayList<>(parameters);
-						given.add(argument);
-						List<LispVal> passed = new ArrayList<>(parameters);
-						passed.add(form(JavaNames.function(method), List.of(argument)));
-						return list(cl("lambda"), list(given),
-								runtimeCall("format-exact", passed.toArray(LispVal[]::new)));
-					}
+		else {
+			for (int i = control.indexOf('%'); i >= 0 && i + 1 < control.length(); i = control.indexOf('%', i)) {
+				int j = i + 1;
+				while (j < control.length() && "0123456789$-#+ ,(.<".indexOf(control.charAt(j)) >= 0) {
+					j++;
 				}
+				char conversion = j < control.length() ? Character.toLowerCase(control.charAt(j)) : '%';
+				if ("hgat".indexOf(conversion) >= 0) {
+					named |= this.classes.formatConversions.add(conversion);
+				}
+				if (conversion == 't' && j + 1 < control.length() && "Zc".indexOf(control.charAt(j + 1)) >= 0) {
+					named |= this.classes.formatConversions.add('Z');
+				}
+				i = j + 1;
 			}
 		}
-		return NIL;
+		if (named) {
+			// what was lowered for controls naming none of these conversions is lowered
+			// again
+			this.classes.changed();
+		}
+	}
+
+	@Override
+	public void formatsArguments(Typed arguments) {
+		if (this.classes.formatsMillis || this.unit.source().library()) {
+			// the library's own formats pass on the arguments a call of the program's
+			// gave
+			return;
+		}
+		List<JavaType> types = this.spread.get(arguments.form());
+		boolean millis = types == null;
+		for (JavaType type : types == null ? List.<JavaType>of() : types) {
+			millis |= holdsMillis(type);
+		}
+		if (millis) {
+			this.classes.formatsMillis = true;
+			this.classes.changed();
+		}
+	}
+
+	/**
+	 * Whether a value of a type can be a {@code long} or a {@code Date}, which {@code %t}
+	 * reads as milliseconds: the primitive, or a class above {@code Long} or
+	 * {@code Date}, or under {@code Date}.
+	 */
+	private boolean holdsMillis(JavaType type) {
+		if (type == Primitive.LONG) {
+			return true;
+		}
+		if (!(type instanceof ClassType named)) {
+			return !(type instanceof Primitive) && !(type instanceof ArrayType);
+		}
+		if (MILLIS_HOLDERS.contains(named.declaration().name)) {
+			return true;
+		}
+		for (JavaClass above = named.declaration(); above != null; above = above.superclass) {
+			if (above.name.equals("java.util.Date")) {
+				return true;
+			}
+		}
+		return false;
+	}
+
+	@Override
+	public boolean formatsMillis() {
+		return this.classes.session || this.classes.formatsMillis;
+	}
+
+	@Override
+	public boolean namesConversion(char conversion) {
+		return this.classes.session || this.classes.everyFormat || this.classes.formatConversions.contains(conversion);
+	}
+
+	@Override
+	public boolean makesUnder(String name) {
+		if (this.classes.session) {
+			// a later buffer may make one
+			return true;
+		}
+		JavaClass above = null;
+		for (JavaClass declaration : this.classes.all()) {
+			if (declaration.name.equals(name)) {
+				above = declaration;
+			}
+		}
+		return above != null && isLive(above);
 	}
 
 	@Override
@@ -7148,8 +7255,11 @@ final class JavaLowering implements JavaEmitter.Context {
 				.stream()
 				.map(element -> elementStored(rest.element(), element.form()))
 				.toList();
+			List<JavaType> types = converted.subList(fixed, converted.size()).stream().map(Typed::type).toList();
 			converted = new ArrayList<>(converted.subList(0, fixed));
-			converted.add(new Typed(arrayOf(rest, elements), rest));
+			LispVal array = arrayOf(rest, elements);
+			this.spread.put(array, types);
+			converted.add(new Typed(array, rest));
 		}
 		// what a lambda among the arguments may throw and what a method reference among
 		// them throws, now that the type each is made for is found
@@ -8550,6 +8660,11 @@ final class JavaLowering implements JavaEmitter.Context {
 			return new Typed(located(form, pos), resolved.returnType());
 		}
 		LispVal form;
+		Integer control = JavaIntrinsics.formatControl(method.owner.name + "." + method.signature());
+		if (control != null) {
+			names(resolved.arguments().get(control), JavaIntrinsics.FORMAT_NAMING);
+			formatsArguments(resolved.arguments().get(control + 1));
+		}
 		if (method.isStatic || method.isPrivate) {
 			passes(method, resolved.arguments());
 		}
@@ -9972,7 +10087,12 @@ final class JavaLowering implements JavaEmitter.Context {
 			return false;
 		}
 		boolean takes = false;
-		for (String name : RAISED) {
+		List<String> raised = new ArrayList<>(RAISED);
+		if (namesConversion('h') || namesConversion('g') || namesConversion('a') || namesConversion('t')
+				|| makesUnder(JavaIntrinsics.FORMATTABLE)) {
+			raised.addAll(FORMAT_RAISED);
+		}
+		for (String name : raised) {
 			if (this.classes.library(name).isSubclassOf(clause)) {
 				this.caughtRaised.add(name);
 				takes = true;

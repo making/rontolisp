@@ -1979,40 +1979,62 @@
                                       whole))))
 
 ;; %e: one digit, the point, PRECISION digits, the exponent of at least two digits.
-(defun rontolisp::%java-format-scientific (d flags precision upper)
+(defun rontolisp::%java-format-scientific (d flags precision)
   (cond ((/= d d) "NaN")
         ((rontolisp::%java-infinite-p d)
          (rontolisp::%java-format-sign (< d 0d0) flags "Infinity"))
         (t
-         (let ((negative (or (< d 0d0) (and (= d 0d0) (< (/ 1d0 d) 0d0))))
-               (value (abs d))
-               (exponent 0))
-           (if (> value 0d0)
-               (let ((text (rontolisp::%java-double-string value)))
-                 (let ((e (position #\E text)) (point (position #\. text)))
-                   (if e
-                       (setq exponent (parse-integer text :start (+ e 1)))
-                       (if (>= value 1d0)
-                           (setq exponent (- point 1))
-                           (let ((k (+ point 1)))
-                             (while (char= (char text k) #\0) (setq k (+ k 1)))
-                             (setq exponent (- point k))))))))
-           (let ((parts
-                  (rontolisp::%java-fixed-digits-scaled value exponent
-                                                        precision)))
-             ;; rounding can carry into a second digit ahead of the point
-             (if (> (length (car parts)) 1)
-                 (progn
-                   (setq exponent (+ exponent 1))
-                   (setq parts
-                         (rontolisp::%java-fixed-digits-scaled value exponent
-                                                               precision))))
-             (rontolisp::%java-scientific-text negative parts exponent flags
-                                               precision upper))))))
+         (let ((rounded (rontolisp::%java-scientific-digits (abs d) precision)))
+           (rontolisp::%java-scientific-text
+            (or (< d 0d0) (and (= d 0d0) (< (/ 1d0 d) 0d0))) (cdr rounded)
+            (car rounded) flags precision)))))
+
+;; The digits of a double that is not negative rounded to one digit and PRECISION more:
+;; (exponent . (one . fraction)).
+(defun rontolisp::%java-scientific-digits (value precision)
+  (let ((exponent 0))
+    (if (> value 0d0)
+        (let ((text (rontolisp::%java-double-string value)))
+          (let ((e (position #\E text)) (point (position #\. text)))
+            (if e
+                (setq exponent (parse-integer text :start (+ e 1)))
+                (if (>= value 1d0)
+                    (setq exponent (- point 1))
+                    (let ((k (+ point 1)))
+                      (while (char= (char text k) #\0) (setq k (+ k 1)))
+                      (setq exponent (- point k))))))))
+    (let ((parts
+           (rontolisp::%java-fixed-digits-scaled value exponent precision)))
+      ;; rounding can carry into a second digit ahead of the point
+      (if (> (length (car parts)) 1)
+          (progn
+            (setq exponent (+ exponent 1))
+            (setq parts
+             (rontolisp::%java-fixed-digits-scaled value exponent precision))))
+      (cons exponent parts))))
+
+;; %g of a double, padded to WIDTH: PRECISION significant digits (6 where it is -1, 1
+;; where it is 0) of the shortest digits rounded half up, in %f's form where the number
+;; so rounded is zero or from 10^-4 up to 10^PRECISION, in %e's otherwise.
+(defun rontolisp::%java-format-general (d flags width precision)
+  (let ((places
+         (cond ((< precision 0) 5) ((= precision 0) 0) (t (- precision 1))))
+        (finite (and (= d d) (not (rontolisp::%java-infinite-p d)))))
+    (let ((exponent
+           (if (and finite (/= d 0d0))
+               (car (rontolisp::%java-scientific-digits (abs d) places))
+               0)))
+      (rontolisp::%java-pad (if (and (>= exponent -4) (<= exponent places))
+                                (rontolisp::%java-format-fixed d flags
+                                 (- places exponent))
+                                (rontolisp::%java-format-scientific d flags
+                                                                    places))
+                            width (position #\- flags)
+                            (and finite (position #\0 flags))))))
 
 ;; %e of the digits (one . fraction) of a number and its exponent.
 (defun rontolisp::%java-scientific-text
-    (negative parts exponent flags precision upper)
+    (negative parts exponent flags precision)
   (let ((digits
          (if (or (> precision 0) (position #\# flags))
              (%string-concat (%string-concat (car parts) ".") (cdr parts))
@@ -2020,8 +2042,7 @@
         (power (%decimal-piece (abs exponent))))
     (rontolisp::%java-format-sign negative flags
                                   (%string-concat (%string-concat
-                                                   (%string-concat digits
-                                                    (if upper "E" "e"))
+                                                   (%string-concat digits "e")
                                                    (if (< exponent 0) "-" "+"))
                                                   (if (< (length power) 2)
                                                       (%string-concat "0" power)
@@ -2053,55 +2074,89 @@
         (cons (%substring all 0 (- (length all) precision))
               (%substring all (- (length all) precision) (length all)))))))
 
-;; A conversion of String.format over a number written by its own digits, which only a
-;; program that makes one holds: EXACT is #(digits scale) of a BigDecimal, #(digits nil)
-;; of a BigInteger and nil of any other argument. Answers the text, and nil where the
-;; argument is no such number or the conversion reads no number (%s, %b, %h).
-(defun rontolisp::%java-format-exact (conversion flags width precision exact)
-  (if (null exact)
-      nil
-      (let ((left (if (position #\- flags) t nil))
-            (zero (if (position #\0 flags) t nil))
-            (digits (aref exact 0))
-            (scale (aref exact 1)))
-        (cond ((or (char= conversion #\d) (char= conversion #\x)
-                   (char= conversion #\X) (char= conversion #\o))
-               (cond (scale (rontolisp::%java-format-refused conversion
-                             "java.math.BigDecimal"))
-                     ((char= conversion #\d)
-                      (let ((text (%decimal-piece (abs digits))))
-                        (rontolisp::%java-pad (rontolisp::%java-format-sign
-                                               (< digits 0) flags
-                                               (if (position #\, flags)
-                                                   (rontolisp::%java-grouped
-                                                    text)
-                                                   text)) width left zero)))
-                     (t (rontolisp::%java-exact-radix digits conversion flags
-                                                      width left zero))))
-              ((or (char= conversion #\f) (char= conversion #\e)
-                   (char= conversion #\E))
-               (if (null scale)
-                   (rontolisp::%java-format-refused conversion
-                                                    "java.math.BigInteger")
-                   (let ((places (if precision precision 6)))
-                     (rontolisp::%java-pad (if (char= conversion #\f)
-                                               (rontolisp::%java-fixed-text
-                                                (< digits 0)
-                                                (rontolisp::%java-rounded-digits
-                                                 (abs digits) scale places)
-                                                flags places)
-                                               (rontolisp::%java-exact-scientific
-                                                digits scale flags places
-                                                (char= conversion #\E))) width
-                                           left zero))))
-              ((or (char= conversion #\c) (char= conversion #\C))
+;; A conversion of a format over a number written by its own digits, which only a program
+;; that makes one holds (java.util.Conversions): CODE is the conversion's character
+;; code, PRECISION -1 where none is given, EXACT #(digits scale) of a BigDecimal and
+;; #(digits nil) of a BigInteger, FLAGS the flags as written. Answers the text, and nil
+;; where the conversion reads no number (%s, %b, %h, %t); %g is
+;; %java-format-exact-general's.
+(defun rontolisp::%java-format-exact (code flags width precision exact)
+  (let ((conversion (code-char code))
+        (left (if (position #\- flags) t nil))
+        (zero (if (position #\0 flags) t nil))
+        (digits (aref exact 0))
+        (scale (aref exact 1))
+        (places (if (< precision 0) 6 precision)))
+    (cond ((or (char= conversion #\d) (char= conversion #\x)
+               (char= conversion #\X) (char= conversion #\o))
+           (cond (scale (rontolisp::%java-format-refused conversion
+                         "java.math.BigDecimal"))
+                 ((char= conversion #\d)
+                  (let ((text (%decimal-piece (abs digits))))
+                    (rontolisp::%java-pad (rontolisp::%java-format-sign
+                                           (< digits 0) flags
+                                           (if (position #\, flags)
+                                               (rontolisp::%java-grouped text)
+                                               text)) width left zero)))
+                 (t (rontolisp::%java-exact-radix digits conversion flags width
+                                                  left zero))))
+          ((or (char= conversion #\f) (char= conversion #\e)
+               (char= conversion #\E))
+           (if (null scale)
                (rontolisp::%java-format-refused conversion
-                (if scale "java.math.BigDecimal" "java.math.BigInteger")))
-              (t nil)))))
+                                                "java.math.BigInteger")
+               (let ((text
+                      (if (char= conversion #\f)
+                          (rontolisp::%java-fixed-text (< digits 0)
+                           (rontolisp::%java-rounded-digits (abs digits) scale
+                                                            places) flags
+                           places)
+                          (rontolisp::%java-exact-scientific digits scale flags
+                                                             places))))
+                 (rontolisp::%java-pad
+                  (if (char= conversion #\E) (%string-upcase-piece text) text)
+                  width left zero))))
+          ((or (char= conversion #\c) (char= conversion #\C)
+               (char= conversion #\a) (char= conversion #\A))
+           (rontolisp::%java-format-refused conversion
+            (if scale "java.math.BigDecimal" "java.math.BigInteger")))
+          (t nil))))
+
+;; %g and %G of a number written by its own digits, as %java-format-exact: %f's form
+;; where the number rounded to PRECISION significant digits is from 10^-4 up to
+;; 10^PRECISION, %e's otherwise -- a zero's too, but that of the scale 0. A BigInteger is
+;; refused.
+(defun rontolisp::%java-format-exact-general (code flags width precision exact)
+  (if (null (aref exact 1))
+      (rontolisp::%java-format-refused (code-char code) "java.math.BigInteger")
+      (let ((text
+             (rontolisp::%java-exact-general (aref exact 0) (aref exact 1) flags
+                                             precision)))
+        (rontolisp::%java-pad (if (= code 71) (%string-upcase-piece text) text)
+                              width (position #\- flags)
+                              (position #\0 flags)))))
+
+(defun rontolisp::%java-exact-general (digits scale flags precision)
+  (let ((places
+         (cond ((< precision 0) 5) ((= precision 0) 0) (t (- precision 1))))
+        (size (abs digits)))
+    (let ((exponent (- (- (length (%decimal-piece size)) 1) scale)))
+      (if (> (length
+              (car
+               (rontolisp::%java-rounded-digits size (+ scale exponent)
+                                                places))) 1)
+          (setq exponent (+ exponent 1)))
+      ;; a zero of no scale is the one zero %f's form writes
+      (if (and (or (/= digits 0) (null scale) (= scale 0)) (>= exponent -4)
+               (<= exponent places))
+          (rontolisp::%java-fixed-text (< digits 0)
+           (rontolisp::%java-rounded-digits size scale (- places exponent))
+           flags (- places exponent))
+          (rontolisp::%java-exact-scientific digits scale flags places)))))
 
 ;; %e of DIGITS / 10^SCALE: the exponent is the place of its first digit, of a zero the
 ;; place its scale gives it.
-(defun rontolisp::%java-exact-scientific (digits scale flags precision upper)
+(defun rontolisp::%java-exact-scientific (digits scale flags precision)
   (let ((size (abs digits)))
     (let ((exponent (- (- (length (%decimal-piece size)) 1) scale)))
       (let ((parts
@@ -2115,7 +2170,7 @@
                     (rontolisp::%java-rounded-digits size (+ scale exponent)
                                                      precision))))
         (rontolisp::%java-scientific-text (< digits 0) parts exponent flags
-                                          precision upper)))))
+                                          precision)))))
 
 ;; %x and %o of a whole number of any size: its sign, then its digits, where an int
 ;; and a long are written as the bits they are held in. The zeros that fill a width
@@ -2151,7 +2206,9 @@
 (defun rontolisp::%java-format-refused (conversion class)
   (rontolisp::%java-raise "java.util.IllegalFormatConversionException"
                           (%string-concat (%string-concat (%normalize-string
-                                                           (string conversion))
+                                                           (string
+                                                            (char-downcase
+                                                             conversion)))
                                                           " != ") class)))
 
 (defun rontolisp::%java-class-name-or (x)
@@ -2163,18 +2220,22 @@
         ((characterp x) "java.lang.Character")
         (t "an object")))
 
-;; One conversion of String.format over its argument. TO-EXACT answers it for a number
-;; written by its own digits, and nil for the conversions and arguments it leaves.
+;; The text of a null argument: null, cut to PRECISION characters, in capitals under an
+;; uppercase conversion.
+(defun rontolisp::%java-format-null (conversion width precision left)
+  (rontolisp::%java-pad (if (and precision (< precision 4))
+                            (%substring
+                             (if (upper-case-p conversion) "NULL" "null") 0
+                             precision)
+                            (if (upper-case-p conversion) "NULL" "null")) width
+                        left nil))
+
+;; One conversion of a format the run time writes itself over its argument.
 (defun rontolisp::%java-format-one
-    (conversion flags width precision argument to-string to-hash to-exact)
+    (conversion flags width precision argument to-string)
   (let ((left (if (position #\- flags) t nil))
-        (zero (if (position #\0 flags) t nil))
-        (exact
-         (if to-exact
-             (funcall to-exact conversion flags width precision argument)
-             nil)))
-    (cond (exact exact)
-          ((or (char= conversion #\s) (char= conversion #\S))
+        (zero (if (position #\0 flags) t nil)))
+    (cond ((or (char= conversion #\s) (char= conversion #\S))
            (let ((text
                   (if (null argument) "null" (funcall to-string argument))))
              (if (and precision (< precision (length text)))
@@ -2182,111 +2243,120 @@
              (rontolisp::%java-pad
               (if (char= conversion #\S) (%string-upcase-piece text) text) width
               left nil)))
-          ((char= conversion #\d)
-           (if (null argument)
-               (rontolisp::%java-pad "null" width left nil)
-               (let ((n
-                      (cond ((integerp argument) argument)
-                       ((and (consp argument) (integerp (car argument)))
-                        (car argument))
-                       (t (rontolisp::%java-format-mismatch "d" argument)))))
-                 (let ((digits (%decimal-piece (abs n))))
-                   (rontolisp::%java-pad (rontolisp::%java-format-sign (< n 0)
-                                          flags
-                                          (if (position #\, flags)
-                                              (rontolisp::%java-grouped digits)
-                                              digits)) width left zero)))))
-          ((or (char= conversion #\x) (char= conversion #\X)
-               (char= conversion #\o))
-           (if (null argument)
-               (rontolisp::%java-pad "null" width left nil)
-               (let ((n
-                      (cond ((integerp argument) (logand argument 4294967295))
-                            ((and (consp argument) (integerp (car argument)))
-                             (logand (car argument)
-                                     (cond ((eq (cdr argument) :byte) 255)
-                                           ((eq (cdr argument) :short) 65535)
-                                           (t 18446744073709551615))))
-                            (t (rontolisp::%java-format-mismatch
-                                (%normalize-string (string conversion))
-                                argument)))))
-                 (let ((digits
-                        (rontolisp::%java-digits n
-                         (if (char= conversion #\o) 8 16))))
-                   (if (position #\# flags)
-                       (setq digits
-                             (%string-concat
-                              (if (char= conversion #\o) "0" "0x") digits)))
-                   (rontolisp::%java-pad (if (char= conversion #\X)
-                                             (%string-upcase-piece digits)
-                                             digits) width left zero)))))
-          ((or (char= conversion #\f) (char= conversion #\e)
-               (char= conversion #\E))
-           (if (null argument)
-               (rontolisp::%java-pad "null" width left nil)
-               (let ((d
-                      (cond ((floatp argument) argument)
-                            ((rontolisp::%java-float-p argument) (car argument))
-                            (t (rontolisp::%java-format-mismatch
-                                (%normalize-string (string conversion))
-                                argument)))))
-                 (rontolisp::%java-pad
-                  (if (char= conversion #\f)
-                      (rontolisp::%java-format-fixed d flags
-                                                     (if precision precision 6))
-                      (rontolisp::%java-format-scientific d flags
-                       (if precision precision 6) (char= conversion #\E))) width
-                  left
-                  (and zero (= d d) (not (rontolisp::%java-infinite-p d)))))))
-          ((or (char= conversion #\c) (char= conversion #\C))
-           (let ((text
-                  (cond ((null argument) "null")
-                   ((characterp argument) (%normalize-string (string argument)))
-                   ((integerp argument) (rontolisp::%java-char-string argument))
-                   (t (rontolisp::%java-format-mismatch "c" argument)))))
-             (rontolisp::%java-pad
-              (if (char= conversion #\C) (%string-upcase-piece text) text) width
-              left nil)))
           ((or (char= conversion #\b) (char= conversion #\B))
            (let ((text
                   (if (or (null argument) (eq argument :false))
                       "false"
                       "true")))
-             (rontolisp::%java-pad
-              (if (char= conversion #\B) (%string-upcase-piece text) text) width
-              left nil)))
-          ;; the hexadecimal digits of the argument's hash code
-          ((or (char= conversion #\h) (char= conversion #\H))
-           (let ((text
-                  (if (null argument)
-                      "null"
-                      (rontolisp::%java-digits
-                       (logand (funcall to-hash argument) 4294967295) 16))))
              (if (and precision (< precision (length text)))
                  (setq text (%substring text 0 precision)))
              (rontolisp::%java-pad
-              (if (char= conversion #\H) (%string-upcase-piece text) text) width
+              (if (char= conversion #\B) (%string-upcase-piece text) text) width
               left nil)))
-          (t (error "the conversion %~A of String.format is not supported by the experimental Java subset yet"
-                    (%normalize-string (string conversion)))))))
+          ((not (position conversion "dxXofeEcC"))
+           (rontolisp::%java-raise "java.util.UnknownFormatConversionException"
+                                   (%string-concat (%string-concat
+                                                    "Conversion = '"
+                                                    (%normalize-string
+                                                     (string conversion)))
+                                                   "'")))
+          ((null argument)
+           (rontolisp::%java-format-null conversion width precision left))
+          ((char= conversion #\d)
+           (let ((n
+                  (cond ((integerp argument) argument)
+                   ((and (consp argument) (integerp (car argument)))
+                    (car argument))
+                   (t (rontolisp::%java-format-mismatch conversion argument)))))
+             (let ((digits (%decimal-piece (abs n))))
+               (rontolisp::%java-pad (rontolisp::%java-format-sign (< n 0) flags
+                                      (if (position #\, flags)
+                                          (rontolisp::%java-grouped digits)
+                                          digits)) width left zero))))
+          ((or (char= conversion #\x) (char= conversion #\X)
+               (char= conversion #\o))
+           (let ((n
+                  (cond ((integerp argument) (logand argument 4294967295))
+                   ((and (consp argument) (integerp (car argument)))
+                    (logand (car argument)
+                            (cond ((eq (cdr argument) :byte) 255)
+                                  ((eq (cdr argument) :short) 65535)
+                                  (t 18446744073709551615))))
+                   (t (rontolisp::%java-format-mismatch conversion argument)))))
+             (let ((digits
+                    (rontolisp::%java-digits n
+                                             (if (char= conversion #\o) 8 16))))
+               (if (position #\# flags)
+                   (setq digits
+                         (%string-concat (if (char= conversion #\o) "0" "0x")
+                                         digits)))
+               (rontolisp::%java-pad
+                (if (char= conversion #\X) (%string-upcase-piece digits) digits)
+                width left zero))))
+          ((or (char= conversion #\f) (char= conversion #\e)
+               (char= conversion #\E))
+           (let ((d
+                  (cond ((floatp argument) argument)
+                   ((rontolisp::%java-float-p argument) (car argument))
+                   (t (rontolisp::%java-format-mismatch conversion argument)))))
+             (rontolisp::%java-pad
+              (cond ((char= conversion #\f)
+                     (rontolisp::%java-format-fixed d flags
+                                                    (if precision precision 6)))
+                    ((char= conversion #\E)
+                     (%string-upcase-piece
+                      (rontolisp::%java-format-scientific d flags
+                       (if precision precision 6))))
+                    (t (rontolisp::%java-format-scientific d flags
+                        (if precision precision 6)))) width left
+              (and zero (= d d) (not (rontolisp::%java-infinite-p d))))))
+          (t
+           (let ((text
+                  (cond
+                   ((characterp argument) (%normalize-string (string argument)))
+                   ((integerp argument) (rontolisp::%java-char-string argument))
+                   (t (rontolisp::%java-format-mismatch conversion argument)))))
+             (rontolisp::%java-pad
+              (if (char= conversion #\C) (%string-upcase-piece text) text) width
+              left nil))))))
+
+;; Appends TEXT from START to END, or all of it where END is nil, to OUT: a builder, or,
+;; where APPENDER is a function, the Formatter OUT through it.
+(defun rontolisp::%java-format-put (out appender text start end)
+  (if appender
+      (funcall appender out text start (if end end -1))
+      (let ((i start) (n (if end end (length text))))
+        (while (< i n)
+          (vector-push-extend (char text i) out)
+          (setq i (+ i 1))))))
 
 ;; String.format: the text, each %[index$][flags][width][.precision]conversion replaced
-;; by its argument's text. TO-STRING is the program's function for %s, TO-HASH the one
-;; for %h, nil where the lowering read a control that has none, TO-EXACT the one for a
-;; BigInteger and a BigDecimal, nil in a program that makes neither.
-(defun rontolisp::%java-format (control arguments to-string to-hash to-exact)
-  (let ((builder (rontolisp::%java-sb-new)) (i 0) (n (length control)) (next 0))
+;; by its argument's text. TO-STRING is the program's function for %s; TO-MORE, nil in a
+;; program needing none, answers the conversions the run time leaves to the library
+;; (java.util.Conversions).
+(defun rontolisp::%java-format (control arguments to-string to-more)
+  (let ((builder (rontolisp::%java-sb-new)))
+    (rontolisp::%java-format-to builder nil control arguments to-string to-more)
+    (rontolisp::%java-sb-string builder)))
+
+;; A format appended to OUT through %java-format-put: each run of the control's text
+;; as a range of it, each converted argument as a text of its own. A null array of
+;; arguments is a null for each specifier.
+(defun rontolisp::%java-format-to
+    (out appender control arguments to-string to-more)
+  (if (null control) (rontolisp::%java-npe))
+  (let ((i 0) (n (length control)) (next 0))
     (while (< i n)
-      (let ((c (char control i)))
-        (if (not (char= c #\%))
-            (progn
-              (vector-push-extend c builder)
-              (setq i (+ i 1)))
-            (let ((j (+ i 1))
-                  (flags (rontolisp::%java-sb-new))
+      (let ((at (position #\% control :start i)))
+        (if (null at) (setq at n))
+        (if (> at i) (rontolisp::%java-format-put out appender control i at))
+        (setq i at)
+        (if (< at n)
+            (let ((j (+ at 1))
                   (width 0)
                   (precision nil)
-                  (index nil))
+                  (index nil)
+                  (suffix nil))
               ;; an argument index: digits and a dollar sign
               (let ((k j))
                 (while (and (< k n)
@@ -2296,53 +2366,81 @@
                     (progn
                       (setq index (- (parse-integer control :start j :end k) 1))
                       (setq j (+ k 1)))))
-              (while (and (< j n) (position (char control j) "-#+ 0,("))
-                (vector-push-extend (char control j) flags)
-                (setq j (+ j 1)))
-              (while (and (< j n)
-                          (rontolisp::%java-ascii-digit (char control j)))
-                (setq width
-                      (+ (* width 10)
-                         (rontolisp::%java-ascii-digit (char control j))))
-                (setq j (+ j 1)))
-              (if (and (< j n) (char= (char control j) #\.))
-                  (progn
-                    (setq j (+ j 1))
-                    (setq precision 0)
-                    (while (and (< j n)
-                                (rontolisp::%java-ascii-digit (char control j)))
-                      (setq precision
-                            (+ (* precision 10)
+              ;; the flags as written, after the index
+              (let ((flags
+                     (let ((from j))
+                       (while (and (< j n)
+                                   (position (char control j) "-#+ 0,("))
+                         (setq j (+ j 1)))
+                       (%substring control from j))))
+                (while (and (< j n)
+                            (rontolisp::%java-ascii-digit (char control j)))
+                  (setq width
+                        (+ (* width 10)
+                           (rontolisp::%java-ascii-digit (char control j))))
+                  (setq j (+ j 1)))
+                (if (and (< j n) (char= (char control j) #\.))
+                    (progn
+                      (setq j (+ j 1))
+                      (setq precision 0)
+                      (while (and (< j n)
+                              (rontolisp::%java-ascii-digit (char control j)))
+                        (setq precision
+                              (+ (* precision 10)
                                (rontolisp::%java-ascii-digit (char control j))))
-                      (setq j (+ j 1)))))
-              (if (>= j n)
-                  (rontolisp::%java-raise
-                   "java.util.UnknownFormatConversionException"
-                   "Conversion = '%'"))
-              (let ((conversion (char control j)))
-                (cond
-                 ((char= conversion #\n) (vector-push-extend #\Newline builder))
-                 ((char= conversion #\%)
-                  (rontolisp::%java-sb-append builder
-                   (rontolisp::%java-pad "%" width (position #\- flags) nil)))
-                 (t
-                  (let ((at (if index index next)))
-                    (if (null index) (setq next (+ next 1)))
-                    (if (>= at (length arguments))
-                        (rontolisp::%java-raise
-                         "java.util.MissingFormatArgumentException"
-                         (%string-concat (%string-concat "Format specifier '%"
-                                                         (%normalize-string
-                                                          (string conversion)))
-                                         "'")))
-                    (rontolisp::%java-sb-append builder
-                                                (rontolisp::%java-format-one
-                                                 conversion flags width
-                                                 precision (aref arguments at)
-                                                 to-string to-hash
-                                                 to-exact))))))
-              (setq i (+ j 1))))))
-    (rontolisp::%java-sb-string builder)))
+                        (setq j (+ j 1)))))
+                (if (>= j n)
+                    (rontolisp::%java-raise
+                     "java.util.UnknownFormatConversionException"
+                     "Conversion = '%'"))
+                (let ((conversion (char control j)))
+                  (if (or (char= conversion #\t) (char= conversion #\T))
+                      (progn
+                        (if (>= (+ j 1) n)
+                            (rontolisp::%java-raise
+                             "java.util.UnknownFormatConversionException"
+                             (%string-concat (%string-concat "Conversion = '"
+                                                             (%normalize-string
+                                                              (string
+                                                               conversion)))
+                                             "'")))
+                        (setq j (+ j 1))
+                        (setq suffix (char control j))))
+                  (cond ((char= conversion #\n)
+                         (rontolisp::%java-format-put out appender
+                                                      (string #\Newline) 0 nil))
+                        ((char= conversion #\%)
+                         (rontolisp::%java-format-put out appender
+                                                      (rontolisp::%java-pad "%"
+                                                       width
+                                                       (position #\- flags) nil)
+                                                      0 nil))
+                        (t
+                         (let ((at (if index index next)))
+                           (if (null index) (setq next (+ next 1)))
+                           (if (and arguments (>= at (length arguments)))
+                               (rontolisp::%java-raise
+                                "java.util.MissingFormatArgumentException"
+                                (%string-concat (%string-concat
+                                                 "Format specifier '%"
+                                                 (%substring control (+ i 1)
+                                                             (+ j 1))) "'")))
+                           (let ((argument
+                                  (if arguments (aref arguments at) nil)))
+                             (rontolisp::%java-format-put out appender
+                              (or (if to-more
+                                      (funcall to-more (char-code conversion)
+                                               (if suffix (char-code suffix) 0)
+                                               flags (if index (+ index 1) 0)
+                                               width (if precision precision -1)
+                                               argument out)
+                                      nil)
+                                  (rontolisp::%java-format-one conversion flags
+                                                               width precision
+                                                               argument
+                                                               to-string)) 0
+                              nil)))))))
+              (setq i (+ j 1))))))))
 
 ;; --- threads ------------------------------------------------------------------------
 

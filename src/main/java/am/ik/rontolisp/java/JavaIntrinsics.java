@@ -92,6 +92,53 @@ final class JavaIntrinsics {
 	/** The interface of the numbers a format writes by their own digits. */
 	static final String EXACT = "rontolisp.internal.Exact";
 
+	/** The conversions of a format the run time leaves to the library. */
+	static final String CONVERSIONS = "java.util.Conversions";
+
+	static final String FORMATTABLE = "java.util.Formattable";
+
+	/**
+	 * The questions of {@code java.util.Conversions} answered by whether a control of the
+	 * program can name a conversion ({@code JavaEmitter.Context#namesConversion}).
+	 */
+	private static final Map<String, Character> FORMAT_CONVERSIONS = Map.of(CONVERSIONS + ".hashes()", 'h',
+			CONVERSIONS + ".generals()", 'g', CONVERSIONS + ".hexes()", 'a', CONVERSIONS + ".times()", 't',
+			CONVERSIONS + ".zoneTexts()", 'Z');
+
+	/**
+	 * The questions of {@code java.util.Conversions} answered by whether the program
+	 * makes an instance of a class under one of the library's.
+	 */
+	private static final String MILLIS = CONVERSIONS + ".millis()";
+
+	private static final Map<String, String> FORMAT_ARGUMENTS = Map.of(CONVERSIONS + ".exacts()", EXACT,
+			CONVERSIONS + ".dates()", "java.util.Date", CONVERSIONS + ".temporals()",
+			"java.time.temporal.TemporalAccessor", CONVERSIONS + ".formattables()", FORMATTABLE);
+
+	/**
+	 * The library's members writing a format of the program's, by the index of their
+	 * control: a call of one names its control as {@code String.format} does, and the
+	 * library's own format of the control names nothing.
+	 */
+	private static final Map<String, Integer> FORMAT_CONTROLS = Map.of("java.io.PrintStream.printf(String,Object[])", 0,
+			"java.io.PrintStream.printf(java.util.Locale,String,Object[])", 1,
+			"java.io.PrintStream.format(String,Object[])", 0,
+			"java.io.PrintStream.format(java.util.Locale,String,Object[])", 1,
+			"java.io.PrintWriter.printf(String,Object[])", 0,
+			"java.io.PrintWriter.printf(java.util.Locale,String,Object[])", 1,
+			"java.io.PrintWriter.format(String,Object[])", 0,
+			"java.io.PrintWriter.format(java.util.Locale,String,Object[])", 1,
+			"java.util.Formatter.format(String,Object[])", 0,
+			"java.util.Formatter.format(java.util.Locale,String,Object[])", 1);
+
+	/** A format's control names the conversions it holds. */
+	static final JavaEmitter.Naming FORMAT_NAMING = (lowering, text) -> lowering.namesFormat(text);
+
+	/** The index of the control of a member of the library writing a format, or null. */
+	static @Nullable Integer formatControl(String member) {
+		return FORMAT_CONTROLS.get(member);
+	}
+
 	private static final String STREAM = "java.util.stream.Stream";
 
 	private static final String INT_STREAM = "java.util.stream.IntStream";
@@ -317,6 +364,15 @@ final class JavaIntrinsics {
 	 * nothing of reading a date's fields, one reading no ISO formatter none of them.
 	 */
 	static @Nullable Boolean answered(String member, JavaEmitter.Context lowering) {
+		if (FORMAT_CONVERSIONS.containsKey(member)) {
+			return lowering.namesConversion(FORMAT_CONVERSIONS.get(member));
+		}
+		if (FORMAT_ARGUMENTS.containsKey(member)) {
+			return lowering.makesUnder(FORMAT_ARGUMENTS.get(member));
+		}
+		if (member.equals(MILLIS)) {
+			return lowering.formatsMillis();
+		}
 		return switch (member) {
 			case REGIONAL, STEP_REGIONAL -> lowering.holdsRegions();
 			case FOREIGN -> lowering.foreignTemporals();
@@ -458,7 +514,7 @@ final class JavaIntrinsics {
 			if (text) {
 				JavaClass.Method format = new JavaClass.Method(intrinsic, "format", formatted, string, true, false,
 						null, (lowering, call) -> after(call.argument(0),
-								formatted(lowering, call.arguments().get(1), call.argument(2))),
+								formatted(lowering, call.arguments().get(1), call.arguments().get(2))),
 						false);
 				format.varargs = true;
 				intrinsic.methods.add(format);
@@ -1026,25 +1082,21 @@ final class JavaIntrinsics {
 	}
 
 	private static LispVal printf(Context lowering, Invocation call) {
-		LispVal text = formatted(lowering, call.arguments().get(0), call.argument(1));
+		LispVal text = formatted(lowering, call.arguments().get(0), call.arguments().get(1));
 		return call.self().equals(OUT) ? call("write-string", text) : call("write-string", text, call.self());
 	}
 
-	/** A conversion of {@code String.format} that writes its argument's hash code. */
-	private static final java.util.regex.Pattern HASH_CONVERSION = java.util.regex.Pattern
-		.compile("%[-#+ 0,(\\d$.]*[hH]");
-
 	/**
-	 * {@code String.format} over a control and the array of its arguments. The function
-	 * answering any value's {@code hashCode()} goes with it only where the control may
-	 * hold the conversion that asks for one -- it is no constant, or names {@code %h} --,
-	 * so that no other program holds that function for its formats; the function reading
-	 * a {@code BigInteger} and a {@code BigDecimal} only in a program that makes one.
+	 * {@code String.format} over a control and the array of its arguments. The control
+	 * names the conversions it holds, so that the function answering those the run time
+	 * leaves to the library goes with a format only in a program whose controls can name
+	 * one, or that makes a class one reads.
 	 */
-	private static LispVal formatted(Context lowering, Typed control, LispVal arguments) {
-		boolean hashes = !(control.constant() instanceof String text) || HASH_CONVERSION.matcher(text).find();
-		return runtimeCall("format", control.form(), arguments, lowering.stringFunction(),
-				hashes ? lowering.hashFunction() : JavaForms.NIL, lowering.exactFunction());
+	private static LispVal formatted(Context lowering, Typed control, Typed arguments) {
+		lowering.names(control, FORMAT_NAMING);
+		lowering.formatsArguments(arguments);
+		return runtimeCall("format", control.form(), arguments.form(), lowering.stringFunction(),
+				lowering.formatFunction());
 	}
 
 	/** An argument as the text {@code String.valueOf} makes of it. */
@@ -1064,7 +1116,7 @@ final class JavaIntrinsics {
 		ArrayType characters = new ArrayType(Primitive.CHAR);
 		ArrayType bytes = new ArrayType(Primitive.BYTE);
 		JavaEmitter format = (lowering, call) -> formatted(lowering, java.util.Objects.requireNonNull(call.receiver()),
-				call.argument(0));
+				call.arguments().get(0));
 		return builder.constructor((lowering, call) -> JavaForms.string(""))
 			.constructor(runtime("string-copy"), string)
 			.constructor((lowering, call) -> runtimeCall("chars-string", call.argument(0), integer(0), JavaForms.NIL),
@@ -1173,7 +1225,7 @@ final class JavaIntrinsics {
 			.method("formatted", string, format, new ArrayType(object))
 			.varargs()
 			.statik("format", string,
-					(lowering, call) -> formatted(lowering, call.arguments().get(0), call.argument(1)), string,
+					(lowering, call) -> formatted(lowering, call.arguments().get(0), call.arguments().get(1)), string,
 					new ArrayType(object))
 			.varargs()
 			.statik("join", string,
@@ -2213,6 +2265,28 @@ final class JavaIntrinsics {
 		// formatter reads a zone's name through ZoneId's own lookup, which notes none
 		natives.put(FOREIGN, (lowering, call) -> lowering.foreignTemporals() ? JavaForms.T : JavaForms.NIL);
 		natives.put(WANTED, (lowering, call) -> lowering.wantedField() ? JavaForms.T : JavaForms.NIL);
+		// the conversions of a format the run time leaves to the library: each branch of
+		// java.util.Conversions where a control of the program can name it, or the
+		// program makes what it reads
+		FORMAT_CONVERSIONS.forEach((question, conversion) -> natives.put(question,
+				(lowering, call) -> lowering.namesConversion(conversion) ? JavaForms.T : JavaForms.NIL));
+		FORMAT_ARGUMENTS.forEach((question, supertype) -> natives.put(question,
+				(lowering, call) -> lowering.makesUnder(supertype) ? JavaForms.T : JavaForms.NIL));
+		natives.put(MILLIS, (lowering, call) -> lowering.formatsMillis() ? JavaForms.T : JavaForms.NIL);
+		natives.put(CONVERSIONS + ".refuse(String,String)", runtime("raise"));
+		natives.put(CONVERSIONS + ".exact0(int,String,int,int,Object[])", runtime("format-exact"));
+		natives.put(CONVERSIONS + ".exactGeneral0(int,String,int,int,Object[])", runtime("format-exact-general"));
+		natives.put(CONVERSIONS + ".general0(double,String,int,int)", runtime("format-general"));
+		natives.put("java.util.Formatter.format0(java.util.Formatter,String,Object[])", (lowering, call) -> {
+			List<LispVal> piece = new ArrayList<>();
+			for (int i = 0; i < 4; i++) {
+				piece.add(lowering.temporary());
+			}
+			LispVal write = JavaForms.list(JavaForms.cl("lambda"), JavaForms.list(piece),
+					lowering.library("java.util.Formatter", "put", piece));
+			return runtimeCall("format-to", call.argument(0), write, call.argument(1), call.argument(2),
+					lowering.stringFunction(), lowering.formatFunction());
+		});
 		// a date or a time is asked its calendar only where the program can ask it
 		for (String calendars : CALENDARS) {
 			natives.put(calendars, (lowering, call) -> lowering.asksCalendars() ? JavaForms.T : JavaForms.NIL);

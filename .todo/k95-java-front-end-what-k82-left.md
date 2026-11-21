@@ -216,9 +216,14 @@ checked exception, and a line that differs from a JDK by decision can be in no c
   `Collections.EMPTY_LIST`, `EMPTY_SET`, `EMPTY_MAP` (a static field of `Collections` would
   make its collection in every program naming `Collections`).
 - **What a format does not refuse**: the exceptions a JDK throws for a flag or a precision a
-  conversion does not take (`%#h`, `%,x`, `%,e`: `FormatFlagsConversionMismatchException`;
-  `%.2d`: `IllegalFormatPrecisionException`; k26's `Fmt.java`), written as if the flag were
-  not there; and the class a mismatch names for an object of the program.
+  conversion of the run time's does not take (`%,x`, `%,e`, `%#s` of no `Formattable`:
+  `FormatFlagsConversionMismatchException`; `%.2d`: `IllegalFormatPrecisionException`; k26's
+  `Fmt.java`), written as if the flag were not there -- `%h`, `%g`, `%a` and `%t` refuse as a
+  JDK does since k85, in `java.util.Conversions`, whose refusals are the run time's raises
+  (`.kb/java-frontend.md`, "java.util.Formatter and the conversions a format lacked"); the
+  class the run time's mismatch names for an object of the program (`an object`); every
+  refusal made before a `Formatter` appends anything (a JDK reads the whole control first;
+  the run time refuses a specifier when it reaches it); the relative index `%<s`.
 - **What a compiler reports and this does not**, met by k26: `==` of two parameterized types
   neither of which converts to the other (`BinaryOperator<StringBuilder>` against
   `BinaryOperator<Object>`: javac's `incomparable types`) is lowered.

@@ -6,8 +6,8 @@ Difficulty: High
 
 No file can be named: `File`, `FileReader`, `FileWriter`, `FileInputStream`,
 `FileOutputStream`, `RandomAccessFile`, `java.nio.file` (`Path`, `Paths`, `Files`) and the
-members over them (`Scanner` of a `File` or a `Path`, `PrintWriter` / `PrintStream` of a file
-name, `Files.lines`, `readAllLines`, `writeString`) are refused by name
+members over them (`Scanner` of a `File` or a `Path`, `PrintWriter` / `PrintStream` / `Formatter`
+of a file or its name, `Files.lines`, `readAllLines`, `writeString`) are refused by name
 (`doc/*/java/deviations.md`, "What is refused").
 
 - What each target can reach: the interpreter and the JVM the host's file system, a `.wasm`

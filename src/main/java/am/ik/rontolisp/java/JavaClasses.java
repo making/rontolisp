@@ -220,6 +220,24 @@ final class JavaClasses {
 	boolean everyLetter;
 
 	/**
+	 * The conversions the constant controls of the program's formats name that the run
+	 * time leaves to the library: {@code h}, {@code g}, {@code a} and {@code t} whatever
+	 * their case, and {@code Z} for a {@code %t} writing a zone's name. A conversion's
+	 * code is in a program only once one names it.
+	 */
+	final Set<Character> formatConversions = new java.util.TreeSet<>();
+
+	/** Whether the program writes a format of a control computed where it runs. */
+	boolean everyFormat;
+
+	/**
+	 * Whether a format of the program can be given a {@code long} or a {@code Date},
+	 * which {@code %t} reads in the host's zone: an argument of a type that can hold one,
+	 * or an array of arguments given as it is.
+	 */
+	boolean formatsMillis;
+
+	/**
 	 * The parameters of static and private methods whose texts name something to the
 	 * lowering (a formatter's pattern, a zone's id), by method and index, each with what
 	 * a text passed there names: a call of the method names what it passes, any other way

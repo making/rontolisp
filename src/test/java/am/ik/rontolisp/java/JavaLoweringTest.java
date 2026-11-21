@@ -517,7 +517,7 @@ class JavaLoweringTest {
 				""", "L5.java")).contains(
 				"(DEFUN |L5.main(String[])| (|args|) (DECLARE (TYPE (OR NULL (SIMPLE-ARRAY T (*))) |args|)) "
 						+ "(PROGN (WRITE-LINE \"1\") (WRITE-STRING (RONTOLISP::%JAVA-FORMAT "
-						+ "\"%d%n\" (VECTOR 2) #'|%string| NIL NIL)) (LET ((|out| (|java.io.StandardOutput.out()|))) "
+						+ "\"%d%n\" (VECTOR 2) #'|%string| NIL)) (LET ((|out| (|java.io.StandardOutput.out()|))) "
 						+ "(|java.io.PrintStream.println(int)| (OR |out| (RONTOLISP::%JAVA-NPE)) 3) "
 						+ "(|java.io.StandardOutput.flush()| (OR (|java.io.PrintStream.printf(String,Object[])| "
 						+ "(OR (|java.io.StandardOutput.err()|) (RONTOLISP::%JAVA-NPE)) \"%d%n\" (VECTOR 4)) "
@@ -526,18 +526,33 @@ class JavaLoweringTest {
 						+ "(|java.io.StandardOutput.error| |this|) *ERROR-OUTPUT* *STANDARD-OUTPUT*)) (IF |line| "
 						+ "(WRITE-CHAR (CODE-CHAR 10) (IF (|java.io.StandardOutput.error| |this|) *ERROR-OUTPUT* "
 						+ "*STANDARD-OUTPUT*)))))");
-		// A format is handed the function writing a BigInteger and a BigDecimal by their
-		// own digits only in a program that makes one: the NIL of the program above.
-		assertThat(lower("""
+		// The conversions a format leaves to the library are branches of
+		// java.util.Conversions.more, which a format is handed only where a control can
+		// name one or the program makes what one reads -- the NIL of the program above:
+		// a program formatting a BigInteger holds the branch of its digits and no %t, one
+		// writing a date of java.time by %t no reading of the host's zone, which only a
+		// long or a Date given to a format needs.
+		List<String> big = lower("""
 				import java.math.BigInteger;
 				class L5 {
 				    public static void main(String[] args) {
 				        System.out.println(String.format("%d", new BigInteger("1")));
 				    }
 				}
-				""", "L5.java")).anyMatch(
-				form -> form.contains("#'|%string| NIL (LAMBDA (") && form.contains("(RONTOLISP::%JAVA-FORMAT-EXACT ")
-						&& form.contains("(|rontolisp.internal.Exact.read(Object)| "));
+				""", "L5.java");
+		assertThat(big).anyMatch(form -> form.contains("#'|%string| (LAMBDA ("))
+			.anyMatch(form -> form.startsWith("(DEFUN |java.util.Conversions.more(")
+					&& form.contains("(RONTOLISP::%JAVA-FORMAT-EXACT "))
+			.noneMatch(form -> form.contains("java.util.Conversions.Moment"));
+		assertThat(lower("""
+				import java.time.LocalDate;
+				class L5 {
+				    public static void main(String[] args) {
+				        System.out.println(String.format("%tF", LocalDate.of(2026, 11, 21)));
+				    }
+				}
+				""", "L5.java")).anyMatch(form -> form.startsWith("(DEFUN |java.util.Conversions.Accessor.get("))
+			.noneMatch(form -> form.contains("rontolisp.internal.Dates.fields("));
 		// A charset named by a constant is the charset: the member taking a Charset is
 		// called, so a program naming UTF-8 holds no other charset's codec. A name
 		// computed where the program runs is looked up among all of them.
