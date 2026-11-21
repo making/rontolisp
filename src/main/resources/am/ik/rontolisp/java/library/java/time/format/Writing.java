@@ -12,12 +12,21 @@ import java.time.chrono.Chronology;
 import java.time.temporal.ChronoField;
 import java.time.temporal.TemporalAccessor;
 import java.time.temporal.TemporalField;
+import java.time.temporal.TemporalQueries;
+import java.util.Locale;
 
 final class Writing {
 
     final TemporalAccessor temporal;
 
+    /** Which words the locale has (Texts.kind). */
     final int texts;
+
+    /**
+     * The formatter's locale, which a refusal of a requested template names: set only in a
+     * program that makes such a part (Step.templated()).
+     */
+    Locale locale;
 
     final StringBuilder text = new StringBuilder(32);
 
@@ -33,6 +42,11 @@ final class Writing {
         this.temporal = temporal;
         this.texts = texts;
         this.chronology = chronology;
+    }
+
+    /** The calendar a locale's patterns are looked up by: the formatter's, else the value's. */
+    Chronology calendar() {
+        return chronology != null ? chronology : temporal.query(TemporalQueries.chronology());
     }
 
     /**

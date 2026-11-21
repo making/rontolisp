@@ -2072,10 +2072,6 @@ final class JavaLowering implements JavaEmitter.Context {
 
 	private static final String TEMPORAL_QUERIES = "java.time.temporal.TemporalQueries";
 
-	private static final String TEMPORAL_FIELD = "java.time.temporal.TemporalField";
-
-	private static final String CHRONO_FIELD = "java.time.temporal.ChronoField";
-
 	/**
 	 * Whether the program can start a thread: some call reaches {@code Thread.start()}.
 	 */
@@ -3685,14 +3681,14 @@ final class JavaLowering implements JavaEmitter.Context {
 	}
 
 	@Override
-	public boolean makesOtherFields() {
+	public boolean makesOther(String supertype, String except) {
 		if (this.classes.session) {
 			// a later buffer may make one
 			return true;
 		}
-		JavaClass field = this.classes.library(TEMPORAL_FIELD);
+		JavaClass above = this.classes.library(supertype);
 		for (JavaClass candidate : this.classes.all()) {
-			if (!candidate.name.equals(CHRONO_FIELD) && isMade(candidate) && candidate.isSubclassOf(field)) {
+			if (!candidate.name.equals(except) && isMade(candidate) && candidate.isSubclassOf(above)) {
 				return true;
 			}
 		}

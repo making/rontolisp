@@ -432,6 +432,22 @@ algorithm came from, and the answer goes in the file's header.
   past a text's end, the era `CE` it reads leniently in English, the order a program's own
   calendar's `epochSecond` refuses in and the words of the null refusals. The answers are lines
   of `java-spec.yaml`, which the JDK leg asks again.
+- **The localized pattern of a requested template (k77, 2026-11-21).** `ofLocalizedPattern`,
+  `appendLocalized(String)` and `getLocalizedDateTimePattern(String, ..)` were written from the
+  API documentation (the order and counts of a template's letters, what each member takes) and
+  JDK 25's answers to probes (`Grid.java` and `Every.java` of
+  `.todo/artefacts/k77-java-time-the-localized-pattern-of-a-requested-template/`, and some
+  sixteen million answers to bounded and seeded templates, against which a model of the rule
+  was checked). Nobody opened OpenJDK's source, and the shape is its own: a locale's skeletons
+  are texts each holding what differs from another's, read from the template's first letter.
+  What the documentation does not state was read off the answers, all of it: which skeletons
+  a locale has, that the month's and the day of the week's widths are compared and no other
+  letter's, that no width is adjusted, the cut of a date from a time and its glue, what j and
+  C stand for and the British set beside a `B`, the words of each refusal and what a refusal
+  shows of a template of j and C, and the refusal of a calendar of no type. The skeletons'
+  patterns are CLDR's as a running JDK answers them, under the Unicode entry of
+  `THIRD-PARTY-NOTICES.txt`. The answers are lines of `java-spec.yaml`, which the JDK leg asks
+  again.
 - **`java.util.Date` and `java.sql` (k37, 2026-11-20).** Written from the API
   documentation (which states `Date.hashCode`, `equals` and the text forms) and JDK 25's
   answers to probes (`Grid.java`, 2,095 lines; `Gap.java`, the wall times four zones skip

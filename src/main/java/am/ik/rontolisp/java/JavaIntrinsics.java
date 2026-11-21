@@ -233,14 +233,26 @@ final class JavaIntrinsics {
 	 * The questions answered by whether the program makes an instance of a class of the
 	 * library: the words of a quarter where it makes the fields of IsoFields, the
 	 * resolving of a day's period where it makes the part that reads one, the reading of
-	 * a zone's name in words where it makes the part that writes and reads one.
+	 * a zone's name in words where it makes the part that writes and reads one, the
+	 * formatter's locale handed to its parts where it makes the part of a requested
+	 * template.
 	 */
 	private static final Map<String, String> MADE = Map.of("java.time.format.Texts.quarters()",
 			"java.time.temporal.IsoFields.Field", "java.time.format.Parsed.periods()",
 			"java.time.format.Step.DayPeriod", "java.time.format.Parsed.zoneTexts()", "java.time.format.Step.ZoneText",
-			"java.time.format.Step.zoneTexts()", "java.time.format.Step.ZoneText");
+			"java.time.format.Step.zoneTexts()", "java.time.format.Step.ZoneText", "java.time.format.Step.templated()",
+			"java.time.format.Step.Templated");
 
-	private static final String PARSED_OTHERS = "java.time.format.Parsed.others()";
+	/**
+	 * The questions answered by whether the program makes an instance of a class under
+	 * one of the library's other than one of its own: the resolving of a field that is no
+	 * {@code ChronoField} where it makes one, the refusal of a calendar of no type where
+	 * it makes a calendar of its own.
+	 */
+	private static final Map<String, List<String>> OTHERS = Map.of("java.time.format.Parsed.others()",
+			List.of("java.time.temporal.TemporalField", "java.time.temporal.ChronoField"),
+			"java.time.format.Texts.ownCalendars()",
+			List.of("java.time.chrono.Chronology", "java.time.chrono.IsoChronology"));
 
 	/**
 	 * The questions answered by whether the program reaches a method of the library: the
@@ -276,13 +288,14 @@ final class JavaIntrinsics {
 			case REGIONAL, STEP_REGIONAL -> lowering.holdsRegions();
 			case FOREIGN -> lowering.foreignTemporals();
 			case WANTED, ZONE_WANTED -> lowering.wantedField();
-			case PARSED_OTHERS -> lowering.makesOtherFields();
-			default -> CALENDARS.contains(member) ? Boolean.valueOf(lowering.asksCalendars())
-					: PATTERN_LETTERS.containsKey(member)
-							? Boolean.valueOf(lowering.namesLetter(PATTERN_LETTERS.get(member)))
-							: MADE.containsKey(member) ? Boolean.valueOf(lowering.makesClass(MADE.get(member)))
-									: REACHES.containsKey(member)
-											? Boolean.valueOf(lowering.reaches(REACHES.get(member))) : null;
+			default -> OTHERS.containsKey(member)
+					? Boolean.valueOf(lowering.makesOther(OTHERS.get(member).get(0), OTHERS.get(member).get(1)))
+					: CALENDARS.contains(member) ? Boolean.valueOf(lowering.asksCalendars())
+							: PATTERN_LETTERS.containsKey(member)
+									? Boolean.valueOf(lowering.namesLetter(PATTERN_LETTERS.get(member)))
+									: MADE.containsKey(member) ? Boolean.valueOf(lowering.makesClass(MADE.get(member)))
+											: REACHES.containsKey(member)
+													? Boolean.valueOf(lowering.reaches(REACHES.get(member))) : null;
 		};
 	}
 
@@ -646,6 +659,29 @@ final class JavaIntrinsics {
 	private static boolean briefTime(LispVal form) {
 		return form.equals(JavaForms.NIL) || reads(form, "java.time.format.FormatStyle.SHORT")
 				|| reads(form, "java.time.format.FormatStyle.MEDIUM");
+	}
+
+	/**
+	 * The letters of a pattern that a requested template's patterns can hold and that a
+	 * formatter makes only where a pattern names them: a week's and its year's of w, a
+	 * quarter's of Q, a period's of the day of B, a zone's of v; all of them for a
+	 * template computed where the program runs. A template's other letters find patterns
+	 * of letters every formatter has, and z finds none.
+	 */
+	static String templateLetters(@Nullable Object constant) {
+		if (!(constant instanceof String template)) {
+			return "wYQBv";
+		}
+		StringBuilder letters = new StringBuilder();
+		if (template.indexOf('w') >= 0) {
+			letters.append("wY");
+		}
+		for (char letter : new char[] { 'Q', 'B', 'v' }) {
+			if (template.indexOf(letter) >= 0) {
+				letters.append(letter);
+			}
+		}
+		return letters.toString();
 	}
 
 	private static List<LispVal> operands(Invocation call) {
@@ -2170,11 +2206,22 @@ final class JavaIntrinsics {
 					lowering.namesPattern(briefTime(call.argument(1)) ? "" : "z");
 					return lowering.library(FORMATTER_BUILDER, "localized", operands(call));
 				});
+		// a localized form of a requested template names the letters its patterns can
+		// hold
+		natives.put(FORMATTER + ".ofLocalizedPattern(String)", (lowering, call) -> {
+			lowering.namesPattern(templateLetters(call.arguments().get(0).constant()));
+			return lowering.library(FORMATTER, "localizedPattern", operands(call));
+		});
+		natives.put(FORMATTER_BUILDER + ".appendLocalized(String)", (lowering, call) -> {
+			lowering.namesPattern(templateLetters(call.arguments().get(0).constant()));
+			return lowering.library(FORMATTER_BUILDER, "templated", operands(call));
+		});
 		PATTERN_LETTERS.forEach((question, letters) -> natives.put(question,
 				(lowering, call) -> lowering.namesLetter(letters) ? JavaForms.T : JavaForms.NIL));
 		MADE.forEach((question, made) -> natives.put(question,
 				(lowering, call) -> lowering.makesClass(made) ? JavaForms.T : JavaForms.NIL));
-		natives.put(PARSED_OTHERS, (lowering, call) -> lowering.makesOtherFields() ? JavaForms.T : JavaForms.NIL);
+		OTHERS.forEach((question, classes) -> natives.put(question,
+				(lowering, call) -> lowering.makesOther(classes.get(0), classes.get(1)) ? JavaForms.T : JavaForms.NIL));
 		REACHES.forEach((question, member) -> natives.put(question,
 				(lowering, call) -> lowering.reaches(member) ? JavaForms.T : JavaForms.NIL));
 		natives.put("java.time.format.Step.region0(String)", library(ZONE_ID, "region"));

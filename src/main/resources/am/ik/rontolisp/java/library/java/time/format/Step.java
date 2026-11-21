@@ -24,6 +24,7 @@ import java.time.temporal.TemporalQueries;
 import java.time.temporal.ValueRange;
 import java.time.temporal.WeekFields;
 import java.time.zone.ZoneRules;
+import java.util.Locale;
 import java.util.Set;
 
 abstract class Step {
@@ -52,6 +53,12 @@ abstract class Step {
      * nothing of the names.
      */
     static native boolean zoneTexts();
+
+    /**
+     * Whether the program makes the part of a requested template: answered by the
+     * compiler, so that no other program hands its parts the formatter's locale.
+     */
+    static native boolean templated();
 
     /** The names of the zones every program knows, the regions aside: UT, UTC, GMT and their kin. */
     private static final String[] FIXED = {"UT", "UTC", "GMT", "UCT", "GMT0", "Greenwich", "Universal", "Zulu"};
@@ -1438,15 +1445,68 @@ abstract class Step {
         }
 
         boolean print(Writing out) {
+            if (Texts.ownCalendars()) {
+                Texts.typed(out.calendar(), "requestID");
+            }
             return parts(out.texts).print(out);
         }
 
         int parse(Reading in, int at) {
+            if (Texts.ownCalendars()) {
+                Texts.typed(in.chronology, "requestID");
+            }
             return parts(in.texts).parse(in, at);
         }
 
         public String toString() {
             return "Localized(" + (date == null ? "" : date.name()) + "," + (time == null ? "" : time.name()) + ")";
+        }
+    }
+
+    /**
+     * A localized form of a requested template: the pattern of the skeleton its letters
+     * find in the formatter's kind of locale (Skeletons), made into parts the first time
+     * a kind writes or reads one; a kind with none refuses it, naming the locale.
+     */
+    static final class Templated extends Step {
+
+        final String template;
+
+        private final Group[] parts = new Group[4];
+
+        Templated(String template) {
+            this.template = template;
+        }
+
+        private Group parts(int kind, Locale locale) {
+            Group made = parts[kind];
+            if (made == null) {
+                String pattern = Skeletons.pattern(kind, template);
+                if (pattern == null) {
+                    throw Skeletons.unresolved(template, locale);
+                }
+                made = DateTimeFormatterBuilder.parts(pattern);
+                parts[kind] = made;
+            }
+            return made;
+        }
+
+        boolean print(Writing out) {
+            if (Texts.ownCalendars()) {
+                Texts.typed(out.calendar(), "calType");
+            }
+            return parts(out.texts, out.locale).print(out);
+        }
+
+        int parse(Reading in, int at) {
+            if (Texts.ownCalendars()) {
+                Texts.typed(in.chronology, "calType");
+            }
+            return parts(in.texts, in.locale).parse(in, at);
+        }
+
+        public String toString() {
+            return "Localized(" + template + ")";
         }
     }
 

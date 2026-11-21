@@ -3197,10 +3197,10 @@ three only where it can make the part that writes it.** Provenance:
 - **The grid** (`Grid.java`, 2,350 lines): the interpreter (63 s), the JVM (5.7 s), wasm
   (5.6 s, 1,199,318 B) and the component (5.5 s) print a JDK's lines (the JDK 3.7 s, all on
   a loaded machine); the k35, k42, k43 and k52 grids print theirs as before.
-- What was not there came with k70 ("java.time: what k57 left"), but the localized pattern
-  of a requested template (`.todo/k77`) and the cost leads (`.todo/k79`).
+- What was not there came with k70 ("java.time: what k57 left") and k77 ("java.time: the
+  localized pattern of a requested template"), but the cost leads (`.todo/k79`).
 - Pins: java-spec `localized-forms-a-zones-name-in-words-and-a-days-period` (standalone,
-  47 lines); `JavaZoneRulesTest` (the shipped names are the JDK's; a program's tables hold
+  47 lines, 66 since k77's templates); `JavaZoneRulesTest` (the shipped names are the JDK's; a program's tables hold
   what it holds); `JavaLoweringTest#theLibraryIsJavaSourceLoweredAsFarAsTheProgramReaches`
   (the letters, a localized form's time).
 
@@ -3310,12 +3310,109 @@ it reaches the member that makes it.** Provenance:
 - **The grid** (`Grid.java`, 998 lines): the interpreter (85 s), the JVM (6 s, a 379,403 B
   jar), wasm (5 s, 1,084,939 B) and the component (5 s) print a JDK's lines (the JDK 3 s); the
   k35, k43, k52 and k57 grids print theirs as before.
-- Not there: the localized pattern of a requested template (`ofLocalizedPattern`,
-  `appendLocalized` and `getLocalizedDateTimePattern` of one): `.todo/k77`; a zone's name
-  written as an offset is the one of the table's making: `.todo/k80`.
+- Not there: a zone's name written as an offset is the one of the table's making:
+  `.todo/k80`. The localized pattern of a requested template came with k77 ("java.time: the
+  localized pattern of a requested template").
 - Pins: java-spec `a-formatters-decimal-style-a-reading-from-a-position-the-fields-it-resolves-and-a-calendars-map`
   (standalone, 54 lines); `JavaLoweringTest#theLibraryIsJavaSourceLoweredAsFarAsTheProgramReaches`
   (the four questions).
+
+## java.time: the localized pattern of a requested template (2026-11-21, k77)
+
+**Invariant: `ofLocalizedPattern`, `appendLocalized(String)` and
+`getLocalizedDateTimePattern(String, ..)` find the pattern a JDK 25 answers for a requested
+template in the five locales `Locale` has and refuse what it refuses; a program pays for the
+skeletons and their matching only where it calls one of them, and for a week's, a quarter's,
+a period's or a zone's parts only where a template can name one.** Provenance:
+[java-frontend-provenance.md](java-frontend-provenance.md). The grids and the sizes:
+`.todo/artefacts/k77-java-time-the-localized-pattern-of-a-requested-template/`.
+
+- **The rule, read off a JDK's answers** (2026-11-21, JDK 25.0.5; every date template of
+  bounded counts, every time template, every resolving date before every time, 2.5 million
+  seeded and mutated templates, in each kind of locale and in `en-001`: a model of the rule
+  below gave every one of some sixteen million answers):
+  - **Valid**: the letters in the documented order, at most the documented counts (G 5, y
+    any, Q 5, M 5, w any, E 5, d 2, B 5, two of h H j C, m 2, s 2, four of v z).
+  - **j and C** are the locale's hour: `H` in the root and British, `h` in English and
+    Canadian. Beside a `B` they are `h`, and a British template is then matched among
+    international English's skeletons (`en_001`: `MEd` is `E, dd/MM`, `GyMd` `d/M/y G`, no
+    skeleton of `EEEE`; all 108,864 date parts before `Bj` were answered so); the root's has
+    no such set, so its `Bj` has no pattern.
+  - **The skeleton**: of the template's letters, each as many as the template has but the
+    month's and the day of the week's; among those, the nearest by the month's width, then by
+    the day's, where one or two digits of a month are one width and one to three letters of
+    a day one (no two skeletons tied). **No width is adjusted**: `yMMMMEEEEd` is `y MMM d, E`
+    in the root and `E, MMM d, y` in English; British English has that skeleton,
+    `EEEE, d MMMM y`. This is not UTS #35's matching.
+  - **None**: the template is cut before its first letter of a time (B h H m s v z), each
+    part matched alone, and the two joined as a localized form joins them (a space in the
+    root's, `, ` in English); a part with none is a refusal, `DateTimeException: Requested
+    template "s" cannot be resolved in the locale "en_US"` (the locale's `toString`).
+  - **The skeletons**: 56 in the root's, 56 English, 64 British, 57 Canadian, 57
+    international English; the dates (with the generic calendar's of `yyyy`: `yyyy` is
+    `G y` in the root's, `y G` in English), the times (none of `z`, so a template of `z`
+    has no pattern), the day of the week before a time (`EHm`, `EBhm`). `m`, `s`, `QQQ`,
+    `yy`, `hh` and `jj` alone have none.
+  - **Refusals**: `getLocalizedDateTimePattern` checks the template, the calendar, then the
+    locale for null, then the order: `Requested template "dM" is invalid.`, and of a template
+    holding j or C `... is invalid, which translated into "HHdC" after the 'j' or 'C'
+    substitution.` (every j the locale's hour; the first run of C as many of the hour as the
+    template has C). `ofLocalizedPattern` and `appendLocalized` refuse at once,
+    `Requested template is invalid: jjj`.
+- **A formatter of a template** (`Step.Templated`, `Localized(yMMMd)` in its text): ISO's
+  calendar, `SMART`, the default locale; the pattern is found where it writes or reads, in
+  its locale, and made into parts once per kind of locale. A template the locale has none for
+  refuses there, inside an optional part too, and where read as a part's refusal.
+- **A calendar of no type**: `getCalendarType` of a program's own calendar may answer null,
+  and a JDK refuses it where it looks up a locale's patterns, with its words:
+  `Cannot invoke "String.equals(Object)" because "calType" is null` for a template,
+  `"requestID"` for a localized form's styles (k57's ignored it). Written: the formatter's
+  calendar, else the value's; read: the formatter's (`Texts.typed`).
+- **The data** (`Texts.skeletons`, CLDR's as a JDK answers them, under the Unicode entry of
+  `THIRD-PARTY-NOTICES.txt`): five sets, each holding what differs from the set it adds to
+  (root, English over it, international English over English, British over international
+  English, Canadian over English), 1,829 characters; a set's skeletons of one first letter
+  stand together, and a lookup reads those alone. A newer JDK: the spec case's JDK leg fails
+  first; `Every.java`'s lines under it against the build's say which skeletons moved.
+- **Who pays**: `ofLocalizedPattern` and `appendLocalized(String)` are natives
+  (`JavaIntrinsics.templateLetters`): a constant template names `w` and `Y` for its `w`, and
+  its `Q`, `B` and `v`; a computed one all five. A template's other letters find patterns of
+  letters every formatter has (`ccc` is no week's). `Texts.ownCalendars()` (`makesOther`: a
+  `Chronology` that is not ISO's) keeps the calendar's check, and `Step.templated()` (the
+  part made) the formatter's locale handed to the parts (`Writing.locale`,
+  `Reading.locale`), out of every other program. Measured: handed always, a program writing
+  by a pattern grew 249 B and one reading 362 B; behind the question 106 and 146, the
+  fields' own.
+- **What a program pays** (wasm, base `e979405d1`): a program making no formatter, a zoned
+  date-time in Tokyo, YAVI's `Member.java` and `Booking.java` the same bytes; a date written
+  by a pattern 281,528 -> 281,634, read 358,746 -> 358,892, a computed pattern 449,750 ->
+  449,982, `ISO_LOCAL_DATE_TIME.format` 251,279 -> 251,361, `ofLocalizedDate(MEDIUM)` written
+  286,116 -> 286,198 and read 363,332 -> 363,478, k43's `yavi/Event.java` 921,054 -> 921,258
+  (the two fields). The new members: a date written by `ofLocalizedPattern("yMMMd")` 293,334
+  (7.1 KB over the style's: the matching 5.7 KB, the skeletons 1.4 KB), read 370,643, by
+  `"yw"` 320,156, a template computed where the program runs, written and read, 455,387,
+  `getLocalizedDateTimePattern` of a template alone 113,704. Measured and changed:
+  `String.indexOf(String)` and `replace(char, char)` brought 6.2 KB of the run time (`SEARCH`
+  2.7, `%JAVA-REPLACE-CHAR` 1.9, `%SEQ-TO-LIST` 1.4): the text is walked by characters, and a
+  set's own skeleton hides its parent's by being walked first, no list of the keys seen.
+  **Not taken: an index of where each set's first letters start** (made once): a time's
+  lookup on wasm 14 µs against 130 by the walk, `yMMMEd` 108 against 132, on the interpreter
+  0.25 ms against 1.1; it cost every program of a template 1,066 B, and a formatter looks its
+  template up once per kind of locale. Nor the times first in a set: a time's lookup 92 µs,
+  a date's of `y` 166.
+- **The grids**: `Grid.java` (737 lines: a bounded grid of dates, times and the two joined,
+  refusals, seeded templates; formatters of 31 templates written over nine values in the five
+  locales and read back; the refusals of a formatter; a calendar of the probe's own): the
+  interpreter (146 s), the JVM (15 s), wasm (26 s, 636,496 B) and the component (26 s) print
+  a JDK's lines (the JDK 8 s). `Every.java` (5,899 lines: every date of bounded counts, every
+  time, every resolving date before every resolving time, 80,000 seeded): the interpreter
+  (17 min), the JVM (31 s), wasm (113 s, 190,387 B) and the component (120 s) print a
+  JDK's (80 s); the k35, k43, k52, k57 and k70 grids print theirs as before on the four. A
+  lookup walks a set's skeletons to those of the template's first letter: the 108,864 dates
+  of one locale 3.5 s on the JVM, 39 s under a JDK.
+- Pins: java-spec `localized-forms-a-zones-name-in-words-and-a-days-period` (66 lines with
+  the templates); `JavaLoweringTest#theLibraryIsJavaSourceLoweredAsFarAsTheProgramReaches`
+  (a template's letters, the calendar's check where no calendar of the program's own is).
 
 ## java.util.Date and java.sql (2026-11-20, k37)
 

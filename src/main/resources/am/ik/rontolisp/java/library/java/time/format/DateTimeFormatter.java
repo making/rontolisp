@@ -285,6 +285,18 @@ public final class DateTimeFormatter {
             .formatter(Locale.getDefault(), ResolverStyle.SMART, IsoChronology.INSTANCE);
     }
 
+    /**
+     * A localized form of a requested template, its pattern found in the formatter's
+     * locale where it writes or reads (Skeletons): the compiler notes the letters its
+     * patterns can hold, then calls localizedPattern.
+     */
+    public static native DateTimeFormatter ofLocalizedPattern(String requestedTemplate);
+
+    static DateTimeFormatter localizedPattern(String requestedTemplate) {
+        return DateTimeFormatterBuilder.templated(new DateTimeFormatterBuilder(), requestedTemplate)
+            .formatter(Locale.getDefault(), ResolverStyle.SMART, IsoChronology.INSTANCE);
+    }
+
     public static TemporalQuery<Period> parsedExcessDays() {
         return Parsed.EXCESS_DAYS;
     }
@@ -412,6 +424,9 @@ public final class DateTimeFormatter {
     public String format(TemporalAccessor temporal) {
         Objects.requireNonNull(temporal, "temporal");
         Writing out = new Writing(zoned(temporal), Texts.kind(locale), chronology);
+        if (Step.templated()) {
+            out.locale = locale;
+        }
         if (decimals()) {
             out.decimals = decimals;
         }
@@ -556,6 +571,12 @@ public final class DateTimeFormatter {
 
     private Reading reading(CharSequence text) {
         Reading in = new Reading(text, Texts.kind(locale));
+        if (Step.templated()) {
+            in.locale = locale;
+        }
+        if (Texts.ownCalendars()) {
+            in.chronology = chronology;
+        }
         if (decimals()) {
             in.decimals = decimals;
         }

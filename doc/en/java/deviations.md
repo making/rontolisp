@@ -356,11 +356,12 @@ refused by name.
 
 **A formatter writes the words and the weeks of the locales `Locale` has.** The months,
 the days, the eras, the quarters, the halves and the periods of a day, the localized forms
-(`ofLocalizedDate` and its kind) and the names of zones in words are those a JDK writes for
-the root locale, `ENGLISH`, `US`, `UK` and `CANADA`; a week starts on Monday and its first
-holds four days of the year in `UK`, on Sunday and one day in the others (`WeekFields.of`);
-`ofPattern` without a locale, the localized forms and the ISO forms take `US`, the default
-locale, and `localizedBy` takes its locale and the ISO calendar, as none of these locales
+(`ofLocalizedDate` and its kind), the patterns of a requested template (`ofLocalizedPattern`
+and its kind) and the names of zones in words are those a JDK writes for the root locale,
+`ENGLISH`, `US`, `UK` and `CANADA`; a week starts on Monday and its first holds four days
+of the year in `UK`, on Sunday and one day in the others (`WeekFields.of`);
+`ofPattern` without a locale, the localized forms, `ofLocalizedPattern` and the ISO forms
+take `US`, the default locale, and `localizedBy` takes its locale and the ISO calendar, as none of these locales
 names another calendar, a zone or other digits. A zone's name in words, like its id, is
 read among the zones the program has (above): a name a JDK reads as a region the program
 does not hold is read as the region it holds that writes the name, or not at all. A JDK
@@ -368,9 +369,8 @@ that has written a zone's names for `ENGLISH` writes some of that zone's names f
 and `CANADA` as `ENGLISH` has them from then on (`Abidjan Daylight Time` where it wrote
 `Abidjan Daylight Saving Time` for `CANADA`); the names here are the ones it writes before
 that. The `DecimalStyle` of each of these locales is the standard one, and
-`DecimalStyle.getAvailableLocales()` holds the five. `ofLocalizedPattern`, and
-`appendLocalized` and `getLocalizedDateTimePattern` of a requested template, are refused by
-name; the `Format` of `toFormat` has no `clone` (the subset has no `Cloneable`). In the text
+`DecimalStyle.getAvailableLocales()` holds the five. The `Format` of `toFormat` has no
+`clone` (the subset has no `Cloneable`). In the text
 of a formatter, `parseDefaulting` shows as `Default(field,value)`, where a JDK shows the
 identity of an object. The fields that are no `ChronoField` -- of weeks, quarters, Julian days or
 the program's own -- are resolved in the order they were read, where a JDK's order changes

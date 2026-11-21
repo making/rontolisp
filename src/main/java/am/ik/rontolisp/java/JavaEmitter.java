@@ -185,11 +185,12 @@ interface JavaEmitter {
 		boolean makesClass(String name);
 
 		/**
-		 * Whether the program makes a {@code TemporalField} that is no
-		 * {@code ChronoField}: one of {@code IsoFields}, {@code JulianFields},
-		 * {@code WeekFields} or its own.
+		 * Whether the program makes an instance of a class under the library's
+		 * {@code supertype} other than its {@code except}: a {@code TemporalField} that
+		 * is no {@code ChronoField} (one of {@code IsoFields}, {@code JulianFields},
+		 * {@code WeekFields} or its own), a {@code Chronology} that is not ISO's.
 		 */
-		boolean makesOtherFields();
+		boolean makesOther(String supertype, String except);
 
 		/**
 		 * Whether the program reaches a method of the library's Java source, by its class

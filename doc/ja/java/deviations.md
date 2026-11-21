@@ -351,11 +351,12 @@ rontolisp でコンパイルし直すとプログラムに反映されます。`
 非推奨のメンバー（`getYear`、`getHours`）は名前を挙げて拒否します。
 
 **フォーマッターが書く語と週は `Locale` にあるロケールのものです。** 月、曜日、紀元、四半期、
-午前と午後、一日の時間帯、地域化された形式（`ofLocalizedDate` とその仲間）、ゾーンの語による
-名前は、ルートロケール、`ENGLISH`、`US`、`UK`、`CANADA` について JDK が書くものです。週は、`UK`
-では月曜日に始まり最初の週が年の 4 日を含み、それ以外では日曜日に始まり 1 日を含みます
-（`WeekFields.of`）。ロケールを指定しない `ofPattern`、地域化された形式、ISO の形式は、
-デフォルトのロケールである `US` を使います。`localizedBy` はそのロケールと ISO 暦を使います。
+午前と午後、一日の時間帯、地域化された形式（`ofLocalizedDate` とその仲間）、要求テンプレートの
+パターン（`ofLocalizedPattern` とその仲間）、ゾーンの語による名前は、ルートロケール、`ENGLISH`、
+`US`、`UK`、`CANADA` について JDK が書くものです。週は、`UK` では月曜日に始まり最初の週が年の
+4 日を含み、それ以外では日曜日に始まり 1 日を含みます
+（`WeekFields.of`）。ロケールを指定しない `ofPattern`、地域化された形式、`ofLocalizedPattern`、
+ISO の形式は、デフォルトのロケールである `US` を使います。`localizedBy` はそのロケールと ISO 暦を使います。
 これらのロケールはどれも、ほかの暦、ゾーン、数字を指定しないからです。ゾーンの語による名前は、
 ゾーンの ID と同じく、プログラムが持つゾーン（上記）の中から読みます。JDK がプログラムの持たない
 地域として読む名前は、プログラムが持つ地域のうちその名前を書くものとして読むか、読みません。
@@ -363,9 +364,8 @@ JDK は、あるゾーンの名前を `ENGLISH` について書いたあと、�
 一部を `ENGLISH` のものとして書きます（`CANADA` で `Abidjan Daylight Saving Time` と書いていた
 ものを `Abidjan Daylight Time` と書く）。ここで書く名前は、その前に JDK が書くものです。
 これらのロケールの `DecimalStyle` はどれも標準のもので、`DecimalStyle.getAvailableLocales()`
-はこの 5 つを返します。`ofLocalizedPattern` と、要求テンプレートを取る `appendLocalized` と
-`getLocalizedDateTimePattern` は、名前を示して拒否されます。`toFormat` の `Format` には `clone`
-がありません（サブセットに `Cloneable` がないため）。フォーマッターの文字列表現では、
+はこの 5 つを返します。`toFormat` の `Format` には `clone` がありません（サブセットに
+`Cloneable` がないため）。フォーマッターの文字列表現では、
 `parseDefaulting` は `Default(field,value)` と表示されます。JDK はオブジェクトの識別子を表示します。
 `ChronoField` でないフィールド（週、四半期、ユリウス日、プログラムが書いたもの）は
 読んだ順に解決します。JDK の順序は実行のたびに変わります。違いが現れるのは、文字列が曜日を

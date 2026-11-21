@@ -11,7 +11,9 @@
 package java.time.format;
 
 import java.time.ZoneId;
+import java.time.chrono.Chronology;
 import java.time.temporal.TemporalField;
+import java.util.Locale;
 
 final class Reading {
 
@@ -22,6 +24,18 @@ final class Reading {
 
     /** Which words the locale has (Texts.kind). */
     final int texts;
+
+    /**
+     * The formatter's locale, which a refusal of a requested template names: set only in a
+     * program that makes such a part (Step.templated()).
+     */
+    Locale locale;
+
+    /**
+     * The formatter's calendar a locale's patterns are looked up by, or null: set only in
+     * a program with a calendar of its own (Texts.ownCalendars()).
+     */
+    Chronology chronology;
 
     boolean caseSensitive = true;
 

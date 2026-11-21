@@ -19272,7 +19272,7 @@ standalone:
     file: Localized.java
     source: |
       import java.time.*;
-      import java.time.chrono.IsoChronology;
+      import java.time.chrono.*;
       import java.time.format.*;
       import java.time.temporal.*;
       import java.util.*;
@@ -19281,6 +19281,30 @@ standalone:
       public class Localized {
           static String shown(Object value) {
               return String.valueOf(value).replace(' ', '_');
+          }
+
+          static String pattern(String template, Locale locale) {
+              try {
+                  return DateTimeFormatterBuilder.getLocalizedDateTimePattern(template, IsoChronology.INSTANCE, locale);
+              }
+              catch (DateTimeException e) {
+                  return "-";
+              }
+          }
+
+          // a calendar of no type, which a calendar of the program's own may be
+          static final class Untyped extends AbstractChronology {
+              public String getId() { return "Untyped"; }
+              public String getCalendarType() { return null; }
+              public ChronoLocalDate date(int year, int month, int day) { return LocalDate.of(year, month, day); }
+              public ChronoLocalDate dateYearDay(int year, int day) { return LocalDate.ofYearDay(year, day); }
+              public ChronoLocalDate dateEpochDay(long day) { return LocalDate.ofEpochDay(day); }
+              public ChronoLocalDate date(TemporalAccessor temporal) { return LocalDate.from(temporal); }
+              public boolean isLeapYear(long year) { return IsoChronology.INSTANCE.isLeapYear(year); }
+              public int prolepticYear(Era era, int year) { return IsoChronology.INSTANCE.prolepticYear(era, year); }
+              public Era eraOf(int era) { return IsoEra.of(era); }
+              public List<Era> eras() { return List.of(IsoEra.values()); }
+              public ValueRange range(ChronoField field) { return field.range(); }
           }
 
           static void attempt(String what, Supplier<Object> made) {
@@ -19353,6 +19377,59 @@ standalone:
               attempt("15 in the morning", () -> LocalTime.parse("15 in the morning", DateTimeFormatter.ofPattern("H B", Locale.US)));
               attempt("strictly", () -> DateTimeFormatter.ofPattern("B", Locale.US).withResolverStyle(ResolverStyle.STRICT)
                   .parse("at night"));
+              // the localized pattern of a requested template: the skeleton of its letters
+              // nearest it by the widths of its month and of its day of the week, else its
+              // date's and its time's joined; j and C the locale's hour, B beside them the
+              // hours of twelve; a hash of every width of the letters of each skeleton
+              String[] templates = {"yMMMMEEEEd", "MMMMMd", "MMEd", "yyyy", "GyM", "Mdd", "jm", "EEEEHm", "yMdjms",
+                      "dBj", "MEdBj", "yw", "yQQQ", "Hmv", "jmz", "dd"};
+              List<String> widths = new ArrayList<>();
+              for (String letters : new String[] {"M", "Md", "MEd", "yM", "yMd", "yMEd", "yyyyM", "yyyyMd", "yyyyMEd",
+                      "GyM", "GyMd", "GyMEd", "E", "Ed", "EHm", "EBhm", "Mdd"}) {
+                  for (int m = 1; m <= 5; m++) {
+                      for (int e = 1; e <= 5; e++) {
+                          widths.add(letters.replace("M", "MMMMM".substring(0, m)).replace("E", "EEEEE".substring(0, e)));
+                      }
+                  }
+              }
+              for (Locale locale : new Locale[] {Locale.ROOT, Locale.US, Locale.UK, Locale.CANADA}) {
+                  StringBuilder line = new StringBuilder(locale.toLanguageTag() + ":");
+                  for (String template : templates) {
+                      line.append(' ').append(template).append('=').append(pattern(template, locale));
+                  }
+                  int hash = 0;
+                  for (String template : widths) {
+                      hash = hash * 31 + pattern(template, locale).hashCode();
+                  }
+                  System.out.println(shown(line.append(" #").append(hash)));
+              }
+              attempt("out of order", () -> DateTimeFormatterBuilder.getLocalizedDateTimePattern("dM",
+                      IsoChronology.INSTANCE, Locale.US));
+              attempt("of j and C", () -> DateTimeFormatterBuilder.getLocalizedDateTimePattern("jCdjC",
+                      IsoChronology.INSTANCE, Locale.UK));
+              attempt("of none", () -> DateTimeFormatterBuilder.getLocalizedDateTimePattern("s", IsoChronology.INSTANCE,
+                      Locale.ENGLISH));
+              attempt("a formatter out of order", () -> DateTimeFormatter.ofLocalizedPattern("jjj"));
+              DateTimeFormatter templated = DateTimeFormatter.ofLocalizedPattern("yMMMMEEEEdjm");
+              System.out.println(templated + " " + templated.getChronology() + " " + templated.getResolverStyle() + " "
+                      + new DateTimeFormatterBuilder().appendLocalized("yw").appendLiteral('|')
+                          .appendLocalized(FormatStyle.SHORT, null).toFormatter());
+              for (Locale locale : new Locale[] {Locale.ROOT, Locale.US, Locale.UK, Locale.CANADA}) {
+                  String text = templated.withLocale(locale).format(winter);
+                  attempt(locale.toLanguageTag() + " " + shown(text),
+                          () -> LocalDateTime.parse(text, templated.withLocale(locale)));
+              }
+              attempt("a formatter of none", () -> DateTimeFormatter.ofLocalizedPattern("s").withLocale(Locale.ROOT)
+                  .format(winter));
+              attempt("a formatter of none read", () -> DateTimeFormatter.ofLocalizedPattern("s").parse("12"));
+              attempt("a week, a quarter, a period, a zone", () -> Arrays.stream(new String[] {"yw", "yQQQQ", "Bjm", "Hmv"})
+                  .map(t -> DateTimeFormatter.ofLocalizedPattern(t).withLocale(Locale.UK).format(winter))
+                  .toList());
+              Chronology untyped = new Untyped();
+              attempt("a calendar of no type", () -> DateTimeFormatter.ofLocalizedPattern("yMMMd").withChronology(untyped)
+                  .format(winter));
+              attempt("a style of a calendar of no type", () -> DateTimeFormatterBuilder
+                  .getLocalizedDateTimePattern(FormatStyle.SHORT, null, untyped, Locale.US));
           }
       }
     stdout: |
@@ -19403,6 +19480,24 @@ standalone:
       in the evening: 19:30
       15 in the morning: Text '15 in the morning' could not be parsed: Conflict found: Resolved time 15:00 conflicts with DayPeriod(00:00-12:00) @0
       strictly: {},ISO
+      und: yMMMMEEEEd=y MMM d, E MMMMMd=MMMM d MMEd=MM-dd, E yyyy=G y GyM=G y MMM Mdd=- jm=HH:mm EEEEHm=E HH:mm yMdjms=y-MM-dd HH:mm:ss dBj=- MEdBj=- yw='week' w 'of' Y yQQQ=y QQQ Hmv=HH:mm v jmz=- dd=- #1560888139
+      en-US: yMMMMEEEEd=E, MMM d, y MMMMMd=MMMM d MMEd=E, M/d yyyy=y G GyM=MMM y G Mdd=- jm=h:mm_a EEEEHm=E HH:mm yMdjms=M/d/y, h:mm:ss_a dBj=d, h B MEdBj=E, M/d, h B yw='week' w 'of' Y yQQQ=QQQ y Hmv=HH:mm v jmz=- dd=- #1739299883
+      en-GB: yMMMMEEEEd=EEEE, d MMMM y MMMMMd=d MMMM MMEd=E dd/MM yyyy=y G GyM=MMM y G Mdd=dd/MM jm=HH:mm EEEEHm=E HH:mm yMdjms=dd/MM/y, HH:mm:ss dBj=d, h B MEdBj=E, dd/MM, h B yw='week' w 'of' Y yQQQ=QQQ y Hmv=HH:mm v jmz=- dd=- #1033441149
+      en-CA: yMMMMEEEEd=E, MMM d, y MMMMMd=MMMM d MMEd=E, MM-dd yyyy=y G GyM=MMM y G Mdd=MM-dd jm=h:mm_a EEEEHm=E HH:mm yMdjms=y-MM-dd, h:mm:ss_a dBj=d, h B MEdBj=E, MM-dd, h B yw='week' w 'of' Y yQQQ=QQQ y Hmv=HH:mm v jmz=- dd=- #1771691563
+      out of order: java.lang.IllegalArgumentException: Requested template "dM" is invalid.
+      of j and C: java.lang.IllegalArgumentException: Requested template "jCdjC" is invalid, which translated into "HHHdHC" after the 'j' or 'C' substitution.
+      of none: java.time.DateTimeException: Requested template "s" cannot be resolved in the locale "en"
+      a formatter out of order: java.lang.IllegalArgumentException: Requested template is invalid: jjj
+      Localized(yMMMMEEEEdjm) ISO SMART Localized(yw)'|'Localized(SHORT,)
+      und 2026 Jan 15, Thu 09:05: 2026-01-15T09:05
+      en-US Thu, Jan 15, 2026, 9:05_AM: 2026-01-15T09:05
+      en-GB Thursday, 15 January 2026, 09:05: 2026-01-15T09:05
+      en-CA Thu, Jan 15, 2026, 9:05_a.m.: 2026-01-15T09:05
+      a formatter of none: java.time.DateTimeException: Requested template "s" cannot be resolved in the locale ""
+      a formatter of none read: Text '12' could not be parsed: Requested template "s" cannot be resolved in the locale "en_US" @0
+      a week, a quarter, a period, a zone: [week 3 of 2026, 1st quarter 2026, 9:05 in the morning, 09:05 GMT-05:00]
+      a calendar of no type: java.lang.NullPointerException: Cannot invoke "String.equals(Object)" because "calType" is null
+      a style of a calendar of no type: java.lang.NullPointerException: Cannot invoke "String.equals(Object)" because "requestID" is null
   - name: a-formatters-decimal-style-a-reading-from-a-position-the-fields-it-resolves-and-a-calendars-map
     file: Decimals.java
     source: |

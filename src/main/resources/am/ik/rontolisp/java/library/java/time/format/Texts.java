@@ -3,13 +3,15 @@
 // (.kb/java-frontend-provenance.md). Lowered with every program that names it.
 //
 // The words a formatter writes for the values of a field, for the locales the library
-// has (java.util.Locale: the root and four English ones). The words are what a JDK 25
-// writes for each locale, style and value; a field or a style with none here is written
-// as a number.
+// has (java.util.Locale: the root and four English ones), and the patterns of their
+// localized forms and of the skeletons a requested template is matched to. The words and
+// the patterns are what a JDK 25 writes and answers for each locale, style, value and
+// template; a field or a style with none here is written as a number.
 // Third-party: Unicode CLDR data (Unicode-3.0), as a running JDK writes it, Copyright (c)
 // 1991-2026 Unicode, Inc. Notice: THIRD-PARTY-NOTICES.txt, "Unicode".
 package java.time.format;
 
+import java.time.chrono.Chronology;
 import java.time.temporal.ChronoField;
 import java.time.temporal.IsoFields;
 import java.time.temporal.TemporalField;
@@ -83,6 +85,83 @@ final class Texts {
                 : kind == 2 ? "EEEE, d MMMM y|d MMMM y|d MMM y|dd/MM/y|HH:mm:ss zzzz|HH:mm:ss z|HH:mm:ss|HH:mm|"
                         : "EEEE, MMMM d, y|MMMM d, y|MMM d, y|" + (kind == 1 ? "M/d/yy" : "y-MM-dd")
                                 + "|h:mm:ss\u202fa zzzz|h:mm:ss\u202fa z|h:mm:ss\u202fa|h:mm\u202fa|";
+    }
+
+    /**
+     * The skeletons of a set of locales a requested template is matched to (Skeletons):
+     * each the letters of a template, '=', and its pattern, ended by '|', those of one
+     * first letter together. A set holds what it has otherwise than the set it adds to
+     * (parent): 0 the root's, 1 English, 2 British, 3 Canadian, 4 international English.
+     */
+    static String skeletons(int set) {
+        if (set == 0) {
+            return "Gy=G y|GyMd=GGGGG y-MM-dd|GyMMM=G y MMM|GyMMMEd=G y MMM d, E|GyMMMd=G y MMM d|y=y|"
+                    + "yQQQ=y QQQ|yQQQQ=y QQQQ|yM=y-MM|yMEd=y-MM-dd, E|yMd=y-MM-dd|yMMM=y MMM|"
+                    + "yMMMEd=y MMM d, E|yMMMd=y MMM d|yMMMM=y MMMM|yw='week' w 'of' Y|yyyy=G y|"
+                    + "yyyyQQQ=G y QQQ|yyyyQQQQ=G y QQQQ|yyyyM=GGGGG y-MM|yyyyMEd=GGGGG y-MM-dd, E|"
+                    + "yyyyMd=GGGGG y-MM-dd|yyyyMMM=G y MMM|yyyyMMMEd=G y MMM d, E|yyyyMMMd=G y MMM d|"
+                    + "yyyyMMMM=G y MMMM|M=L|MEd=MM-dd, E|Md=MM-dd|MMM=LLL|MMMEd=MMM d, E|MMMd=MMM d|"
+                    + "MMMMd=MMMM d|E=ccc|Ed=d, E|EBhm=E h:mm B|EBhms=E h:mm:ss B|Ehm=E h:mm a|"
+                    + "Ehms=E h:mm:ss a|EHm=E HH:mm|EHms=E HH:mm:ss|d=d|Bh=h B|Bhm=h:mm B|Bhms=h:mm:ss B|"
+                    + "h=h\u202fa|hm=h:mm a|hms=h:mm:ss a|hmsv=h:mm:ss a v|hmv=h:mm a v|H=HH|Hm=HH:mm|"
+                    + "Hms=HH:mm:ss|Hmsv=HH:mm:ss v|Hmv=HH:mm v|ms=mm:ss|";
+        }
+        if (set == 1) {
+            return "Gy=y G|GyMd=M/d/y G|GyMMM=MMM y G|GyMMMEd=E, MMM d, y G|GyMMMd=MMM d, y G|yQQQ=QQQ y|"
+                    + "yQQQQ=QQQQ y|yM=M/y|yMEd=E, M/d/y|yMd=M/d/y|yMMM=MMM y|yMMMEd=E, MMM d, y|"
+                    + "yMMMd=MMM d, y|yMMMM=MMMM y|yyyy=y G|yyyyQQQ=QQQ y G|yyyyQQQQ=QQQQ y G|yyyyM=M/y GGGGG|"
+                    + "yyyyMEd=E, M/d/y GGGGG|yyyyMd=M/d/y GGGGG|yyyyMMM=MMM y G|yyyyMMMEd=E, MMM d, y G|"
+                    + "yyyyMMMd=MMM d, y G|yyyyMMMM=MMMM y G|MEd=E, M/d|Md=M/d|MMMEd=E, MMM d|Ed=d E|"
+                    + "Ehm=E h:mm\u202fa|Ehms=E h:mm:ss\u202fa|hm=h:mm\u202fa|hms=h:mm:ss\u202fa|"
+                    + "hmsv=h:mm:ss\u202fa v|hmv=h:mm\u202fa v|";
+        }
+        if (set == 2) {
+            return "GyMd=dd/MM/y G|GyMMMEEEEd=EEEE, d MMM y G|yMMMEEEEd=EEEE, d MMM y|"
+                    + "yMMMMEEEEd=EEEE, d MMMM y|yyyyMMMEEEEd=EEEE, d MMM y G|yyyyMMMMEEEEd=EEEE, d MMMM y G|"
+                    + "MEd=E dd/MM|MMMEd=E d MMM|MMMEEEEd=EEEE d MMM|MMMMEEEEd=EEEE d MMMM|";
+        }
+        if (set == 3) {
+            return "yM=y-MM|yMEd=E, y-MM-dd|yMd=y-MM-dd|MEd=E, MM-dd|Md=MM-dd|Mdd=MM-dd|Ed=E d|";
+        }
+        return "GyMd=d/M/y G|GyMMMEd=E, d MMM y G|GyMMMd=d MMM y G|yM=MM/y|yMEd=E, dd/MM/y|yMd=dd/MM/y|"
+                + "yMMMEd=E, d MMM y|yMMMd=d MMM y|yyyyM=MM/y GGGGG|yyyyMEd=E, dd/MM/y GGGGG|"
+                + "yyyyMd=dd/MM/y GGGGG|yyyyMMMEd=E, d MMM y G|yyyyMMMd=d MMM y G|M=LL|MEd=E, dd/MM|"
+                + "Md=dd/MM|Mdd=dd/MM|MMMEd=E, d MMM|MMMd=d MMM|MMMMd=d MMMM|Ed=E d|";
+    }
+
+    /** The set a set of skeletons adds to; -1 for the root's. */
+    static int parent(int set) {
+        return set == 0 ? -1 : set == 1 ? 0 : set == 2 ? 4 : 1;
+    }
+
+    /** The hour a requested template's j and C stand for in a set's locales: of twenty-four hours or of twelve. */
+    static char hour(int set) {
+        return set == 0 || set == 2 ? 'H' : 'h';
+    }
+
+    /**
+     * The set a template asking for a period of the day (B) and the locale's own hour (j,
+     * C) is matched in: for the British, international English, whose hours are of twelve.
+     */
+    static int twelve(int set) {
+        return set == 2 ? 4 : set;
+    }
+
+    /**
+     * Whether the program makes a calendar of its own, which may have no type: answered by
+     * the compiler, so that a program whose calendar is ISO's alone never asks.
+     */
+    static native boolean ownCalendars();
+
+    /**
+     * Refuses a calendar of no type where a locale's patterns are looked up, with a JDK
+     * 25's words: of a localized form's styles (requestID), of a requested template
+     * (calType).
+     */
+    static void typed(Chronology chronology, String looked) {
+        if (chronology != null && chronology.getCalendarType() == null) {
+            throw new NullPointerException("Cannot invoke \"String.equals(Object)\" because \"" + looked + "\" is null");
+        }
     }
 
     /** The piece of a text of pieces each ended by '|' at an index. */

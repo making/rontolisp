@@ -654,6 +654,28 @@ class JavaLoweringTest {
 			.noneMatch(form -> form.contains("ZoneNames"));
 		assertThat(lower(localized.formatted("LONG"), "L16.java"))
 			.anyMatch(form -> form.startsWith("(DEFUN |java.time.format.ZoneNames.name("));
+		// A requested template names the letters its patterns can hold, a computed one
+		// all of them; a calendar of no type is refused only in a program with one of its
+		// own.
+		String templated = """
+				import java.time.LocalDate;
+				import java.time.format.*;
+				class L17 {
+				    public static void main(String[] args) {
+				        System.out.println(DateTimeFormatter.ofLocalizedPattern(%s).format(LocalDate.MIN));
+				    }
+				}
+				""";
+		assertThat(lower(templated.formatted("\"yMMMMEEEEdjm\""), "L17.java"))
+			.anyMatch(form -> form.startsWith("(DEFUN |java.time.format.Step.Templated.parts(int,java.util.Locale)| "))
+			.noneMatch(form -> form.contains("WeekFields") || form.contains("IsoFields") || form.contains("ZoneNames")
+					|| form.contains("Step.DayPeriod") || form.contains("Texts.typed"));
+		assertThat(lower(templated.formatted("args[0]"), "L17.java"))
+			.anyMatch(form -> form.startsWith("(DEFUN |java.time.temporal.WeekFields.of(java.time.DayOfWeek,int)| "))
+			.anyMatch(form -> form.contains("IsoFields.QUARTER_OF_YEAR"))
+			.anyMatch(form -> form.startsWith("(DEFUN |java.time.format.ZoneNames.name("))
+			.anyMatch(form -> form.startsWith("(DEFUN |java.time.format.Step.DayPeriod.print("))
+			.noneMatch(form -> form.contains("Texts.typed"));
 		assertThat(lower(pool.formatted("{ protected void afterExecute(Runnable r, Throwable t) { } }"), "L7.java"))
 			.anyMatch(form -> form.contains("(DEFUN |java.util.concurrent.ThreadPoolExecutor.hooked()| NIL "
 					+ "(|java.util.concurrent.ThreadPoolExecutor.Hooked.new()|))"));

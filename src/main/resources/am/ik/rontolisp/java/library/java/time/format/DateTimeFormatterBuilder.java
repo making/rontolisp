@@ -6,7 +6,8 @@
 // width and no sign, is read as one of a run (Step.Digits); any other part ends the run.
 // A pattern's letters are the parts the API documentation gives for each letter and
 // count; the refusals' words are a JDK 25's. A localized form is the pattern of its
-// styles in the formatter's locale, as a JDK writes it (Texts).
+// styles in the formatter's locale, as a JDK writes it (Texts), or of a requested template,
+// as a JDK answers it (Skeletons).
 package java.time.format;
 
 import java.time.ZoneId;
@@ -338,7 +339,50 @@ public final class DateTimeFormatterBuilder {
         if (dateStyle == null && timeStyle == null) {
             throw new IllegalArgumentException("Either dateStyle or timeStyle must be non-null");
         }
+        if (Texts.ownCalendars()) {
+            Texts.typed(chrono, "requestID");
+        }
         return Texts.pattern(Texts.kind(locale), dateStyle, timeStyle);
+    }
+
+    /**
+     * A localized form of a requested template, its pattern found in the formatter's
+     * locale where it writes or reads (Skeletons): the compiler notes the letters its
+     * patterns can hold, then calls templated.
+     */
+    public native DateTimeFormatterBuilder appendLocalized(String requestedTemplate);
+
+    static DateTimeFormatterBuilder templated(DateTimeFormatterBuilder builder, String requestedTemplate) {
+        Objects.requireNonNull(requestedTemplate, "requestedTemplate");
+        if (!Skeletons.valid(requestedTemplate)) {
+            throw new IllegalArgumentException("Requested template is invalid: " + requestedTemplate);
+        }
+        return builder.add(new Step.Templated(requestedTemplate));
+    }
+
+    /**
+     * The pattern of a requested template in a locale (Skeletons). A refusal of an
+     * invalid template shows it with its j and C made the locale's hour.
+     */
+    public static String getLocalizedDateTimePattern(String requestedTemplate, Chronology chrono, Locale locale) {
+        Objects.requireNonNull(requestedTemplate, "requestedTemplate");
+        Objects.requireNonNull(chrono, "chrono");
+        Objects.requireNonNull(locale, "locale");
+        int kind = Texts.kind(locale);
+        if (!Skeletons.valid(requestedTemplate)) {
+            throw new IllegalArgumentException("Requested template \"" + requestedTemplate + "\" is invalid"
+                    + (requestedTemplate.indexOf('j') < 0 && requestedTemplate.indexOf('C') < 0 ? "."
+                            : ", which translated into \"" + Skeletons.shown(requestedTemplate, Texts.hour(kind))
+                                    + "\" after the 'j' or 'C' substitution."));
+        }
+        if (Texts.ownCalendars()) {
+            Texts.typed(chrono, "calType");
+        }
+        String pattern = Skeletons.pattern(kind, requestedTemplate);
+        if (pattern == null) {
+            throw Skeletons.unresolved(requestedTemplate, locale);
+        }
+        return pattern;
     }
 
     /** A pattern's parts as one group, which a localized form writes and reads through. */
