@@ -9,7 +9,11 @@
 // a JDK 25's answers to a grid (.kb/java-frontend.md, "java.time: the formatter"):
 // a year of an era is a year, then a date of the year, month and day (or of the day of
 // the year, or of a week and a day), then the fields of a time of day, which ones make a
-// time, and every field left is checked against what was made.
+// time, and every field left is checked against what was made. A formatter of a calendar
+// other than ISO's, in a program with a calendar of its own, has the calendar make the date
+// (its resolveDate over a map of the fields) and refuses a date of another calendar, an
+// instant made the calendar's zoned date-time and days a time passed added as an ISO
+// period, which such a date refuses (a JDK 25's answers).
 package java.time.format;
 
 import java.time.DateTimeException;
@@ -21,6 +25,7 @@ import java.time.ZoneOffset;
 import java.time.chrono.ChronoLocalDate;
 import java.time.chrono.ChronoLocalDateTime;
 import java.time.chrono.ChronoZonedDateTime;
+import java.time.chrono.Chronology;
 import java.time.chrono.IsoChronology;
 import java.time.temporal.ChronoField;
 import java.time.temporal.TemporalAccessor;
@@ -65,6 +70,15 @@ final class Parsed implements TemporalAccessor {
 
     private LocalDate date;
 
+    /**
+     * The formatter's calendar, in a program with a calendar of its own (Texts.ownCalendars());
+     * null for none.
+     */
+    private Chronology chronology;
+
+    /** The date the formatter's calendar made, where that calendar is not ISO's: date is then null. */
+    private ChronoLocalDate calendarDate;
+
     private LocalTime time;
 
     private long excessDays;
@@ -90,6 +104,46 @@ final class Parsed implements TemporalAccessor {
         this.zoneTime = in.zoneTime;
         this.period = in.period;
         this.leapSecond = in.leapSecond;
+        if (Texts.ownCalendars()) {
+            this.chronology = in.chronology;
+        }
+    }
+
+    /** Whether the formatter's calendar is one other than ISO's: asked in a program with one. */
+    private boolean otherCalendar() {
+        return chronology != null && chronology != IsoChronology.INSTANCE;
+    }
+
+    /**
+     * The date fields made a date, in a program with a calendar of its own: by ISO's rules
+     * over the arrays, or by the formatter's calendar where it is another.
+     */
+    private void dates() {
+        if (otherCalendar()) {
+            ChronoLocalDate made = chronology.resolveDate(new Fields(), style);
+            if (made != null) {
+                dated(made);
+            }
+            return;
+        }
+        resolveDate();
+    }
+
+    /** A date of the formatter's calendar, or of ISO's where it has none: one of another is refused. */
+    private void dated(ChronoLocalDate made) {
+        Chronology effective = chronology != null ? chronology : IsoChronology.INSTANCE;
+        if (!effective.equals(made.getChronology())) {
+            throw new DateTimeException("ChronoLocalDate must use the effective parsed chronology: " + effective);
+        }
+        if (!otherCalendar()) {
+            date(LocalDate.from(made));
+            return;
+        }
+        if (calendarDate != null && !calendarDate.equals(made)) {
+            throw new DateTimeException("Conflict found: Fields resolved to two different dates: " + calendarDate + " "
+                    + made);
+        }
+        calendarDate = made;
     }
 
     private int index(TemporalField field) {
@@ -205,7 +259,12 @@ final class Parsed implements TemporalAccessor {
                 }
             }
         }
-        resolveDate();
+        if (Texts.ownCalendars()) {
+            dates();
+        }
+        else {
+            resolveDate();
+        }
         if (others()) {
             resolveOthers();
         }
@@ -215,6 +274,13 @@ final class Parsed implements TemporalAccessor {
         if (date != null && excessDays != 0) {
             date = date.plusDays(excessDays);
             excessDays = 0;
+        }
+        if (Texts.ownCalendars()) {
+            if (calendarDate != null && excessDays != 0) {
+                // a JDK adds them as an ISO period, which a date of another calendar refuses
+                calendarDate = calendarDate.plus(Period.ofDays((int) excessDays));
+                excessDays = 0;
+            }
         }
         instant();
     }
@@ -309,7 +375,12 @@ final class Parsed implements TemporalAccessor {
             }
             if (view.dated) {
                 view.dated = false;
-                resolveDate();
+                if (Texts.ownCalendars()) {
+                    dates();
+                }
+                else {
+                    resolveDate();
+                }
             }
         }
     }
@@ -342,11 +413,21 @@ final class Parsed implements TemporalAccessor {
             made = zoned.toLocalDateTime();
         }
         if (made instanceof ChronoLocalDateTime<?> local) {
-            date(LocalDate.from(local.toLocalDate()));
+            if (Texts.ownCalendars()) {
+                dated(local.toLocalDate());
+            }
+            else {
+                date(LocalDate.from(local.toLocalDate()));
+            }
             time(local.toLocalTime());
         }
         else if (made instanceof ChronoLocalDate local) {
-            date(LocalDate.from(local));
+            if (Texts.ownCalendars()) {
+                dated(local);
+            }
+            else {
+                date(LocalDate.from(local));
+            }
         }
         else if (made instanceof LocalTime local) {
             time(local);
@@ -656,9 +737,19 @@ final class Parsed implements TemporalAccessor {
             TemporalAccessor made = null;
             if (field instanceof ChronoField) {
                 made = field.isDateBased() ? date : field.isTimeBased() ? time : null;
+                if (Texts.ownCalendars()) {
+                    if (calendarDate != null && field.isDateBased()) {
+                        made = calendarDate;
+                    }
+                }
             }
             else if (others()) {
                 made = date != null && date.isSupported(field) ? date : time;
+                if (Texts.ownCalendars()) {
+                    if (calendarDate != null && calendarDate.isSupported(field)) {
+                        made = calendarDate;
+                    }
+                }
             }
             if (made != null && made.isSupported(field)) {
                 long value = made.getLong(field);
@@ -688,6 +779,18 @@ final class Parsed implements TemporalAccessor {
             if (has(ChronoField.MILLI_OF_SECOND)) {
                 remove(ChronoField.MILLI_OF_SECOND);
             }
+            if (Texts.ownCalendars()) {
+                if (otherCalendar()) {
+                    // the calendar's zoned date-time of the instant
+                    ChronoZonedDateTime<?> zoned = chronology.zonedDateTime(java.time.Instant.ofEpochSecond(second, nano),
+                            zone != null ? zone
+                                    : ZoneOffset.ofTotalSeconds(Math.toIntExact(valueOf(ChronoField.OFFSET_SECONDS))));
+                    calendarDate = zoned.toLocalDate();
+                    time = zoned.toLocalTime();
+                    put(ChronoField.OFFSET_SECONDS, zoned.getOffset().getTotalSeconds(), null);
+                    return;
+                }
+            }
             java.time.OffsetDateTime local = zone != null
                     ? java.time.ZonedDateTime.ofInstant(java.time.Instant.ofEpochSecond(second, nano), zone)
                         .toOffsetDateTime()
@@ -698,15 +801,22 @@ final class Parsed implements TemporalAccessor {
             put(ChronoField.OFFSET_SECONDS, local.getOffset().getTotalSeconds(), null);
             return;
         }
-        if (date == null || time == null) {
+        LocalDate day = date;
+        if (Texts.ownCalendars()) {
+            if (calendarDate != null) {
+                // the calendar's date-time is at the instant ISO's of the same day and time is
+                day = LocalDate.ofEpochDay(calendarDate.toEpochDay());
+            }
+        }
+        if (day == null || time == null) {
             return;
         }
         if (has(ChronoField.OFFSET_SECONDS)) {
             ZoneOffset offset = ZoneOffset.ofTotalSeconds(Math.toIntExact(valueOf(ChronoField.OFFSET_SECONDS)));
-            put(ChronoField.INSTANT_SECONDS, date.atTime(time).toEpochSecond(offset), null);
+            put(ChronoField.INSTANT_SECONDS, day.atTime(time).toEpochSecond(offset), null);
         }
         else if (zone != null) {
-            java.time.ZonedDateTime zoned = date.atTime(time).atZone(zone);
+            java.time.ZonedDateTime zoned = day.atTime(time).atZone(zone);
             if (zoneTexts()) {
                 // in an overlap a name of standard time or of the zone as a whole is the
                 // later offset, any other the earlier
@@ -719,6 +829,11 @@ final class Parsed implements TemporalAccessor {
     }
 
     public boolean isSupported(TemporalField field) {
+        if (Texts.ownCalendars()) {
+            if (calendarDate != null && calendarDate.isSupported(field)) {
+                return true;
+            }
+        }
         if (has(field) || (date != null && date.isSupported(field)) || (time != null && time.isSupported(field))) {
             return true;
         }
@@ -730,6 +845,11 @@ final class Parsed implements TemporalAccessor {
         int index = index(field);
         if (index >= 0) {
             return values[index];
+        }
+        if (Texts.ownCalendars()) {
+            if (calendarDate != null && calendarDate.isSupported(field)) {
+                return calendarDate.getLong(field);
+            }
         }
         if (date != null && date.isSupported(field)) {
             return date.getLong(field);
@@ -749,6 +869,11 @@ final class Parsed implements TemporalAccessor {
             return (R) zone;
         }
         if (query == TemporalQueries.localDate()) {
+            if (Texts.ownCalendars()) {
+                if (calendarDate != null) {
+                    return (R) LocalDate.ofEpochDay(calendarDate.toEpochDay());
+                }
+            }
             return (R) date;
         }
         if (query == TemporalQueries.localTime()) {
@@ -765,6 +890,11 @@ final class Parsed implements TemporalAccessor {
         }
         if (calendars()) {
             if (query == TemporalQueries.chronology()) {
+                if (Texts.ownCalendars()) {
+                    if (style != null && chronology != null) {
+                        return (R) chronology;
+                    }
+                }
                 // none before the fields are resolved
                 return (R) (style == null ? null : IsoChronology.INSTANCE);
             }
@@ -832,14 +962,24 @@ final class Parsed implements TemporalAccessor {
             text.append(fields[i].toString()).append('=').append(values[i]);
         }
         // the calendar, which fields not yet resolved have none of
-        text.append(style == null ? "},null" : "},ISO");
+        String calendar = style == null ? "},null" : "},ISO";
+        String day = date == null ? null : date.toString();
+        if (Texts.ownCalendars()) {
+            if (style != null && chronology != null) {
+                calendar = "}," + chronology.toString();
+            }
+            if (calendarDate != null) {
+                day = calendarDate.toString();
+            }
+        }
+        text.append(calendar);
         if (zone != null) {
             text.append(',').append(zone.getId()).append(',').append(zoneTime);
         }
-        if (date != null || time != null) {
+        if (day != null || time != null) {
             text.append(" resolved to ");
-            if (date != null) {
-                text.append(date.toString());
+            if (day != null) {
+                text.append(day);
                 if (time != null) {
                     text.append('T');
                 }

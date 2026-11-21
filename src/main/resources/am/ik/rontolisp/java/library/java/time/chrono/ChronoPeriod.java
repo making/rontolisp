@@ -2,8 +2,8 @@
 // and behaviour; nothing here is copied or translated from a JDK
 // (.kb/java-frontend-provenance.md). Lowered with every program that names it.
 //
-// An amount of years, months and days of a calendar. The library has the ISO calendar
-// alone, whose amount is java.time.Period.
+// An amount of years, months and days of a calendar: java.time.Period is ISO's, any
+// other calendar's is ChronoPeriodImpl.
 package java.time.chrono;
 
 import java.time.temporal.Temporal;
@@ -26,9 +26,23 @@ public interface ChronoPeriod extends TemporalAmount {
 
     Chronology getChronology();
 
-    boolean isZero();
+    default boolean isZero() {
+        for (TemporalUnit unit : getUnits()) {
+            if (get(unit) != 0) {
+                return false;
+            }
+        }
+        return true;
+    }
 
-    boolean isNegative();
+    default boolean isNegative() {
+        for (TemporalUnit unit : getUnits()) {
+            if (get(unit) < 0) {
+                return true;
+            }
+        }
+        return false;
+    }
 
     ChronoPeriod plus(TemporalAmount amountToAdd);
 
@@ -36,7 +50,9 @@ public interface ChronoPeriod extends TemporalAmount {
 
     ChronoPeriod multipliedBy(int scalar);
 
-    ChronoPeriod negated();
+    default ChronoPeriod negated() {
+        return multipliedBy(-1);
+    }
 
     ChronoPeriod normalized();
 

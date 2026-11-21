@@ -669,7 +669,50 @@ class JavaLoweringTest {
 		assertThat(lower(templated.formatted("\"yMMMMEEEEdjm\""), "L17.java"))
 			.anyMatch(form -> form.startsWith("(DEFUN |java.time.format.Step.Templated.parts(int,java.util.Locale)| "))
 			.noneMatch(form -> form.contains("WeekFields") || form.contains("IsoFields") || form.contains("ZoneNames")
-					|| form.contains("Step.DayPeriod") || form.contains("Texts.typed"));
+					|| form.contains("Step.DayPeriod") || form.contains("Texts.typed")
+					|| form.contains("DateTimeFormatter.calendared") || form.contains("Parsed.dates()")
+					|| form.contains("Texts.eraWords"));
+		// A value is written in the formatter's calendar, and a text read in
+		// it, only in a program with a calendar of its own; the calendar's
+		// zoned date-time is made where it writes only in one that can give a
+		// formatter a zone, and is where it reads.
+		String calendared = """
+				import java.time.LocalDate;
+				import java.time.chrono.*;
+				import java.time.format.DateTimeFormatter;
+				import java.time.temporal.*;
+				import java.util.List;
+				class L18 {
+				    static final class Own extends AbstractChronology {
+				        public String getId() { return "Own"; }
+				        public String getCalendarType() { return "own"; }
+				        public ChronoLocalDate date(int y, int m, int d) { return LocalDate.of(y, m, d); }
+				        public ChronoLocalDate dateYearDay(int y, int d) { return LocalDate.ofYearDay(y, d); }
+				        public ChronoLocalDate dateEpochDay(long d) { return LocalDate.ofEpochDay(d); }
+				        public ChronoLocalDate date(TemporalAccessor t) { return LocalDate.from(t); }
+				        public boolean isLeapYear(long y) { return IsoChronology.INSTANCE.isLeapYear(y); }
+				        public int prolepticYear(Era era, int y) { return IsoChronology.INSTANCE.prolepticYear(era, y); }
+				        public Era eraOf(int era) { return IsoEra.of(era); }
+				        public List<Era> eras() { return List.of(IsoEra.values()); }
+				        public ValueRange range(ChronoField field) { return field.range(); }
+				    }
+				    public static void main(String[] args) {
+				        DateTimeFormatter written = DateTimeFormatter.ofPattern("uuuu G").withChronology(new Own())%s;
+				        System.out.println(written.format(LocalDate.MIN)%s);
+				    }
+				}
+				""";
+		assertThat(lower(calendared.formatted("", ""), "L18.java"))
+			.anyMatch(form -> form.startsWith("(DEFUN |java.time.format.DateTimeFormatter.calendared(")
+					&& !form.contains("zonedDateTime"))
+			.anyMatch(form -> form.startsWith("(DEFUN |java.time.format.Texts.eraWords("))
+			.noneMatch(form -> form.contains("ChronoZonedDateTimeImpl") || form.contains("Parsed.dates()"));
+		assertThat(lower(calendared.formatted(".withZone(java.time.ZoneOffset.UTC)", " + written.parse(\"2026 1\")"),
+				"L18.java"))
+			.anyMatch(form -> form.startsWith("(DEFUN |java.time.format.DateTimeFormatter.calendared(")
+					&& form.contains("zonedDateTime"))
+			.anyMatch(form -> form.startsWith("(DEFUN |java.time.chrono.ChronoZonedDateTimeImpl.ofInstant("))
+			.anyMatch(form -> form.startsWith("(DEFUN |java.time.format.Parsed.dates()| "));
 		assertThat(lower(templated.formatted("args[0]"), "L17.java"))
 			.anyMatch(form -> form.startsWith("(DEFUN |java.time.temporal.WeekFields.of(java.time.DayOfWeek,int)| "))
 			.anyMatch(form -> form.contains("IsoFields.QUARTER_OF_YEAR"))

@@ -51,9 +51,14 @@ final class Writing {
 
     /**
      * The value as a refusal shows it: a value with no date, written by a formatter of a
-     * calendar, with the calendar after it.
+     * calendar, with the calendar after it. In a program with a calendar of its own the
+     * value is the one the formatter's calendar made (DateTimeFormatter.calendared), which
+     * shows the calendar where it is not the value's own.
      */
     String shown() {
+        if (Texts.ownCalendars()) {
+            return temporal.toString();
+        }
         return chronology == null || temporal.isSupported(ChronoField.EPOCH_DAY) ? temporal.toString()
                 : temporal.toString() + " with chronology " + chronology.toString();
     }

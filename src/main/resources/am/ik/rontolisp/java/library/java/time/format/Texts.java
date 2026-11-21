@@ -164,6 +164,21 @@ final class Texts {
         }
     }
 
+    /**
+     * Whether a calendar's eras are written in the words the library has: ISO's, one of
+     * the Gregorian type and none; one of another type writes and reads its eras as
+     * numbers (a JDK 25 has the words of five other types, which the library has not),
+     * and one of no type is refused in a JDK's words (requestID).
+     */
+    static boolean eraWords(Chronology chronology) {
+        if (chronology == null) {
+            return true;
+        }
+        typed(chronology, "requestID");
+        String type = chronology.getCalendarType();
+        return type.equals("iso8601") || type.equals("gregory");
+    }
+
     /** The piece of a text of pieces each ended by '|' at an index. */
     static String piece(String text, int index) {
         int at = 0;

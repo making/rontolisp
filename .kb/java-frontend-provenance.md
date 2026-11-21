@@ -448,6 +448,24 @@ algorithm came from, and the answer goes in the file's header.
   patterns are CLDR's as a running JDK answers them, under the Unicode entry of
   `THIRD-PARTY-NOTICES.txt`. The answers are lines of `java-spec.yaml`, which the JDK leg asks
   again.
+- **A calendar of the program's own (k78, 2026-11-21).** The date-time, the zoned date-time
+  and the period of a calendar not ISO's (`ChronoLocalDateTimeImpl`, `ChronoZonedDateTimeImpl`,
+  `ChronoPeriodImpl`), the defaults of `ChronoLocalDate`, `ChronoLocalDateTime`,
+  `ChronoZonedDateTime` and `ChronoPeriod`, and a formatter writing and reading in such a calendar
+  were written from the API documentation (which members are defaults, read by reflection off a
+  running JDK; what each default and `Chronology`'s three members state: the date's `atTime`, the
+  zone then the instant or the date-time, the order of a comparison) and JDK 25's answers to
+  probes (`probes/` of `.todo/artefacts/k78-java-time-a-calendar-of-the-program-s-own/`, 13
+  programs over five calendars of the probes' own and a date leaving every default to the
+  interface). Nobody opened OpenJDK's source, and the shape is its own: the calendar's zoned
+  date-time takes its offsets and gaps from ISO's `ZonedDateTime` of the same day and time, a
+  formatter's calendar is a branch of one method and two fields of `Parsed`. What the documentation
+  does not state was read off the answers: the class names; that a zoned date-time moves its local
+  date-time by a time-based unit and sets an instant as seconds added; the cut of `until`; the
+  256ths of half days (ISO's `LocalDateTime` too); which check words `expected` and which
+  `required`, and the casts' texts; which values a formatter of a calendar refuses and with what;
+  that excess days are an ISO period; that an era of a calendar of no Gregorian type is a number.
+  The answers are lines of `java-spec.yaml`, which the JDK leg asks again.
 - **`java.util.Date` and `java.sql` (k37, 2026-11-20).** Written from the API
   documentation (which states `Date.hashCode`, `equals` and the text forms) and JDK 25's
   answers to probes (`Grid.java`, 2,095 lines; `Gap.java`, the wall times four zones skip

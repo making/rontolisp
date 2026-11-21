@@ -19573,6 +19573,61 @@ standalone:
               public ValueRange range(ChronoField field) { return field.range(); }
           }
 
+          // a calendar of the program's own whose years are ISO's a hundred later, with dates of its own
+          static final class Shifted extends AbstractChronology {
+              static final Shifted INSTANCE = new Shifted();
+              public String getId() { return "Shifted"; }
+              public String getCalendarType() { return "shifted"; }
+              public ShiftedDate date(int prolepticYear, int month, int dayOfMonth) { return new ShiftedDate(LocalDate.of(prolepticYear - 100, month, dayOfMonth)); }
+              public ShiftedDate dateYearDay(int prolepticYear, int dayOfYear) { return new ShiftedDate(LocalDate.ofYearDay(prolepticYear - 100, dayOfYear)); }
+              public ShiftedDate dateEpochDay(long epochDay) { return new ShiftedDate(LocalDate.ofEpochDay(epochDay)); }
+              public ShiftedDate date(TemporalAccessor temporal) { return new ShiftedDate(LocalDate.ofEpochDay(temporal.getLong(ChronoField.EPOCH_DAY))); }
+              public boolean isLeapYear(long prolepticYear) { return Year.isLeap(prolepticYear - 100); }
+              public int prolepticYear(Era era, int yearOfEra) { return era == IsoEra.CE ? yearOfEra : 1 - yearOfEra; }
+              public Era eraOf(int eraValue) { return IsoEra.of(eraValue); }
+              public List<Era> eras() { return List.of(IsoEra.BCE, IsoEra.CE); }
+              public ValueRange range(ChronoField field) { return field.range(); }
+          }
+
+          static final class ShiftedDate implements ChronoLocalDate {
+              final LocalDate iso;
+              ShiftedDate(LocalDate iso) { this.iso = iso; }
+              public Chronology getChronology() { return Shifted.INSTANCE; }
+              public int lengthOfMonth() { return iso.lengthOfMonth(); }
+              public long getLong(TemporalField field) {
+                  long year = iso.getYear() + 100L;
+                  if (field == ChronoField.YEAR || field == ChronoField.YEAR_OF_ERA) { return field == ChronoField.YEAR || year >= 1 ? year : 1 - year; }
+                  if (field == ChronoField.ERA) { return year >= 1 ? 1 : 0; }
+                  if (field == ChronoField.PROLEPTIC_MONTH) { return year * 12 + iso.getMonthValue() - 1; }
+                  return field instanceof ChronoField ? iso.getLong(field) : field.getFrom(this);
+              }
+              public ShiftedDate with(TemporalField field, long value) {
+                  if (field == ChronoField.YEAR) { return new ShiftedDate(iso.withYear((int) value - 100)); }
+                  return field instanceof ChronoField ? new ShiftedDate(iso.with(field, value)) : (ShiftedDate) ChronoLocalDate.super.with(field, value);
+              }
+              public ShiftedDate plus(long amount, TemporalUnit unit) {
+                  return unit instanceof ChronoUnit ? new ShiftedDate(iso.plus(amount, unit)) : (ShiftedDate) ChronoLocalDate.super.plus(amount, unit);
+              }
+              public long until(Temporal end, TemporalUnit unit) { return iso.until(Shifted.INSTANCE.date(end).iso, unit); }
+              public ChronoPeriod until(ChronoLocalDate end) {
+                  Period period = iso.until(Shifted.INSTANCE.date(end).iso);
+                  return Shifted.INSTANCE.period(period.getYears(), period.getMonths(), period.getDays());
+              }
+              public boolean equals(Object other) { return other instanceof ShiftedDate date && date.iso.equals(iso); }
+              public int hashCode() { return iso.hashCode() ^ 7; }
+              public String toString() { return "Shifted " + getLong(ChronoField.YEAR) + "-" + iso.getMonthValue() + "-" + iso.getDayOfMonth(); }
+          }
+
+          // a date leaving every default to the interface
+          static final class Bare implements ChronoLocalDate {
+              public Chronology getChronology() { return Shifted.INSTANCE; }
+              public int lengthOfMonth() { return 31; }
+              public long getLong(TemporalField field) { return LocalDate.of(2026, 3, 7).getLong(field); }
+              public long until(Temporal end, TemporalUnit unit) { return 0; }
+              public ChronoPeriod until(ChronoLocalDate end) { return null; }
+              public String toString() { return "Bare"; }
+          }
+
           static String resolved(Chronology chronology, ResolverStyle style, Object... pairs) {
               Map<TemporalField, Long> map = new HashMap<>();
               for (int i = 0; i < pairs.length; i += 2) {
@@ -19674,6 +19729,79 @@ standalone:
               attempt("a null field", () -> new DateTimeFormatterBuilder().appendFraction(null, 0, 9, true));
               attempt("a null day", () -> TemporalAdjusters.next(null));
               attempt("from null", () -> ZonedDateTime.from(null));
+              calendarsOwn(thin);
+          }
+
+          // the date-times, zoned date-times and periods of a calendar of the program's own, its
+          // dates' defaults, and a formatter writing and reading in it
+          static void calendarsOwn(Thin thin) {
+              Shifted shifted = Shifted.INSTANCE;
+              ZoneId paris = ZoneId.of("Europe/Paris");
+              LocalDateTime at = LocalDateTime.of(2026, 3, 7, 10, 15, 30, 123000000);
+              attempt("thin's", () -> thin.localDateTime(at) + " " + thin.period(1, 2, 3) + " " + thin.period(1, 2, 3).getClass().getName());
+              attempt("thin's zoned", () -> thin.zonedDateTime(ZonedDateTime.of(at, paris)));
+              ChronoLocalDateTime<? extends ChronoLocalDate> local = shifted.date(2126, 3, 7).atTime(LocalTime.of(10, 15, 30, 123000000));
+              ChronoZonedDateTime<?> zoned = shifted.zonedDateTime(ZonedDateTime.of(at, paris));
+              System.out.println(local + " " + local.getClass().getName() + " " + (local.hashCode() == (local.toLocalDate().hashCode() ^ local.toLocalTime().hashCode()))
+                  + " " + local.equals(shifted.localDateTime(at)) + " " + local.equals(at) + " " + local.compareTo(at) + " " + at.compareTo(local) + " "
+                  + local.isEqual(at) + " " + at.isEqual(local) + " " + local.compareTo(LocalDateTime.of(2026, 3, 7, 12, 0)));
+              System.out.println(zoned + " " + zoned.getClass().getName() + " " + zoned.toInstant() + " " + shifted.zonedDateTime(Instant.EPOCH, ZoneOffset.UTC)
+                  + " " + zoned.compareTo(shifted.zonedDateTime(ZonedDateTime.of(at, ZoneOffset.ofHours(1)))) + " " + zoned.compareTo(ZonedDateTime.of(at, paris))
+                  + " " + (zoned.hashCode() == (local.hashCode() ^ zoned.getOffset().hashCode() ^ Integer.rotateLeft(paris.hashCode(), 3))));
+              System.out.println(local.plus(5, ChronoUnit.HOURS) + " " + local.minus(3, ChronoUnit.HALF_DAYS) + " " + local.plus(2, ChronoUnit.MONTHS) + " "
+                  + local.with(ChronoField.YEAR, 2200) + " " + local.with(TemporalAdjusters.lastDayOfMonth()) + " " + local.with(LocalTime.NOON) + " "
+                  + local.until(LocalDateTime.of(2027, 5, 9, 1, 2, 3, 4), ChronoUnit.MICROS) + " " + LocalDateTime.of(2026, 3, 7, 10, 15, 30, 123000000)
+                      .until(LocalDateTime.of(2027, 5, 9, 1, 2, 3, 4), ChronoUnit.MICROS) + " " + local.until(LocalDateTime.of(2025, 1, 9, 1, 2), ChronoUnit.DAYS)
+                  + " " + local.getLong(ChronoField.PROLEPTIC_MONTH) + " " + local.query(TemporalQueries.localDate()) + " " + LocalDateTime.from(local));
+              attempt("with an ISO date", () -> local.with(LocalDate.of(1999, 1, 1)));
+              attempt("plus an ISO period", () -> local.plus(Period.ofDays(1)));
+              attempt("half days past the end", () -> local.plus(Long.MAX_VALUE, ChronoUnit.HALF_DAYS));
+              attempt("ISO's half days past the end", () -> at.plus(Long.MAX_VALUE, ChronoUnit.HALF_DAYS));
+              ChronoZonedDateTime<?> overlap = shifted.date(2126, 10, 25).atTime(LocalTime.of(2, 30)).atZone(paris);
+              System.out.println(shifted.date(2126, 3, 29).atTime(LocalTime.of(2, 30)).atZone(paris) + " " + overlap + " " + overlap.withLaterOffsetAtOverlap()
+                  + " " + overlap.plus(1, ChronoUnit.HOURS) + " " + zoned.with(ChronoField.OFFSET_SECONDS, 7200) + " "
+                  + zoned.with(ChronoField.INSTANT_SECONDS, 1000000000L) + " " + zoned.withZoneSameInstant(ZoneId.of("Asia/Tokyo")) + " "
+                  + zoned.until(ZonedDateTime.of(2026, 7, 1, 10, 30, 0, 0, paris), ChronoUnit.DAYS) + " "
+                  + ZonedDateTime.of(at, paris).until(ZonedDateTime.of(2026, 7, 1, 10, 30, 0, 0, paris), ChronoUnit.DAYS));
+              attempt("a date-time of a date", () -> shifted.localDateTime(LocalDate.of(2026, 3, 7)));
+              attempt("a zoned date-time of a date-time", () -> ChronoZonedDateTime.from(local));
+              ChronoPeriod period = shifted.period(1, 14, 3);
+              System.out.println(period + " " + period.getClass().getName() + " " + period.normalized() + " " + period.negated() + " "
+                  + (period.hashCode() == (Period.of(1, 14, 3).hashCode() ^ shifted.hashCode())) + " " + period.addTo(shifted.date(2124, 2, 29)) + " "
+                  + period.plus(shifted.period(0, 0, 1)) + " " + period.getUnits() + " " + shifted.period(0, 0, 0));
+              attempt("a period plus ISO's", () -> period.plus(Period.ofDays(1)));
+              attempt("a period plus thin's", () -> period.plus(thin.period(1, 0, 0)));
+              attempt("a period added to ISO's date", () -> period.addTo(LocalDate.of(2026, 3, 7)));
+              attempt("a period made ISO's", () -> Period.from(period));
+              // a date of the program's own and the defaults
+              ChronoLocalDate day = shifted.date(2124, 2, 29);
+              System.out.println(day + " " + day.isLeapYear() + " " + day.lengthOfYear() + " " + day.toEpochDay() + " " + day.getEra() + " "
+                  + day.compareTo(LocalDate.of(2024, 2, 29)) + " " + LocalDate.of(2024, 2, 29).compareTo(day) + " " + LocalDate.of(2024, 2, 29).isEqual(day)
+                  + " " + day.isAfter(LocalDate.of(2024, 2, 28)) + " " + day.with(TemporalAdjusters.firstDayOfNextYear()) + " " + day.plus(1, IsoFields.QUARTER_YEARS)
+                  + " " + day.query(TemporalQueries.precision()) + " " + LocalDate.from(day) + " " + day.isSupported(IsoFields.QUARTER_OF_YEAR));
+              attempt("an adjuster making ISO's", () -> day.with(t -> LocalDate.of(2000, 1, 1)));
+              attempt("an adjuster making a time", () -> day.with(t -> LocalTime.NOON));
+              attempt("an ISO period added", () -> day.plus(Period.ofDays(1)));
+              attempt("a field by default", () -> new Bare().with(ChronoField.DAY_OF_MONTH, 2));
+              attempt("a unit by default", () -> new Bare().minus(2, ChronoUnit.DAYS));
+              attempt("a time by default", () -> new Bare().atTime(LocalTime.NOON) + " " + new Bare().isLeapYear() + " " + new Bare().getEra());
+              // a formatter of the calendar
+              DateTimeFormatter written = DateTimeFormatter.ofPattern("uuuu-MM-dd G GGGG MMMM", Locale.US);
+              System.out.println(written.withChronology(shifted).format(LocalDate.of(2026, 3, 7)) + " | " + written.format(day) + " | "
+                  + written.withChronology(IsoChronology.INSTANCE).format(day) + " | " + written.withChronology(thin).format(at) + " | "
+                  + DateTimeFormatter.ISO_LOCAL_DATE.format(day) + " | " + DateTimeFormatter.ofPattern("uuuu-MM-dd HH:mm VV").withChronology(shifted)
+                      .withZone(paris).format(Instant.parse("2026-03-07T10:15:30Z")));
+              attempt("a month in thin's", () -> written.withChronology(thin).format(YearMonth.of(2026, 3)));
+              attempt("no zone in shifted's", () -> DateTimeFormatter.ofPattern("VV").withChronology(shifted).format(LocalDate.of(2026, 3, 7)));
+              attempt("an instant in thin's", () -> DateTimeFormatter.ofPattern("uuuu").withChronology(thin).withZone(paris).format(Instant.EPOCH));
+              DateTimeFormatter read = DateTimeFormatter.ofPattern("G uuuu-MM-dd HH:mm", Locale.US).withChronology(shifted);
+              attempt("read", () -> read.parse("1 2126-03-07 10:15") + " " + read.parse("1 2126-03-07 10:15", LocalDateTime::from) + " "
+                  + read.parse("1 2126-03-07 10:15", ChronoLocalDateTime::from) + " " + read.parse("1 2126-03-07 10:15").query(TemporalQueries.chronology()));
+              attempt("read the era's word", () -> read.parse("AD 2126-03-07 10:15"));
+              attempt("read the end of a day", () -> read.parse("1 2126-03-07 24:00"));
+              attempt("read in thin's", () -> DateTimeFormatter.ofPattern("uuuu-MM-dd").withChronology(thin).parse("2026-03-07"));
+              attempt("read zoned", () -> DateTimeFormatter.ISO_ZONED_DATE_TIME.withChronology(shifted).parse("2126-03-07T10:15:30+01:00[Europe/Paris]",
+                  ChronoZonedDateTime::from));
           }
       }
     stdout: |
@@ -19721,6 +19849,39 @@ standalone:
       a null field: java.lang.NullPointerException: Cannot invoke "java.time.temporal.TemporalField.range()" because "field" is null
       a null day: java.lang.NullPointerException: Cannot invoke "java.time.DayOfWeek.getValue()" because "dayOfWeek" is null
       from null: java.lang.NullPointerException: Cannot invoke "java.time.temporal.TemporalAccessor.query(java.time.temporal.TemporalQuery)" because "temporal" is null
+      thin's: 2026-03-07T10:15:30.123 Thin P1Y2M3D java.time.chrono.ChronoPeriodImpl
+      thin's zoned: java.lang.ClassCastException: class java.time.LocalDateTime cannot be cast to class java.time.chrono.ChronoLocalDateTimeImpl (java.time.LocalDateTime and java.time.chrono.ChronoLocalDateTimeImpl are in module java.base of loader 'bootstrap')
+      Shifted 2126-3-7T10:15:30.123 java.time.chrono.ChronoLocalDateTimeImpl true true false 10 -10 true true 10
+      Shifted 2126-3-7T10:15:30.123+01:00[Europe/Paris] java.time.chrono.ChronoZonedDateTimeImpl 2026-03-07T09:15:30.123Z Shifted 2070-1-1T00:00Z 26 10 true
+      Shifted 2126-3-7T15:15:30.123 Shifted 2126-3-5T22:15:30.123 Shifted 2126-5-7T10:15:30.123 Shifted 2200-3-7T10:15:30.123 Shifted 2126-3-31T10:15:30.123 Shifted 2126-3-7T12:00 36945992877001 36945992877000 -423 25514 2026-03-07 2026-03-07T10:15:30.123
+      with an ISO date: java.lang.ClassCastException: Chronology mismatch, expected: Shifted, actual: ISO
+      plus an ISO period: java.time.DateTimeException: Chronology mismatch, expected: ISO, actual: Shifted
+      half days past the end: java.time.DateTimeException: Invalid value for EpochDay (valid values -365243219162 - 365241780471): 36028797018984486
+      ISO's half days past the end: java.time.DateTimeException: Invalid value for EpochDay (valid values -365243219162 - 365241780471): 36028797018984486
+      Shifted 2126-3-29T03:30+02:00[Europe/Paris] Shifted 2126-10-25T02:30+02:00[Europe/Paris] Shifted 2126-10-25T02:30+01:00[Europe/Paris] Shifted 2126-10-25T03:30+01:00[Europe/Paris] Shifted 2126-3-7T09:15:30.123+01:00[Europe/Paris] Shifted 2101-9-9T02:46:40.123+02:00[Europe/Paris] Shifted 2126-3-7T18:15:30.123+09:00[Asia/Tokyo] 115 116
+      a date-time of a date: java.time.DateTimeException: Unable to obtain ChronoLocalDateTime from TemporalAccessor: class java.time.LocalDate
+      a zoned date-time of a date-time: java.time.DateTimeException: Unable to obtain ChronoZonedDateTime from TemporalAccessor: class java.time.chrono.ChronoLocalDateTimeImpl
+      Shifted P1Y14M3D java.time.chrono.ChronoPeriodImpl Shifted P2Y2M3D Shifted P-1Y-14M-3D true Shifted 2126-5-2 Shifted P1Y14M4D [Years, Months, Days] Shifted P0D
+      a period plus ISO's: java.time.DateTimeException: Unable to obtain ChronoPeriod from TemporalAmount: class java.time.Period
+      a period plus thin's: java.lang.ClassCastException: Chronology mismatch, expected: Shifted, actual: Thin
+      a period added to ISO's date: java.time.DateTimeException: Chronology mismatch, expected: Shifted, actual: ISO
+      a period made ISO's: java.time.DateTimeException: Period requires ISO chronology: Shifted P1Y14M3D
+      Shifted 2124-2-29 true 366 19782 CE 10 -10 true true Shifted 2125-1-1 Shifted 2124-5-29 Days 2024-02-29 false
+      an adjuster making ISO's: java.lang.ClassCastException: Chronology mismatch, expected: Shifted, actual: ISO
+      an adjuster making a time: java.lang.ClassCastException: class java.time.LocalTime cannot be cast to class java.time.chrono.ChronoLocalDate (java.time.LocalTime and java.time.chrono.ChronoLocalDate are in module java.base of loader 'bootstrap')
+      an ISO period added: java.time.DateTimeException: Chronology mismatch, expected: ISO, actual: Shifted
+      a field by default: java.time.temporal.UnsupportedTemporalTypeException: Unsupported field: DayOfMonth
+      a unit by default: java.time.temporal.UnsupportedTemporalTypeException: Unsupported unit: Days
+      a time by default: BareT12:00 false CE
+      2126-03-07 1 1 March | 2124-02-29 1 1 February | 2024-02-29 AD Anno Domini February | 2026-03-07 1 1 March | 2024-02-29 | 2126-03-07 11:15 Europe/Paris
+      a month in thin's: java.time.DateTimeException: Unable to apply override chronology 'Thin' because the temporal object being formatted contains date fields but does not represent a whole date: 2026-03
+      no zone in shifted's: java.time.DateTimeException: Unable to extract ZoneId from temporal 2026-03-07 with chronology Shifted
+      an instant in thin's: java.lang.ClassCastException: class java.time.LocalDateTime cannot be cast to class java.time.chrono.ChronoLocalDateTimeImpl (java.time.LocalDateTime and java.time.chrono.ChronoLocalDateTimeImpl are in module java.base of loader 'bootstrap')
+      read: {},Shifted resolved to Shifted 2126-3-7T10:15 2026-03-07T10:15 Shifted 2126-3-7T10:15 Shifted
+      read the era's word: Text 'AD 2126-03-07 10:15' could not be parsed at index 0 @0
+      read the end of a day: Text '1 2126-03-07 24:00' could not be parsed: Chronology mismatch, expected: ISO, actual: Shifted @0
+      read in thin's: Text '2026-03-07' could not be parsed: ChronoLocalDate must use the effective parsed chronology: Thin @0
+      read zoned: Shifted 2126-3-7T10:15:30+01:00[Europe/Paris]
 refused:
   scaffold: |
     class Refused {

@@ -579,18 +579,37 @@ public final class LocalDate implements Temporal, TemporalAdjuster, ChronoLocalD
             }
             return order != 0 ? order : day - date.day;
         }
+        if (Iso.ownCalendars()) {
+            // a date of another calendar: the epoch days, then the calendars
+            return ChronoLocalDate.super.compareTo(other);
+        }
         return Long.compare(toEpochDay(), other.toEpochDay());
     }
 
     public boolean isAfter(ChronoLocalDate other) {
+        if (Iso.ownCalendars()) {
+            if (!(other instanceof LocalDate)) {
+                return toEpochDay() > other.toEpochDay();
+            }
+        }
         return compareTo(other) > 0;
     }
 
     public boolean isBefore(ChronoLocalDate other) {
+        if (Iso.ownCalendars()) {
+            if (!(other instanceof LocalDate)) {
+                return toEpochDay() < other.toEpochDay();
+            }
+        }
         return compareTo(other) < 0;
     }
 
     public boolean isEqual(ChronoLocalDate other) {
+        if (Iso.ownCalendars()) {
+            if (!(other instanceof LocalDate)) {
+                return toEpochDay() == other.toEpochDay();
+            }
+        }
         return compareTo(other) == 0;
     }
 

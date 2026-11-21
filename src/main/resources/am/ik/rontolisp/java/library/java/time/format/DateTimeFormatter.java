@@ -12,7 +12,9 @@
 // 25's answers. The ISO constants are the forms of ISO-8601 the API documentation gives;
 // each is made only in a program that reads it (wanted(), a question the compiler
 // answers); a program that never names a decimal style or the fields to resolve has
-// nothing of them (decimals(), Parsed.filtered()).
+// nothing of them (decimals(), Parsed.filtered()). A formatter of a calendar writes a
+// value in that calendar and reads one in it (calendared, Parsed), in a program with a
+// calendar of its own; any other program's dates are all ISO's.
 package java.time.format;
 
 import java.io.IOException;
@@ -26,6 +28,7 @@ import java.time.Period;
 import java.time.ZoneId;
 import java.time.ZoneOffset;
 import java.time.ZonedDateTime;
+import java.time.chrono.ChronoLocalDate;
 import java.time.chrono.Chronology;
 import java.time.chrono.IsoChronology;
 import java.time.temporal.ChronoField;
@@ -34,6 +37,7 @@ import java.time.temporal.TemporalAccessor;
 import java.time.temporal.TemporalField;
 import java.time.temporal.TemporalQuery;
 import java.time.temporal.TemporalQueries;
+import java.time.temporal.ValueRange;
 import java.util.Arrays;
 import java.util.Collections;
 import java.util.HashSet;
@@ -206,6 +210,13 @@ public final class DateTimeFormatter {
      * standard characters with nothing of the others.
      */
     static native boolean decimals();
+
+    /**
+     * Whether the program can give a formatter a zone: answered by whether it reaches
+     * withZone, so a program with a calendar of its own that cannot has nothing of a zoned
+     * date-time of its calendar where it writes (calendared).
+     */
+    static native boolean zones();
 
     private static DateTimeFormatter rfc1123() {
         return new DateTimeFormatterBuilder().parseCaseInsensitive()
@@ -406,7 +417,7 @@ public final class DateTimeFormatter {
         return chronology;
     }
 
-    /** The calendar a text is read in and a value written in; the library has ISO's alone. */
+    /** The calendar a text is read in and a value written in: ISO's or one of the program's own. */
     public DateTimeFormatter withChronology(Chronology chronology) {
         return Objects.equals(chronology, this.chronology) ? this
                 : new DateTimeFormatter(root, locale, decimals, style, resolverFields, zone, chronology);
@@ -423,7 +434,8 @@ public final class DateTimeFormatter {
 
     public String format(TemporalAccessor temporal) {
         Objects.requireNonNull(temporal, "temporal");
-        Writing out = new Writing(zoned(temporal), Texts.kind(locale), chronology);
+        Writing out = new Writing(Texts.ownCalendars() ? calendared(temporal) : zoned(temporal), Texts.kind(locale),
+                chronology);
         if (Step.templated()) {
             out.locale = locale;
         }
@@ -461,6 +473,59 @@ public final class DateTimeFormatter {
                     + " does not represent an instant: " + temporal.toString());
         }
         return new Zoned(temporal, zone);
+    }
+
+    /**
+     * The value as the formatter's calendar and zone see it, in a program with a calendar of
+     * its own (a JDK 25's answers): a calendar or a zone the value has already is none; a
+     * value with an instant is the zone's zoned date-time of it in the calendar; a value
+     * with a date has it in the calendar, and one with fields of a date but no date is
+     * refused; any other is read as it is, the calendar and the zone told.
+     */
+    private TemporalAccessor calendared(TemporalAccessor temporal) {
+        Chronology own = temporal.query(TemporalQueries.chronology());
+        ZoneId ownZone = temporal.query(TemporalQueries.zoneId());
+        Chronology calendar = chronology == null || chronology.equals(own) ? null : chronology;
+        ZoneId place = zone == null || zone.equals(ownZone) ? null : zone;
+        if (calendar == null && place == null) {
+            return temporal;
+        }
+        Chronology effective = calendar != null ? calendar : own;
+        if (zones()) {
+            if (place != null) {
+                if (temporal.isSupported(ChronoField.INSTANT_SECONDS)) {
+                    return (effective != null ? effective : IsoChronology.INSTANCE)
+                        .zonedDateTime(Instant.from(temporal), place);
+                }
+                if (place.normalized() instanceof ZoneOffset offset && temporal.isSupported(ChronoField.OFFSET_SECONDS)
+                        && temporal.get(ChronoField.OFFSET_SECONDS) != offset.getTotalSeconds()) {
+                    throw new DateTimeException("Unable to apply override zone '" + place.getId()
+                            + "' because the temporal object being formatted has a different offset but"
+                            + " does not represent an instant: " + temporal.toString());
+                }
+            }
+        }
+        ChronoLocalDate date = null;
+        if (calendar != null) {
+            if (temporal.isSupported(ChronoField.EPOCH_DAY)) {
+                date = calendar.date(temporal);
+            }
+            else if (calendar != IsoChronology.INSTANCE || own != null) {
+                // the fields of a date but the epoch day: a value with one is a part of a date
+                for (ChronoField field : new ChronoField[] {ChronoField.DAY_OF_WEEK,
+                    ChronoField.ALIGNED_DAY_OF_WEEK_IN_MONTH, ChronoField.ALIGNED_DAY_OF_WEEK_IN_YEAR,
+                    ChronoField.DAY_OF_MONTH, ChronoField.DAY_OF_YEAR, ChronoField.ALIGNED_WEEK_OF_MONTH,
+                    ChronoField.ALIGNED_WEEK_OF_YEAR, ChronoField.MONTH_OF_YEAR, ChronoField.PROLEPTIC_MONTH,
+                    ChronoField.YEAR_OF_ERA, ChronoField.YEAR, ChronoField.ERA}) {
+                    if (temporal.isSupported(field)) {
+                        throw new DateTimeException("Unable to apply override chronology '" + calendar
+                                + "' because the temporal object being formatted contains date fields but does not"
+                                + " represent a whole date: " + temporal);
+                    }
+                }
+            }
+        }
+        return new Calendared(temporal, date, effective, place != null ? place : ownZone, calendar);
     }
 
     public TemporalAccessor parse(CharSequence text) {
@@ -700,6 +765,64 @@ public final class DateTimeFormatter {
                 pos.setErrorIndex(0);
             }
             return null;
+        }
+    }
+
+    /**
+     * A value as a formatter of another calendar or zone sees it: the fields of a date the
+     * calendar's date's, the calendar and the zone the formatter's where it gave them; in a
+     * refusal's text the calendar given after the value, where it is not the value's own.
+     */
+    private static final class Calendared implements TemporalAccessor {
+
+        private final TemporalAccessor temporal;
+
+        private final ChronoLocalDate date;
+
+        private final Chronology chronology;
+
+        private final ZoneId zone;
+
+        /** The formatter's calendar where it is not the value's own, or null. */
+        private final Chronology given;
+
+        Calendared(TemporalAccessor temporal, ChronoLocalDate date, Chronology chronology, ZoneId zone,
+                Chronology given) {
+            this.temporal = temporal;
+            this.date = date;
+            this.chronology = chronology;
+            this.zone = zone;
+            this.given = given;
+        }
+
+        public boolean isSupported(TemporalField field) {
+            return date != null && field.isDateBased() ? date.isSupported(field) : temporal.isSupported(field);
+        }
+
+        public ValueRange range(TemporalField field) {
+            return date != null && field.isDateBased() ? date.range(field) : temporal.range(field);
+        }
+
+        public long getLong(TemporalField field) {
+            return date != null && field.isDateBased() ? date.getLong(field) : temporal.getLong(field);
+        }
+
+        @SuppressWarnings("unchecked")
+        public <R> R query(TemporalQuery<R> query) {
+            if (query == TemporalQueries.zoneId()) {
+                return (R) zone;
+            }
+            if (query == TemporalQueries.chronology()) {
+                return (R) chronology;
+            }
+            if (query == TemporalQueries.precision()) {
+                return temporal.query(query);
+            }
+            return query.queryFrom(this);
+        }
+
+        public String toString() {
+            return given == null ? temporal.toString() : temporal + " with chronology " + given;
         }
     }
 

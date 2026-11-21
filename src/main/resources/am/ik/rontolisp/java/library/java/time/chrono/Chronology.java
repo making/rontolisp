@@ -5,13 +5,16 @@
 // A calendar: how its dates are made and counted. The library has the ISO calendar
 // alone (IsoChronology); a name of another is unknown. A program may write its own
 // (AbstractChronology): the members a JDK gives one are here, from the documentation and
-// a JDK 25's answers (the order epochSecond refuses in), but the date-times, the zoned
-// date-times and the periods of a calendar other than ISO's.
+// a JDK 25's answers -- the order epochSecond refuses in; the date-time a value's date
+// and time make, and the zoned date-time of its zone and its instant or, with none, its
+// date-time, each wrapping a DateTimeException in its own (ChronoLocalDateTimeImpl,
+// ChronoZonedDateTimeImpl); the period of the calendar (ChronoPeriodImpl).
 package java.time.chrono;
 
 import java.time.Clock;
 import java.time.DateTimeException;
 import java.time.Instant;
+import java.time.LocalTime;
 import java.time.ZoneId;
 import java.time.ZoneOffset;
 import java.time.format.ResolverStyle;
@@ -87,16 +90,39 @@ public interface Chronology extends Comparable<Chronology> {
 
     ChronoLocalDate date(TemporalAccessor temporal);
 
+    /** The date-time of a value's date in this calendar and its time. */
     default ChronoLocalDateTime<? extends ChronoLocalDate> localDateTime(TemporalAccessor temporal) {
-        throw AbstractChronology.otherCalendar("localDateTime");
+        try {
+            return date(temporal).atTime(LocalTime.from(temporal));
+        }
+        catch (DateTimeException failed) {
+            throw new DateTimeException("Unable to obtain ChronoLocalDateTime from TemporalAccessor: class "
+                    + temporal.getClass().getName(), failed);
+        }
     }
 
+    /**
+     * The zoned date-time of a value: its zone (or its offset), then its instant there or,
+     * where it has none, its date-time in this calendar placed in the zone.
+     */
     default ChronoZonedDateTime<? extends ChronoLocalDate> zonedDateTime(TemporalAccessor temporal) {
-        throw AbstractChronology.otherCalendar("zonedDateTime");
+        try {
+            ZoneId zone = ZoneId.from(temporal);
+            try {
+                return zonedDateTime(Instant.from(temporal), zone);
+            }
+            catch (DateTimeException noInstant) {
+                return ChronoZonedDateTimeImpl.ofBest(ChronoLocalDateTimeImpl.cast(localDateTime(temporal)), zone, null);
+            }
+        }
+        catch (DateTimeException failed) {
+            throw new DateTimeException("Unable to obtain ChronoZonedDateTime from TemporalAccessor: class "
+                    + temporal.getClass().getName(), failed);
+        }
     }
 
     default ChronoZonedDateTime<? extends ChronoLocalDate> zonedDateTime(Instant instant, ZoneId zone) {
-        throw AbstractChronology.otherCalendar("zonedDateTime");
+        return ChronoZonedDateTimeImpl.ofInstant(this, instant, zone);
     }
 
     boolean isLeapYear(long prolepticYear);
@@ -120,7 +146,7 @@ public interface Chronology extends Comparable<Chronology> {
     }
 
     default ChronoPeriod period(int years, int months, int days) {
-        throw AbstractChronology.otherCalendar("period");
+        return new ChronoPeriodImpl(this, years, months, days);
     }
 
     /** The second of the epoch of a local date-time at an offset: the offset, the time, then the date checked. */

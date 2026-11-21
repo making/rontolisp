@@ -38,6 +38,12 @@ final class Iso {
      */
     static native boolean calendars();
 
+    /**
+     * Whether the program makes a calendar other than ISO's: answered by the compiler, so
+     * that a program whose dates are all ISO's compares and adds them as ISO's.
+     */
+    static native boolean ownCalendars();
+
     static boolean leap(long year) {
         return (year & 3) == 0 && (year % 100 != 0 || year % 400 == 0);
     }

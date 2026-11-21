@@ -379,10 +379,14 @@ by its number in the locale's week), or two such fields make two dates or two ti
 
 **`java.time` has the ISO calendar alone.** `Chronology.of` knows no other calendar and
 `getAvailableChronologies()` holds ISO's alone; `Duration.dividedBy` is refused by name. A
-calendar of the program's own extends `AbstractChronology` and makes its dates of a map of
-fields as a JDK's does, but its date-times, zoned date-times and periods (`localDateTime`,
-`zonedDateTime`, `period`) are refused with an `UnsupportedOperationException`, and a
-formatter reads and writes in ISO's calendar whatever `withChronology` names. The message of a text whose fields make no value lists them in one order
+calendar of the program's own extends `AbstractChronology` and has its dates, date-times,
+zoned date-times and periods as a JDK's does, and a formatter of `withChronology` writes and
+reads in it. But the week-based years of `WeekFields` and the Julian days are read and set in
+ISO's years, `appendChronologyId` and `appendChronologyText` are refused by name, and a
+calendar whose type is one of the five others a JDK has words for (`buddhist`, `japanese`,
+`roc`, `islamic-umalqura` and its kin) writes and reads its eras as numbers. A text giving an
+instant and a zone beside a date or a time is read as the instant's date and time, where a JDK
+refuses another one. The message of a text whose fields make no value lists them in one order
 (`{Year=2020, MonthOfYear=13}`), and of several fields of a time with no hour out of range
 the same one is refused first; a JDK's order changes from run to run. A `ValueRange`, a
 `ZoneRules`, a `ZoneOffsetTransition` and a `ZoneOffsetTransitionRule` have hash codes of

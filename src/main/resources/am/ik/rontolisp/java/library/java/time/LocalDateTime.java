@@ -304,7 +304,9 @@ public final class LocalDateTime
                 case HOURS:
                     return plusHours(amountToAdd);
                 case HALF_DAYS:
-                    return moved(amountToAdd / 2, amountToAdd % 2 * 43200 * Iso.SECOND);
+                    // the days of 256ths of the amount first, then the hours of the rest (a
+                    // JDK 25's answer: which day a refusal past the last names)
+                    return moved(amountToAdd / 256, 0).plusHours(amountToAdd % 256 * 12);
                 default:
                     return with(date.plus(amountToAdd, unit), time);
             }
@@ -462,19 +464,38 @@ public final class LocalDateTime
             int order = date.compareTo(dateTime.date);
             return order != 0 ? order : time.compareTo(dateTime.time);
         }
+        if (Iso.ownCalendars()) {
+            // a date-time of another calendar: the dates, the times, then the calendars
+            return ChronoLocalDateTime.super.compareTo(other);
+        }
         int order = Long.compare(date.toEpochDay(), other.toLocalDate().toEpochDay());
         return order != 0 ? order : time.compareTo(other.toLocalTime());
     }
 
     public boolean isAfter(ChronoLocalDateTime<?> other) {
+        if (Iso.ownCalendars()) {
+            if (!(other instanceof LocalDateTime)) {
+                return ChronoLocalDateTime.super.isAfter(other);
+            }
+        }
         return compareTo(other) > 0;
     }
 
     public boolean isBefore(ChronoLocalDateTime<?> other) {
+        if (Iso.ownCalendars()) {
+            if (!(other instanceof LocalDateTime)) {
+                return ChronoLocalDateTime.super.isBefore(other);
+            }
+        }
         return compareTo(other) < 0;
     }
 
     public boolean isEqual(ChronoLocalDateTime<?> other) {
+        if (Iso.ownCalendars()) {
+            if (!(other instanceof LocalDateTime)) {
+                return ChronoLocalDateTime.super.isEqual(other);
+            }
+        }
         return compareTo(other) == 0;
     }
 

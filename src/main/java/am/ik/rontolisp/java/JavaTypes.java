@@ -573,8 +573,10 @@ final class JavaTypes implements JavaClasses.Relations {
 			if (above.arguments().isEmpty() || target.arguments().isEmpty()) {
 				return true;
 			}
+			List<TypeParameter> parameters = target.declaration().allTypeParameters();
 			for (int i = 0; i < target.arguments().size(); i++) {
-				if (!contains(target.arguments().get(i), above.arguments().get(i))) {
+				if (!contains(target.arguments().get(i), above.arguments().get(i),
+						i < parameters.size() ? parameters.get(i) : null)) {
 					return false;
 				}
 			}
@@ -587,15 +589,21 @@ final class JavaTypes implements JavaClasses.Relations {
 		return false;
 	}
 
-	/** Whether a type argument takes another: a wildcard what is inside its bound. */
-	private boolean contains(JavaType argument, JavaType given) {
+	/**
+	 * Whether a type argument takes another: a wildcard what is inside its bound. A
+	 * wildcard given stands for its capture, which is under the bounds the class declares
+	 * for the parameter too (JLS 5.1.10): {@code ChronoLocalDateTime<?>} is a
+	 * {@code ChronoLocalDateTime<? extends ChronoLocalDate>}.
+	 */
+	private boolean contains(JavaType argument, JavaType given, @Nullable TypeParameter parameter) {
 		if (!(argument instanceof Wildcard wildcard)) {
 			return sameType(argument, given);
 		}
 		if (wildcard.upper() != null) {
 			JavaType upper = given instanceof Wildcard inner ? (inner.upper() != null ? inner.upper() : this.object)
 					: given;
-			if (!isSubtype(upper, wildcard.upper())) {
+			if (!isSubtype(upper, wildcard.upper())
+					&& !(given instanceof Wildcard && declaredUnder(parameter, wildcard.upper()))) {
 				return false;
 			}
 		}
@@ -606,6 +614,23 @@ final class JavaTypes implements JavaClasses.Relations {
 			return isSubtype(wildcard.lower(), given);
 		}
 		return true;
+	}
+
+	/**
+	 * Whether a class's type parameter is declared under a type: by a bound naming no
+	 * parameter of the class (one that does would have to be read with the arguments).
+	 */
+	private boolean declaredUnder(@Nullable TypeParameter parameter, JavaType upper) {
+		if (parameter == null || parameter.owner == null) {
+			return false;
+		}
+		Set<TypeParameter> own = new HashSet<>(parameter.owner.allTypeParameters());
+		for (JavaType bound : parameter.bounds) {
+			if (!mentions(bound, own) && isSubtype(bound, upper)) {
+				return true;
+			}
+		}
+		return false;
 	}
 
 	private static void supertypes(JavaClass declaration, Set<JavaClass> into) {

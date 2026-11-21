@@ -566,6 +566,11 @@ abstract class Step {
             if (!out.has(field)) {
                 return false;
             }
+            if (Texts.ownCalendars()) {
+                if (given == null && field == ChronoField.ERA && !Texts.eraWords(out.calendar())) {
+                    return number().print(out);
+                }
+            }
             long value = out.value(field);
             String word = null;
             if (given != null) {
@@ -607,6 +612,11 @@ abstract class Step {
         int parse(Reading in, int at) {
             if (at > in.length) {
                 return ~at;
+            }
+            if (Texts.ownCalendars()) {
+                if (given == null && field == ChronoField.ERA && !Texts.eraWords(in.chronology)) {
+                    return number().parse(in, at);
+                }
             }
             long[] found = {0, 0};
             boolean any;

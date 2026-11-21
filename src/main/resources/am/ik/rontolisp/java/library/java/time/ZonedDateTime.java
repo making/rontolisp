@@ -617,10 +617,18 @@ public final class ZonedDateTime implements Temporal, ChronoZonedDateTime<LocalD
         if (order == 0) {
             order = getNano() - other.toLocalTime().getNano();
         }
-        if (order == 0 && other instanceof ZonedDateTime that) {
-            order = dateTime.compareTo(that.dateTime);
+        if (order == 0) {
+            order = dateTime.compareTo(other.toLocalDateTime());
         }
-        return order != 0 ? order : zone.getId().compareTo(other.getZone().getId());
+        if (order == 0) {
+            order = zone.getId().compareTo(other.getZone().getId());
+        }
+        if (Iso.ownCalendars()) {
+            if (order == 0) {
+                order = getChronology().compareTo(other.getChronology());
+            }
+        }
+        return order;
     }
 
     public boolean isAfter(ChronoZonedDateTime<?> other) {

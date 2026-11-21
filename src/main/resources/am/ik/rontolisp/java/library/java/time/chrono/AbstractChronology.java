@@ -8,7 +8,9 @@
 // 25's answers: the order the fields are taken out of the map and checked in (what is
 // left of it after a refusal), and that leniently a day of the week in an aligned week is
 // the day before the one asked. ISO's calendar takes an era of another value and a
-// proleptic month out of range differently (resolve's iso).
+// proleptic month out of range differently (resolve's iso). The checks of what a default
+// of a calendar's date, date-time or zoned date-time made are here and in the two
+// classes of those (dated, ChronoLocalDateTimeImpl.ensured, ChronoZonedDateTimeImpl.ensured).
 package java.time.chrono;
 
 import java.time.DateTimeException;
@@ -52,10 +54,33 @@ public abstract class AbstractChronology implements Chronology {
         return getId();
     }
 
-    /** The refusal of a member that needs the date-times or the periods of a calendar other than ISO's. */
-    static UnsupportedOperationException otherCalendar(String member) {
-        return new UnsupportedOperationException("Chronology." + member
-                + " of a calendar other than ISO's is not supported by the experimental Java subset yet");
+    /**
+     * A date a default of ChronoLocalDate made, checked to be a date of the calendar: a
+     * ClassCastException otherwise, in a JDK 25's words.
+     */
+    static ChronoLocalDate dated(Chronology chrono, Temporal temporal) {
+        if (!(temporal instanceof ChronoLocalDate date)) {
+            throw castRefused(temporal, "java.time.chrono.ChronoLocalDate");
+        }
+        if (!chrono.equals(date.getChronology())) {
+            throw new ClassCastException("Chronology mismatch, expected: " + chrono.getId() + ", actual: "
+                    + date.getChronology().getId());
+        }
+        return date;
+    }
+
+    /**
+     * A cast of a value to a class of the library refused as a JDK 25 words it: both
+     * classes in java.base, or the value's in the unnamed module of the application's
+     * loader.
+     */
+    static ClassCastException castRefused(Object value, String target) {
+        String name = value.getClass().getName();
+        boolean library = name.length() > 5 && name.substring(0, 5).equals("java.");
+        return new ClassCastException("class " + name + " cannot be cast to class " + target + " ("
+                + (library ? name + " and " + target + " are in module java.base"
+                        : name + " is in unnamed module of loader 'app'; " + target + " is in module java.base")
+                + " of loader 'bootstrap')");
     }
 
     /**

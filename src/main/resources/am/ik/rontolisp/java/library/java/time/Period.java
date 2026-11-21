@@ -4,19 +4,25 @@
 //
 // An amount of time in years, months and days, each with a sign of its own: a month is
 // not a number of days until it is added to a date. Its text is a P, then any of a
-// number of years, months, weeks and days in that order, in either case.
+// number of years, months, weeks and days in that order, in either case. In a program
+// with a calendar of its own, a period of another calendar is no Period and a value of
+// another calendar has none added (a JDK 25's words).
 package java.time;
 
 import java.io.Serializable;
 import java.time.chrono.ChronoPeriod;
+import java.time.chrono.Chronology;
 import java.time.chrono.IsoChronology;
 import java.time.format.DateTimeParseException;
 import java.time.temporal.ChronoUnit;
 import java.time.temporal.Temporal;
+import java.time.temporal.TemporalAccessor;
 import java.time.temporal.TemporalAmount;
+import java.time.temporal.TemporalQueries;
 import java.time.temporal.TemporalUnit;
 import java.time.temporal.UnsupportedTemporalTypeException;
 import java.util.List;
+import java.util.Objects;
 
 public final class Period implements ChronoPeriod, Serializable {
 
@@ -57,6 +63,11 @@ public final class Period implements ChronoPeriod, Serializable {
     public static Period from(TemporalAmount amount) {
         if (amount instanceof Period period) {
             return period;
+        }
+        if (Iso.ownCalendars()) {
+            if (amount instanceof ChronoPeriod other && !IsoChronology.INSTANCE.equals(other.getChronology())) {
+                throw new DateTimeException("Period requires ISO chronology: " + amount);
+            }
         }
         int years = 0;
         int months = 0;
@@ -273,7 +284,19 @@ public final class Period implements ChronoPeriod, Serializable {
         return years * 12L + months;
     }
 
+    /** A value's calendar checked to be none or ISO's. */
+    private static void calendarOf(TemporalAccessor temporal) {
+        Objects.requireNonNull(temporal, "temporal");
+        Chronology chronology = temporal.query(TemporalQueries.chronology());
+        if (chronology != null && !IsoChronology.INSTANCE.equals(chronology)) {
+            throw new DateTimeException("Chronology mismatch, expected: ISO, actual: " + chronology.getId());
+        }
+    }
+
     public Temporal addTo(Temporal temporal) {
+        if (Iso.ownCalendars()) {
+            calendarOf(temporal);
+        }
         if (months == 0) {
             if (years != 0) {
                 temporal = temporal.plus(years, ChronoUnit.YEARS);
@@ -289,6 +312,9 @@ public final class Period implements ChronoPeriod, Serializable {
     }
 
     public Temporal subtractFrom(Temporal temporal) {
+        if (Iso.ownCalendars()) {
+            calendarOf(temporal);
+        }
         if (months == 0) {
             if (years != 0) {
                 temporal = temporal.minus(years, ChronoUnit.YEARS);

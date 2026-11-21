@@ -8,6 +8,7 @@
 // be the last week of the year before. How a formatter's fields of them are resolved in
 // each style -- which range a value is checked against, what a value past it makes --
 // is a JDK 25's answers to a grid (.kb/java-frontend.md, "java.time: the formatter").
+// A value of another calendar has none of them, as a JDK's has not.
 // Third-party: the name of a week is Unicode CLDR data (Unicode-3.0), as a running JDK
 // writes it, Copyright (c) 1991-2026 Unicode, Inc.
 // Notice: THIRD-PARTY-NOTICES.txt, "Unicode".
@@ -18,6 +19,8 @@ import java.time.Duration;
 import java.time.LocalDate;
 import java.time.Month;
 import java.time.Year;
+import java.time.chrono.Chronology;
+import java.time.chrono.IsoChronology;
 import java.time.format.ResolverStyle;
 import java.util.Locale;
 import java.util.Map;
@@ -38,6 +41,17 @@ public final class IsoFields {
     public static final TemporalUnit QUARTER_YEARS = new Unit(1);
 
     private IsoFields() {
+    }
+
+    /**
+     * Whether the program makes a calendar other than ISO's: answered by the compiler, so
+     * that a program whose dates are all ISO's never asks a value for its calendar.
+     */
+    static native boolean ownCalendars();
+
+    /** Whether a value is of ISO's calendar, or of none: the only one whose quarters and weeks these are. */
+    private static boolean iso(TemporalAccessor temporal) {
+        return Chronology.from(temporal).equals(IsoChronology.INSTANCE);
     }
 
     /** The epoch day of a year's January 1 (java.time's Iso counts days the same way). */
@@ -110,6 +124,11 @@ public final class IsoFields {
         }
 
         public boolean isSupportedBy(TemporalAccessor temporal) {
+            if (IsoFields.ownCalendars()) {
+                if (!iso(temporal)) {
+                    return false;
+                }
+            }
             if (kind == 0) {
                 return temporal.isSupported(ChronoField.DAY_OF_YEAR) && temporal.isSupported(ChronoField.MONTH_OF_YEAR)
                         && temporal.isSupported(ChronoField.YEAR);
@@ -285,6 +304,11 @@ public final class IsoFields {
         }
 
         public boolean isSupportedBy(Temporal temporal) {
+            if (IsoFields.ownCalendars()) {
+                if (!iso(temporal)) {
+                    return false;
+                }
+            }
             return temporal.isSupported(ChronoField.EPOCH_DAY);
         }
 

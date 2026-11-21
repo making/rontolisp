@@ -374,10 +374,13 @@ JDK は、あるゾーンの名前を `ENGLISH` について書いたあと、�
 
 **`java.time` の暦は ISO だけです。** `Chronology.of` はほかの暦を知らず、
 `getAvailableChronologies()` は ISO だけを返します。`Duration.dividedBy` は、名前を示して
-拒否されます。プログラム独自の暦は `AbstractChronology` を継承でき、フィールドの対応表から JDK と
-同じく日付を作ります。ただし、その暦の日時、ゾーン付き日時、期間（`localDateTime`、
-`zonedDateTime`、`period`）は `UnsupportedOperationException` で拒否します。また、フォーマッターは
-`withChronology` で何を指定しても ISO 暦で読み書きします。
+拒否されます。プログラム独自の暦は `AbstractChronology` を継承でき、日付、日時、ゾーン付き
+日時、期間を JDK と同じく持ちます。`withChronology` で指定したフォーマッターは、その暦で読み書き
+します。ただし、`WeekFields` の週基準年とユリウス日は ISO の年で読み書きします。
+`appendChronologyId` と `appendChronologyText` は名前を示して拒否します。JDK が語を持つほかの
+5 つの暦の型（`buddhist`、`japanese`、`roc`、`islamic-umalqura` とその仲間）の暦は、紀元を数で
+読み書きします。瞬間とゾーンを日付や時刻と一緒に与える文字列は瞬間の日付と時刻として読みます。
+JDK はそれと異なる日付や時刻を拒否します。
 フィールドから値を作れなかった文字列のメッセージは、フィールドを決まった順で並べます
 （`{Year=2020, MonthOfYear=13}`）。時のない時刻の複数のフィールドが範囲外のときも、決まった
 フィールドを先に拒否します。JDK ではどちらの順序も実行のたびに変わります。`ValueRange`、

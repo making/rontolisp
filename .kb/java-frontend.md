@@ -3286,9 +3286,8 @@ it reaches the member that makes it.** Provenance:
   written out; `appendGenericZoneText(style, null)` is no preferred zones.
 - **A calendar of the program's own**: the members a JDK's `Chronology` has as defaults are
   defaults here (`date` and `dateYearDay` of an era, `dateNow`, `epochSecond`, which refuses the
-  offset, the time, then the date); `localDateTime`, `zonedDateTime` and `period` need another
-  calendar's date-times and periods and are refused (`UnsupportedOperationException`),
-  `.todo/k78`.
+  offset, the time, then the date); its date-times, zoned date-times and periods came with k78
+  ("java.time: a calendar of the program's own").
 - **Who pays** (`JavaIntrinsics.REACHES`, `JavaLowering.reaches`: a question answered by
   whether the program reaches a member, the first reach lowering it again):
   `DateTimeFormatter.decimals()` by `withDecimalStyle`, `Parsed.filtered()` by
@@ -3413,6 +3412,116 @@ a period's or a zone's parts only where a template can name one.** Provenance:
 - Pins: java-spec `localized-forms-a-zones-name-in-words-and-a-days-period` (66 lines with
   the templates); `JavaLoweringTest#theLibraryIsJavaSourceLoweredAsFarAsTheProgramReaches`
   (a template's letters, the calendar's check where no calendar of the program's own is).
+
+## java.time: a calendar of the program's own (2026-11-21, k78)
+
+**Invariant: a calendar of the program's own has the date-time, the zoned date-time and the
+period a JDK 25 gives it, its dates the defaults, and a formatter of it writes and reads in it, as
+a JDK answers; a program pays for any of it only where it makes a `Chronology` that is not ISO's,
+and for the calendar's zoned date-time where it writes only where it can give a formatter a
+zone.** Provenance: [java-frontend-provenance.md](java-frontend-provenance.md). The probes and the
+sizes: `.todo/artefacts/k78-java-time-a-calendar-of-the-program-s-own/`.
+
+- **The todo's premise was half wrong** (measured 2026-11-21, JDK 25.0.5): `localDateTime` of a
+  calendar whose dates are `LocalDate` is ISO's `LocalDateTime` (the date's `atTime`); the internal
+  `ClassCastException` is `zonedDateTime`'s, of both kinds, where the calendar's date-time is made
+  from ISO's and cast.
+- **The calendar's values** (`java.time.chrono`, package-private, the names a JDK's
+  `getClass()` and refused casts show): `ChronoLocalDateTimeImpl` (a date of the calendar and a
+  `LocalTime`; `date.atTime`), `ChronoZonedDateTimeImpl` (that, an offset, a zone),
+  `ChronoPeriodImpl`. `Chronology.localDateTime` is the value's date in the calendar at its
+  `LocalTime`, `zonedDateTime` its zone (or offset), then its instant or, with none, its
+  date-time placed; each wraps a `DateTimeException` in `Unable to obtain ChronoLocalDateTime
+  (ChronoZonedDateTime) from TemporalAccessor: class ..`. Read off the answers:
+  - a date-time's `ChronoField` of a date is the date's, of a time the time's (their refusals,
+    `get`'s quoted and unquoted words, come from there); a time-based unit moves the time and
+    carries whole days into the date in one step, half days in 256ths of the amount first (the day
+    a refusal past the last names; ISO's `LocalDateTime` did it in halves and now does it so);
+    `until` in a time-based unit is the days in the unit plus what the times differ by, each cut
+    by itself (36,945,992,877,001 µs where ISO's date-times count ...000), in a date-based one the
+    dates', the end's a day earlier where its time is earlier (both directions, where ISO's
+    `LocalDateTime` also moves it a day later);
+  - a zoned date-time moves its local date-time by every unit, a time-based one too, keeping the
+    offset where it can (ISO's moves the instant: an hour after 02:30+02:00 in Paris on a night
+    the clocks go back is 03:30+01:00 here, 02:30+01:00 there); `with(INSTANT_SECONDS)` adds the
+    difference as seconds to the local date-time, `with(OFFSET_SECONDS)` places the local
+    date-time's instant at that offset in the zone; `until` counts between the local date-times
+    at this offset (115 days where ISO's, in the zone, count 116); the offset of a local date-time
+    is the one `ZonedDateTime.ofLocal` finds for ISO's of the same day and time, a gap moving it
+    later by the gap;
+  - a period is added where its calendar is the value's or none (`Chronology mismatch, expected:
+    Shifted, actual: ISO`); months as months and years as that many where the calendar's months
+    of a year are a fixed count (its `range(MONTH_OF_YEAR)`), otherwise years, then months;
+    another amount only where it is such a period of the same calendar (`Unable to obtain
+    ChronoPeriod from TemporalAmount: class java.time.Period`, `ClassCastException: Chronology
+    mismatch`); `normalized` by that count, unchanged with none; the text `Shifted P1Y2M3D`;
+  - the hashes: a date-time's date ^ time, a zoned one's as `ZonedDateTime`'s, a period's ISO
+    period's ^ the calendar's;
+  - what a change made is checked: a date (`AbstractChronology.dated`) cast to `ChronoLocalDate`
+    and its calendar compared, `Chronology mismatch, expected: X, actual: Y`; a date-time or a
+    zoned date-time cast to the class above and compared, `required: X`; all
+    `ClassCastException`s, a refused cast in a JDK's words (`(java.time.LocalTime and
+    java.time.chrono.ChronoLocalDate are in module java.base of loader 'bootstrap')`,
+    `AbstractChronology.castRefused`). A date given a date-time as an adjuster is checked as a
+    date (`expected`).
+- **The defaults** of `ChronoLocalDate`, `ChronoLocalDateTime`, `ChronoZonedDateTime` and
+  `ChronoPeriod` are the documentation's: a date's era, leap year, length, epoch day, order (the
+  epoch days, then the calendars: 10 between a `Shifted` and an ISO date of a day), adjusters,
+  amounts and fields that are no `ChronoField`, a `ChronoField` or a `ChronoUnit` refused; a
+  date-time's order is the dates' (so its calendar first), the times', then the calendars', where
+  `isAfter`, `isBefore`, `isEqual` compare the days and times alone; a zoned one's the instants,
+  the nanoseconds subtracted, the local date-times, the zones' ids (26 for Paris against
+  `+01:00`), the calendars. `from` and `timeLineOrder` of the date-time and the zoned one are
+  there. `LocalDate`, `LocalDateTime` and `ZonedDateTime` order a value of another calendar the
+  same way and `Period` refuses one (`Chronology mismatch, expected: ISO`, `Period requires ISO
+  chronology`), behind `Iso.ownCalendars()`; `IsoFields` has no field of a value of another
+  calendar (`IsoFields.ownCalendars()`).
+- **A formatter of a calendar** (`DateTimeFormatter.calendared`, `Parsed`, behind
+  `Texts.ownCalendars()`): a calendar or a zone the value has already is none; a value with an
+  instant is written as the zone's zoned date-time of it in the calendar (Thin's: the internal
+  `ClassCastException`); a value with a date has it in the calendar, one with fields of a date but
+  no date is refused (`Unable to apply override chronology 'Thin' because the temporal object
+  being formatted contains date fields but does not represent a whole date: 2026-03`); the rest is
+  written as it is, `with chronology Shifted` in a refusal's text where the calendar is not its
+  own. A text's date is made by the calendar's `resolveDate` over a map of the fields (k70's
+  `Fields`), and one of another calendar is refused (`ChronoLocalDate must use the effective
+  parsed chronology: Thin`); an instant read is the calendar's zoned date-time of it; days a time
+  passed (24:00, a lenient 25:00) are added as an ISO period, which the calendar's date refuses
+  (`Chronology mismatch, expected: ISO, actual: Shifted`); `Parsed` shows `{..},Shifted resolved to
+  Shifted 2126-3-7` and answers ISO's date to `localDate()`.
+- **An era is written and read as a number in a calendar of another type** (`Texts.eraWords`):
+  the words are a type `iso8601` or `gregory`'s, the value's (or none's) where the formatter names
+  no calendar; no type is the refusal of k77 (`requestID`). A JDK has the words of five other
+  types (`buddhist` `BE`, `japanese` `Meiji`, `roc` `Minguo`, `islamic-umalqura` `AH` and its
+  months), which the library has not: `.todo/k92`. The months, days and halves of a day are the
+  same words in every type.
+- **A wildcard given is read as its capture** (`JavaTypes.contains`, JLS 5.1.10): a
+  `ChronoLocalDateTime<?>` is a `ChronoLocalDateTime<? extends ChronoLocalDate>`, by the bound the
+  class declares for the parameter (one naming no parameter of the class); the subset refused the
+  library's own `localDateTime` until then.
+- **Who pays**: `Iso.ownCalendars()`, `IsoFields.ownCalendars()` and k77's `Texts.ownCalendars()`
+  (`JavaIntrinsics.OTHERS`: a `Chronology` made that is not ISO's); the impl classes and the
+  interfaces' defaults are in a program only where a class of it inherits them;
+  `DateTimeFormatter.zones()` (`REACHES`, `withZone`). Measured (wasm, base `0c33a3046`): the
+  programs of k70's and k77's tables the same bytes or, reading a text, 83 to 138 B more (`Parsed`'s
+  two fields); a program writing a date in its own calendar 293,985 B, reading one 435,109 (the
+  calendar's `resolveDate` over a map: k70's 56 KB, which ISO's dates still do not pay), its
+  period and date-time printed 181,020 (ISO's 105,646). Changed by measuring: a static list of the
+  date's fields was in every program with a formatter (1.7 KB), a loop over `ChronoField.values()`
+  made all its constants (3 KB), the zoned date-time and the class objects of the refusals' texts
+  (`getClass()` where `getClass().getName()` does) were in every program writing in a calendar of
+  its own (30 KB together).
+- **The probes** (`probes/`, 13 programs, 1,783 lines): the four backends print the same lines;
+  where a JDK's differ is listed in the artefacts' README (helpful null messages, identity hashes,
+  a map's order, `.todo/k92`, `.todo/k93`).
+- Not there: the weeks, the Julian days, `appendChronologyId` / `appendChronologyText` and the
+  other types' words of a calendar of the program's own (`.todo/k92`); an instant read beside a
+  date or a time (`.todo/k93`, in ISO's calendar too).
+- Pins: java-spec `a-formatters-decimal-style-a-reading-from-a-position-the-fields-it-resolves-and-a-calendars-map`
+  (standalone, `calendarsOwn`: 33 lines more, with ISO's half days past the end);
+  `JavaLoweringTest#theLibraryIsJavaSourceLoweredAsFarAsTheProgramReaches` (`L17`, `L18`: the
+  calendar's writing and reading where a program makes one, its zoned date-time where it can give
+  a zone).
 
 ## java.util.Date and java.sql (2026-11-20, k37)
 

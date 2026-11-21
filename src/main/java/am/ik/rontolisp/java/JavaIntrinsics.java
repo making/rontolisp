@@ -243,25 +243,33 @@ final class JavaIntrinsics {
 			"java.time.format.Step.zoneTexts()", "java.time.format.Step.ZoneText", "java.time.format.Step.templated()",
 			"java.time.format.Step.Templated");
 
+	/** A calendar of the program's own: a class under {@code Chronology} but ISO's. */
+	private static final List<String> OWN_CALENDAR = List.of("java.time.chrono.Chronology",
+			"java.time.chrono.IsoChronology");
+
 	/**
 	 * The questions answered by whether the program makes an instance of a class under
 	 * one of the library's other than one of its own: the resolving of a field that is no
-	 * {@code ChronoField} where it makes one, the refusal of a calendar of no type where
-	 * it makes a calendar of its own.
+	 * {@code ChronoField} where it makes one; where it makes a calendar of its own, the
+	 * refusal of a calendar of no type and what a value of another calendar is written,
+	 * read, ordered and added in (each package asking its own).
 	 */
 	private static final Map<String, List<String>> OTHERS = Map.of("java.time.format.Parsed.others()",
 			List.of("java.time.temporal.TemporalField", "java.time.temporal.ChronoField"),
-			"java.time.format.Texts.ownCalendars()",
-			List.of("java.time.chrono.Chronology", "java.time.chrono.IsoChronology"));
+			"java.time.format.Texts.ownCalendars()", OWN_CALENDAR, "java.time.Iso.ownCalendars()", OWN_CALENDAR,
+			"java.time.temporal.IsoFields.ownCalendars()", OWN_CALENDAR);
 
 	/**
 	 * The questions answered by whether the program reaches a method of the library: the
 	 * characters of a formatter's numbers where it can give one a decimal style, the
-	 * cutting of the fields read where it can name the fields to resolve.
+	 * cutting of the fields read where it can name the fields to resolve, a lenient
+	 * resolving where it can give a resolver style, a zoned date-time of a calendar of
+	 * its own written where it can give a formatter a zone.
 	 */
 	private static final Map<String, String> REACHES = Map.of("java.time.format.DateTimeFormatter.decimals()",
 			FORMATTER + ".withDecimalStyle", "java.time.format.Parsed.filtered()", FORMATTER + ".withResolverFields",
-			"java.time.format.Parsed.lenients()", FORMATTER + ".withResolverStyle");
+			"java.time.format.Parsed.lenients()", FORMATTER + ".withResolverStyle",
+			"java.time.format.DateTimeFormatter.zones()", FORMATTER + ".withZone");
 
 	/**
 	 * Whether reaching a method of the library, by its class and name, answers a
