@@ -7,6 +7,8 @@
 // steps, one over a source of instants. A program may write its own.
 package java.time;
 
+import java.io.Serializable;
+
 public abstract class Clock implements InstantSource {
 
     protected Clock() {
@@ -74,7 +76,7 @@ public abstract class Clock implements InstantSource {
         return instant().toEpochMilli();
     }
 
-    private static final class SystemClock extends Clock {
+    private static final class SystemClock extends Clock implements Serializable {
 
         private final ZoneId zone;
 
@@ -107,7 +109,7 @@ public abstract class Clock implements InstantSource {
         }
     }
 
-    private static final class FixedClock extends Clock {
+    private static final class FixedClock extends Clock implements Serializable {
 
         private final Instant instant;
 
@@ -143,7 +145,7 @@ public abstract class Clock implements InstantSource {
         }
     }
 
-    private static final class OffsetClock extends Clock {
+    private static final class OffsetClock extends Clock implements Serializable {
 
         private final Clock base;
 
@@ -241,7 +243,7 @@ public abstract class Clock implements InstantSource {
         }
     }
 
-    private static final class TickClock extends Clock {
+    private static final class TickClock extends Clock implements Serializable {
 
         private final Clock base;
 

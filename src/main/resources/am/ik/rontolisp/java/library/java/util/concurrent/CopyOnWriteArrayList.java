@@ -3,6 +3,7 @@
 // (.kb/java-frontend-provenance.md). Lowered with every program that names it.
 package java.util.concurrent;
 
+import java.io.Serializable;
 import java.util.AbstractList;
 import java.util.Arrays;
 import java.util.Collection;
@@ -24,7 +25,7 @@ import rontolisp.internal.Splits;
 // A list whose array is never changed: every change, made under the list's monitor,
 // puts a new array in its place, so a read needs no lock and an iterator walks the
 // array there was when it was made, and changes nothing.
-public class CopyOnWriteArrayList<E> extends AbstractList<E> implements RandomAccess, Cloneable {
+public class CopyOnWriteArrayList<E> extends AbstractList<E> implements RandomAccess, Cloneable, Serializable {
 
     private volatile Object[] items = new Object[0];
 

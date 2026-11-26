@@ -7,13 +7,14 @@
 // each kind oldest first; the one that comes second ends the first's wait.
 package java.util.concurrent;
 
+import java.io.Serializable;
 import java.util.AbstractCollection;
 import java.util.ArrayDeque;
 import java.util.Collection;
 import java.util.Iterator;
 import java.util.NoSuchElementException;
 
-public class SynchronousQueue<E> extends AbstractCollection<E> implements BlockingQueue<E> {
+public class SynchronousQueue<E> extends AbstractCollection<E> implements BlockingQueue<E>, Serializable {
 
     /** One thread's wait: a putter's with its element, a taker's for one. */
     private static final class Waiter<E> {

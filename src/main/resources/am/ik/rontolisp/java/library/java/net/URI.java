@@ -7,9 +7,10 @@
 // resolution); what an authority's host and port are is read here.
 package java.net;
 
+import java.io.Serializable;
 import java.nio.charset.StandardCharsets;
 
-public final class URI implements Comparable<URI> {
+public final class URI implements Comparable<URI>, Serializable {
 
     private final String text;
 

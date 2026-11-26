@@ -7,7 +7,9 @@
 // words a JDK 25 uses.
 package java.text;
 
-public abstract class Format implements Cloneable {
+import java.io.Serializable;
+
+public abstract class Format implements Cloneable, Serializable {
 
     protected Format() {
     }
@@ -34,7 +36,7 @@ public abstract class Format implements Cloneable {
     }
 
     /** A name of a field of a formatted text. */
-    public static class Field {
+    public static class Field implements Serializable {
 
         private final String name;
 

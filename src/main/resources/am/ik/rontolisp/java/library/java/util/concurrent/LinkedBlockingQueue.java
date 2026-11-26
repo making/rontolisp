@@ -3,9 +3,10 @@
 // (.kb/java-frontend-provenance.md). Lowered with every program that names it.
 package java.util.concurrent;
 
+import java.io.Serializable;
 import java.util.Collection;
 
-public class LinkedBlockingQueue<E> extends Bounded<E> {
+public class LinkedBlockingQueue<E> extends Bounded<E> implements Serializable {
 
     public LinkedBlockingQueue() {
         super(Integer.MAX_VALUE);

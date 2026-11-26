@@ -3,11 +3,13 @@
 // (.kb/java-frontend-provenance.md). Lowered with every program that names it.
 package java.util;
 
+import java.io.Serializable;
+
 // A set of the constants of one enum: a bit of a word for each, by its ordinal, so the
 // constants are in their order. An iterator reads a word of 64 constants when it comes
 // to it and gives what the word held then. A JDK names a set of more than 64 constants
 // by another class; so do these (RegularEnumSet, JumboEnumSet), which hold nothing more.
-public abstract class EnumSet<E extends Enum<E>> extends AbstractSet<E> implements Cloneable {
+public abstract class EnumSet<E extends Enum<E>> extends AbstractSet<E> implements Cloneable, Serializable {
 
     final Class<E> elementType;
 

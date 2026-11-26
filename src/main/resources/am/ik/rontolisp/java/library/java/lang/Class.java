@@ -4,6 +4,7 @@
 package java.lang;
 
 import java.io.InputStream;
+import java.io.Serializable;
 import java.lang.annotation.Annotation;
 import java.lang.reflect.AnnotatedElement;
 import java.lang.reflect.AnnotatedType;
@@ -28,7 +29,7 @@ import java.lang.reflect.TypeVariable;
 // runs, the classes an index of annotated classes lists (META-INF/annotations/<the
 // annotation type>). The generic signatures, the annotations of the members and a
 // record's components are the lowering's too, made where the program asks for them.
-public final class Class<T> implements GenericDeclaration, Type, AnnotatedElement {
+public final class Class<T> implements GenericDeclaration, Type, AnnotatedElement, Serializable {
 
     private final String name;
 

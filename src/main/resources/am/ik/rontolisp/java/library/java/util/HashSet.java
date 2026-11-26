@@ -3,10 +3,11 @@
 // (.kb/java-frontend-provenance.md). Lowered with every program that names it.
 package java.util;
 
+import java.io.Serializable;
 import rontolisp.internal.Splits;
 
 // A set over the keys of a HashMap, so in a HashMap's order.
-public class HashSet<E> extends AbstractSet<E> implements Cloneable {
+public class HashSet<E> extends AbstractSet<E> implements Cloneable, Serializable {
 
     HashMap<E, Boolean> map;
 

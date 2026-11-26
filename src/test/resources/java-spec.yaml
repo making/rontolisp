@@ -14967,6 +14967,13 @@ cases:
                   tests.append(thing instanceof Serializable ? 'y' : 'n');
               }
               System.out.println(named + " " + boxed + " " + takes("t") + takes(4) + takes(serial) + " " + tests + " " + (Serializable.class.isAssignableFrom(Integer.class)) + (Serializable.class.isAssignableFrom(String.class)) + (Serializable.class.isAssignableFrom(Object.class)));
+              Serializable list = new ArrayList<String>();
+              Object[] library = {list, new HashMap<String, String>(), new java.math.BigDecimal(1), new RuntimeException(), Kind.ONE, java.time.Duration.ZERO, List.of(1), java.util.Collections.unmodifiableList(new ArrayList<String>()), java.util.Collections.emptyMap(), Comparator.naturalOrder(), Map.entry(1, 2), java.util.Optional.empty()};
+              StringBuilder kinds = new StringBuilder();
+              for (Object thing : library) {
+                  kinds.append(thing instanceof Serializable ? 'y' : 'n');
+              }
+              System.out.println(kinds + " " + takes(list) + " " + Serializable.class.isAssignableFrom(java.util.TreeSet.class) + Serializable.class.isAssignableFrom(Exception.class) + Serializable.class.isAssignableFrom(java.util.AbstractMap.class));
           }
 
           static String takes(Serializable s) {
@@ -14990,6 +14997,7 @@ cases:
       false true
       true true true false 45
       a 3 StringIntegerStringBuilder yyyyyyyyyynn truetruefalse
+      yyyyyyyyyynn ArrayList truetruefalse
   # A collection's clone() holds the same elements in a structure of its own, as a JDK's
   # orders them: a HashMap's table is made for the keys it holds, a Hashtable's is as long
   # as the original's; a LinkedList's clone adds each element with its own add, a

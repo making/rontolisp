@@ -3,9 +3,11 @@
 // (.kb/java-frontend-provenance.md). Lowered with every program that names it.
 package java.util.concurrent;
 
+import java.io.Serializable;
+
 // Permits counted under the semaphore's monitor, on which a thread asking for more than
 // there are waits.
-public class Semaphore {
+public class Semaphore implements Serializable {
 
     private int permits;
 

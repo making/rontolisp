@@ -3,9 +3,10 @@
 // (.kb/java-frontend-provenance.md). Lowered with every program that names it.
 package java.util.concurrent;
 
+import java.io.Serializable;
 import java.util.Collection;
 
-public class ArrayBlockingQueue<E> extends Bounded<E> {
+public class ArrayBlockingQueue<E> extends Bounded<E> implements Serializable {
 
     public ArrayBlockingQueue(int capacity) {
         super(capacity);

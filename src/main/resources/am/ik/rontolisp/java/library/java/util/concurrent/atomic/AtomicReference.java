@@ -6,10 +6,11 @@
 // on every target, with no compare-and-swap of the host's.
 package java.util.concurrent.atomic;
 
+import java.io.Serializable;
 import java.util.function.BinaryOperator;
 import java.util.function.UnaryOperator;
 
-public class AtomicReference<V> {
+public class AtomicReference<V> implements Serializable {
 
     private V value;
 

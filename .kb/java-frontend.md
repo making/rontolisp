@@ -4867,10 +4867,27 @@ a class that does not override it reaches an override below.**
   `BigInteger`), `Boolean`, `Character`. Measured (2026-11-26): a program naming no
   `Serializable` is byte-identical on wasm and component (`.class` of a Java program differs
   run to run, 140,778 / 140,782 B from one jar); `instanceof Serializable` over strings and
-  boxes costs 776 B of wasm in a 117 KB program (also holding `ArrayList` and `BigInteger`). The
-  library's Java-source classes (`ArrayList`, ...) do not declare it yet: `.todo/m54`.
-- Pins: java-spec `an-object-is-copied-by-clone-where-its-class-is-cloneable` (the intrinsics'
-  `Serializable`), `the-library-s-collections-clone-what-they-hold`, the `refused:` cases `clone-*`,
+  boxes costs 776 B of wasm in a 117 KB program (also holding `ArrayList` and `BigInteger`).
+  **The library's Java-source classes declare it where a JDK 25 does** (2026-11-26; surveyed by
+  a probe: `Serializable.class.isAssignableFrom` of each library class against the JDK's, the
+  nested public classes through `getClasses()`, the factories' results through `instanceof` in
+  one program run on the JDK and here): the roots (`Throwable`, `Enum`, `Class`, the collections,
+  `Duration`, `Locale`, `Random`, `Pattern`, the atomics, the locks, the
+  `Clock`s ...), the internal classes standing for a JDK's serializable one (`Collections`'s
+  `Few*`, `SetFromMap`, `UnmodifiableCollection`; `ImmutableCollections`' `ListN`, `SetN`,
+  `MapN`, `ListView`, `Entries`, `SequencedView`; `Synchronized`'s `Each`, `MapOf`;
+  `TreeMap.View`, `ConcurrentSkipListMap.SubMap`), and the library's comparator lambdas, cast
+  `(Comparator<T> & Serializable)` (free: `Comparator.comparing(..).reversed()` is
+  byte-identical). **Measured**: a program naming no `Serializable` is byte-identical on wasm
+  with `ArrayList`, `HashMap`, `TreeSet`, `ArrayDeque`, `LinkedList`, enums, exceptions,
+  `Comparator`, `List.of`, `Collections.unmodifiableList`, `Arrays.asList`, `Set.of`, `Map.of`;
+  `Collections.synchronizedList` costs 20 B; naming `Serializable` costs 688 B in a 182 KB
+  program holding a dozen of the classes. **Where the library still differs** (each answers
+  `true` where a JDK 25 answers `false`, from a view class extending a serializable one):
+  `List.of(..).subList`, `Map.of(..).keySet()`, `TreeMap.keySet()`/`navigableKeySet()`,
+  `ConcurrentSkipListMap.keySet()`.
+- Pins: java-spec `an-object-is-copied-by-clone-where-its-class-is-cloneable` (`Serializable` of the
+  intrinsics and of the library's classes), `the-library-s-collections-clone-what-they-hold`, the `refused:` cases `clone-*`,
   `an-override-of-clone-*` and `an-enum-*`, the reflection case's `int[]`; `JavaLoweringTest`
   (`Process`, the final method of a static member class, a weaker access);
   `java-http-server-spec.yaml`'s servlet case

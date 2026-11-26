@@ -3,6 +3,7 @@
 // (.kb/java-frontend-provenance.md). Lowered with every program that names it.
 package java.util;
 
+import java.io.Serializable;
 import java.util.function.BiFunction;
 import java.util.function.Consumer;
 import java.util.function.Function;
@@ -221,7 +222,15 @@ public final class Collections {
 
     public static <T> Collection<T> unmodifiableCollection(Collection<? extends T> c) {
         Collection<T> held = (Collection<T>) c;
-        return new ImmutableCollections.Unchanging<>(held, ImmutableCollections.HELD);
+        return new UnmodifiableCollection<>(held);
+    }
+
+    // The collection unmodifiableCollection answers: a view that reads and changes nothing.
+    static final class UnmodifiableCollection<E> extends ImmutableCollections.Unchanging<E> implements Serializable {
+
+        UnmodifiableCollection(Collection<E> held) {
+            super(held, ImmutableCollections.HELD);
+        }
     }
 
     public static <K, V> Map<K, V> unmodifiableMap(Map<? extends K, ? extends V> map) {
@@ -259,7 +268,7 @@ public final class Collections {
     }
 
     // The set newSetFromMap answers: an element is a key the map holds TRUE for.
-    static class SetFromMap<E> extends AbstractSet<E> {
+    static class SetFromMap<E> extends AbstractSet<E> implements Serializable {
 
         final Map<E, Boolean> map;
 
@@ -477,14 +486,14 @@ public final class Collections {
     }
 
     public static <T> Comparator<T> reverseOrder() {
-        return (T a, T b) -> ((Comparable) b).compareTo(a);
+        return (Comparator<T> & Serializable) (T a, T b) -> ((Comparable) b).compareTo(a);
     }
 
     public static <T> Comparator<T> reverseOrder(Comparator<T> order) {
         if (order == null) {
             return reverseOrder();
         }
-        return (T a, T b) -> order.compare(b, a);
+        return (Comparator<T> & Serializable) (T a, T b) -> order.compare(b, a);
     }
 
     // the elements an enumeration answers, in its order
@@ -624,7 +633,7 @@ public final class Collections {
 
     // Each has only the members whose answers are not its abstract class's; what several
     // answer alike is one member of a class above them, one arm of a dispatcher.
-    abstract static class Few<E> extends AbstractList<E> implements RandomAccess {
+    abstract static class Few<E> extends AbstractList<E> implements RandomAccess, Serializable {
 
         // a list of no element or of one is sorted; copies are sorted and set as a list's
         // are, which refuses the set
@@ -742,7 +751,7 @@ public final class Collections {
         }
     }
 
-    abstract static class FewSet<E> extends AbstractSet<E> {
+    abstract static class FewSet<E> extends AbstractSet<E> implements Serializable {
 
         public Spliterator<E> spliterator() {
             return size() == 0 ? Splits.counted(this, Spliterator.SIZED | Spliterator.SUBSIZED) : Splits.one(this);
@@ -784,7 +793,7 @@ public final class Collections {
     }
 
     // A map of no mapping or of one: a change that may change nothing is refused.
-    abstract static class FewMap<K, V> extends AbstractMap<K, V> {
+    abstract static class FewMap<K, V> extends AbstractMap<K, V> implements Serializable {
 
         public boolean remove(Object key, Object value) {
             throw new UnsupportedOperationException();

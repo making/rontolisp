@@ -3,6 +3,7 @@
 // (.kb/java-frontend-provenance.md). Lowered with every program that names it.
 package java.util;
 
+import java.io.Serializable;
 import java.util.function.BiFunction;
 import java.util.function.Consumer;
 import java.util.function.Function;
@@ -44,7 +45,7 @@ final class ImmutableCollections {
     // The list of List.of and List.copyOf: it holds no null, refuses a null asked for,
     // and refuses every change at once. An index outside it is its array's. The list of
     // Stream.toList() is one that holds nulls (NULLS).
-    static class ListN<E> extends AbstractList<E> implements RandomAccess {
+    static class ListN<E> extends AbstractList<E> implements RandomAccess, Serializable {
 
         private final Object[] held;
 
@@ -262,7 +263,7 @@ final class ImmutableCollections {
     }
 
     // A set is equal to a set of the same elements: one of these is to its held set's.
-    static class SetN<E> extends Unchanging<E> implements Set<E> {
+    static class SetN<E> extends Unchanging<E> implements Set<E>, Serializable {
 
         SetN(Set<E> held, int how) {
             super(held, how);
@@ -295,7 +296,7 @@ final class ImmutableCollections {
         }
     }
 
-    static final class ListView<E> extends AbstractList<E> {
+    static final class ListView<E> extends AbstractList<E> implements Serializable {
 
         private final List<E> held;
 
@@ -357,7 +358,7 @@ final class ImmutableCollections {
         }
     }
 
-    static class MapN<K, V> extends AbstractMap<K, V> {
+    static class MapN<K, V> extends AbstractMap<K, V> implements Serializable {
 
         private final Map<K, V> held;
 
@@ -453,7 +454,7 @@ final class ImmutableCollections {
 
     // The entries of an unchanging map, in the map's order: a set equal to what the map's
     // own entries are equal to.
-    static final class Entries<E> extends Unchanging<E> implements Set<E> {
+    static final class Entries<E> extends Unchanging<E> implements Set<E>, Serializable {
 
         // the map's own entries
         private final Set<? extends Map.Entry<?, ?>> viewed;
@@ -722,7 +723,7 @@ final class ImmutableCollections {
 
     // Collections.unmodifiableSequencedCollection: its ends are the held collection's,
     // reversed it is a view of the held collection reversed.
-    static class SequencedView<E> extends Unchanging<E> implements SequencedCollection<E> {
+    static class SequencedView<E> extends Unchanging<E> implements SequencedCollection<E>, Serializable {
 
         final SequencedCollection<E> sequenced;
 

@@ -3,6 +3,7 @@
 // (.kb/java-frontend-provenance.md). Lowered with every program that names it.
 package java.util;
 
+import java.io.Serializable;
 import java.util.function.BiConsumer;
 import java.util.function.BiFunction;
 import java.util.function.Function;
@@ -13,7 +14,7 @@ import java.util.function.Function;
 // chains from the last and puts each key ahead again, and the table is read from its
 // last chain to its first. Neither a key nor a value is null. Every member holds the
 // table's monitor, the ones Map and AbstractMap write over others included.
-public class Hashtable<K, V> extends AbstractMap<K, V> implements Cloneable {
+public class Hashtable<K, V> extends AbstractMap<K, V> implements Cloneable, Serializable {
 
     static final class Slot<K, V> implements Map.Entry<K, V> {
 

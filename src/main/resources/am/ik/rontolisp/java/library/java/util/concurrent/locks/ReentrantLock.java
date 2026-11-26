@@ -6,9 +6,10 @@
 // threads waiting for the lock wait. Its conditions: Waiting.
 package java.util.concurrent.locks;
 
+import java.io.Serializable;
 import java.util.concurrent.TimeUnit;
 
-public class ReentrantLock implements Lock {
+public class ReentrantLock implements Lock, Serializable {
 
     private Thread owner;
 

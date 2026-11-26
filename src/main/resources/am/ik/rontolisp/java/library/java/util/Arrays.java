@@ -3,6 +3,7 @@
 // (.kb/java-frontend-provenance.md). Lowered with every program that names it.
 package java.util;
 
+import java.io.Serializable;
 import java.util.function.IntFunction;
 import java.util.function.IntToDoubleFunction;
 import java.util.function.IntToLongFunction;
@@ -1057,7 +1058,7 @@ public final class Arrays {
     }
 
     // The list Arrays.asList answers: the array itself, so of a fixed size.
-    static final class ArrayList<E> extends AbstractList<E> implements RandomAccess {
+    static final class ArrayList<E> extends AbstractList<E> implements RandomAccess, Serializable {
 
         private final E[] held;
 

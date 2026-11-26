@@ -14,7 +14,9 @@
 // the others need, and the members below answer for the five alone.
 package java.util;
 
-public final class Locale implements Cloneable {
+import java.io.Serializable;
+
+public final class Locale implements Cloneable, Serializable {
 
     public static final Locale ROOT = new Locale("", "");
 
