@@ -1476,8 +1476,8 @@ exports the component's entry points.** The user's request (2026-11-24): the opp
   async or not ("exceptions proposal not enabled": EH mode). `--no-gc` is refused by
   `wit-export`'s check at the WIT line. A sleeping export imports `wasi:cli/exit`:
   `Thread.currentThread()` makes a `Thread`, whose id counter is `synchronized`, and the wasm
-  monitor entry reaches `%java-unforeseen`. Flat types only: a compound type in an `async func`
-  is refused at its WIT line by `describe` (`.todo/m90`).
+  monitor entry reaches `%java-unforeseen`. A compound type crosses it as any export's (the
+  wrapper class's method, `.kb/wit.md`, "An `async func`").
 - **The lowering**: a flat export's `u8`, `u16` or `u32` crosses through a `defun`
   `<function>%wit` converting it; a `u64` past `Long.MAX_VALUE` traps (`.kb/wit.md`). An EAGER class is initialized in the
   top level, which the reactor runs in the first export call, a LAZY one at the top of its
@@ -1510,7 +1510,8 @@ exports the component's entry points.** The user's request (2026-11-24): the opp
 - **Pinned by** `JavaWitImportTest.aClassImplementsTheWorldAComponentExports` (each scalar kind,
   an interface, static state, an `async func` that sleeps, each refusal, no `wasi:cli/exit`; JDK,
   interpreter, JVM, component, the `--no-gc` component and its bare trap; a world of every
-  compound kind, both spellings of a `result`, its refusals) and `examples.yaml`'s
+  compound kind, an `async func` of them that sleeps, both spellings of a `result`, its
+  refusals) and `examples.yaml`'s
   `java/rust-calls-java` and `wit/shapes/Shapes.java`,
   `WitOracleE2eTest.aComponentCallsWhatAnotherExportsOverCompoundTypes` (the Lisp command
   composed with the Java component); by hand, the example's `CounterTest` under

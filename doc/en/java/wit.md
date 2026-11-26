@@ -416,8 +416,7 @@ An unsigned integer is the Java type of its width holding its bits both ways: a 
 An `async func` export is a static method answering its value, as any other. The component
 lifts it async, so the call may wait where the method blocks, as in a `Thread.sleep` or a call
 of an imported `async func`; a sync export that blocks traps (`cannot block a synchronous
-task`). It takes `bool`, the integers, `f64` and `string` alone (any other type in an
-`async func` is refused at its WIT line), and `--no-gc` refuses it
+task`). It takes the types any other export takes, and `--no-gc` refuses it
 ([`rontolisp:wit-export`](../reference/functions/rontolisp-wit-export.md)).
 
 ```console
@@ -450,8 +449,7 @@ public static int pause(int ms) throws InterruptedException {
   tell apart; a resource of another interface; a tuple in an error arm thrown as a
   `WitException`, for which no type is written (a `WitResult` answer carries it).
 - A world's export carries no resource, `stream` or `future`; an `async func` export
-  takes `bool`, the integers, `f64` and `string`
-  alone, and is refused under `--no-gc`. Two exports of one label (a function of the world
+  is refused under `--no-gc`. Two exports of one label (a function of the world
   and an interface's, or two interfaces') are two methods, each of its own class.
 - An exception an export leaves uncaught is reported on standard error by the line a JDK
   writes (`Exception in thread "main" java.lang.IllegalStateException: ...`), then the call

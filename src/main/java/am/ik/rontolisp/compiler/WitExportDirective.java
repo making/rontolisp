@@ -496,12 +496,12 @@ public final class WitExportDirective {
 			List<WitTypeMapper.Param> params = new ArrayList<>();
 			for (WitFunc.Param param : func.params()) {
 				params.add(new WitTypeMapper.Param(param.name(),
-						shapeOf(param.type(), name, param.name(), func, witPath, locations, item, resolver, scope)));
+						shapeOf(param.type(), name, param.name(), witPath, locations, item, resolver, scope)));
 			}
 			WitType result = func.result();
 			exports.add(new Export(name, List.copyOf(params),
 					result == null ? null
-							: shapeOf(result, name, "the result", func, witPath, locations, item, resolver, scope),
+							: shapeOf(result, name, "the result", witPath, locations, item, resolver, scope),
 					func.async(), ifaceId, WitSource.at(witPath, locations, item)));
 		});
 		if (exports.isEmpty()) {
@@ -514,11 +514,10 @@ public final class WitExportDirective {
 	// The shape of an export's type for a front end that binds its own names: a type the
 	// flat boundary carries as that primitive, any other whole (aliases followed, every
 	// nested type resolved, as an import's member is: WitTypeMapper.shape) once the
-	// refusals every
-	// backend makes have passed -- lower's, but --no-gc's and a core module's, which it
-	// makes knowing the output.
-	private static WitTypeMapper.Shape shapeOf(WitType type, String exportName, String what, WitFunc func,
-			String witPath, WitLocations locations, WitItem item, WitResolver resolver, WitItem.InterfaceDef scope) {
+	// refusals every backend makes have passed -- lower's, but --no-gc's and a core
+	// module's, which it makes knowing the output.
+	private static WitTypeMapper.Shape shapeOf(WitType type, String exportName, String what, String witPath,
+			WitLocations locations, WitItem item, WitResolver resolver, WitItem.InterfaceDef scope) {
 		BoundaryType boundary = flatDesignator(type, resolver, scope);
 		if (boundary != null) {
 			// the primitive it resolves to, which is also what it is defined as
@@ -527,11 +526,6 @@ public final class WitExportDirective {
 					false);
 		}
 		requireCanonical(type, exportName, what, witPath, locations, item, Backend.OTHER, resolver, scope);
-		if (func.async()) {
-			throw error(witPath, locations, item,
-					"export '" + exportName + "' is an async func, and an async export carries the flat types only ("
-							+ supportedWitTypes() + ")");
-		}
 		return WitTypeMapper.shape(type, resolver, scope);
 	}
 
@@ -932,11 +926,6 @@ public final class WitExportDirective {
 			else {
 				returns = boundary.designator();
 			}
-		}
-		if (!flat && func.async()) {
-			throw error(witPath, locations, item,
-					"export '" + name + "' is an async func, and an async export carries the flat types only ("
-							+ supportedWitTypes() + ")");
 		}
 
 		List<LispVal> forms = new ArrayList<>();

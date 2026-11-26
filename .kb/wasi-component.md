@@ -196,10 +196,48 @@ first, so defvar-reading exports see uninitialized globals.
 
 ## `:async t` I/O exports
 Flips the export's component function type to the ASYNC form
-(`ComponentWriter.asyncFuncTypeScalars`, tag 0x43 vs sync 0x40 -- the ONLY byte difference;
-core module unchanged), making the lift stackful async like `run`. Explicit opt-in, NOT
-auto-detected: funcall/apply route through the arity dispatchers, so a conservative call-graph
-analysis would flip nearly every export and break the sync byte-identity guarantee.
+(`ComponentWriter.asyncFuncTypeScalars`, tag 0x43 vs sync 0x40 -- the ONLY byte difference of
+an export that touches no memory; core module unchanged), so its task may block, like `run`'s.
+Explicit opt-in, NOT auto-detected: funcall/apply route through the arity dispatchers, so a
+conservative call-graph analysis would flip nearly every export and break the sync
+byte-identity guarantee.
+
+**The lift is the SYNCHRONOUS one over an async function type** (`canon lift` without the
+`async` option; the component model's "stackful async" is that option without a callback, which
+this is not). So everything of a sync export holds (CanonicalABI.md, "canon lift", "If the
+`async` canonopt is not specified" and `flatten_functype`): the core function answers its
+result, in memory past `MAX_FLAT_RESULTS` (1); the post-return is called; the parameters are
+flat up to `MAX_FLAT_PARAMS` (16) -- `MAX_FLAT_ASYNC_PARAMS` (4) is an async LOWER's. Measured
+2026-11-26 on wasmtime 51 (`--invoke`, a `bindgen!` host) and jco 1.42.0: parameters of 9 flats
+arrive flat, a record of 18 as the pointer, a list answered is read back and released
+(`.kb/wit.md`, "Compound types across an export", "An `async func`").
+
+**Which calls of one instance overlap** (measured 2026-11-26, wasmtime 51: a `bindgen!` host
+with `run_concurrent`, and a composed caller; CanonicalABI.md, `Task.needs_exclusive` and the
+note under `Task.enter_implicit_thread`):
+
+- Two async-typed calls do NOT: the second starts when the first's task has returned (a 300 ms
+  sleep, then a call with no wait, both answered at 300 ms).
+- **A SYNC-typed export runs while an async-typed one's task waits** (answered at 51 ms of
+  that 300): a plain func ignores the backpressure, and the spec leaves it to the bindings.
+  `wasmtime run --invoke` makes one call and shows none of this.
+- So the call's mark is not the cells' alone. `cabi_realloc` takes it once per call into one
+  set of `CABI_MARK_*` cells; the sync call made meanwhile found it taken, and its post-return
+  popped to the WAITING call's mark and cleared it -- below what that call still held. Measured:
+  an async export waiting in its own async import (the place the answer is written into is
+  staged above the mark), one sync call of a record meanwhile, and the answered string came
+  back with its pointer pair written into its 17th byte ("invalid utf8 encoding").
+  **An async export that touches memory holds its mark in three locals while its function
+  runs** (`WasmExportCompiler.waitsOverMemory`, `emitBody`): cells to locals and the mark
+  cleared on the way in, back on the way out before the result is staged, so a call made
+  meanwhile takes its own mark at the heap top and pops to it. +56 B per canonical export, +75
+  for a flat `:string` one (`examples/wit/world/analyzer.lisp` 24,757 -> 24,819 B); a sync
+  export and an async one of scalars keep their bytes.
+- Not measured (`.todo/178-component-shared-memory-map-collision.md`): whether a waiting call
+  holds anything else the call made meanwhile can write over -- bytes staged past the heap
+  top, the adapter's page-5 cells.
+- Pins: `WitOracleE2eTest.aComponentCallsWhatAnotherExportsOverCompoundTypes` (three composed
+  components, the sync call made while the async one waits).
 
 **`:async t` is permanent, not a workaround**: WASI 0.3 has no synchronous write BY DESIGN
 (blocking is a property of the task), so on a pure-0.3 import surface an I/O-bearing sync

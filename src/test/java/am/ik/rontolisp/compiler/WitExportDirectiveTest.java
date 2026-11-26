@@ -225,7 +225,7 @@ class WitExportDirectiveTest {
 		// carries the text, and the backend marshals it through the canonical ABI. A
 		// type alias of a flat type stays flat, the hand-written form with the WIT
 		// beside it: a component of a world that names types declares them, and types
-		// each export from the WIT.
+		// each export from the WIT. An async func is the same form, lifted async.
 		String wit = """
 				package root:component;
 
@@ -234,7 +234,7 @@ class WitExportDirectiveTest {
 				  record word { text: string, weight: f32 }
 				  flags perms { r, w }
 				  export count-vowels: func(s: list<u8>) -> count;
-				  export longest: func(ws: list<word>) -> result<word, string>;
+				  export longest: async func(ws: list<word>) -> result<word, string>;
 				  export size: func(s: string) -> count;
 				}
 				""";
@@ -251,7 +251,7 @@ class WitExportDirectiveTest {
 					// arm
 					"(DEFUN |longest%wit-export| (P0) (CONS :OK (|longest| P0)))",
 					"(RONTOLISP:WASM-EXPORT '|longest%wit-export| :AS \"longest\" :WIT \"...\" :WIT-WORLD \"analyzer\""
-							+ " :WIT-AT \"world.wit:8\" :OCTETS T :PARAM-NAMES '(|ws|))",
+							+ " :WIT-AT \"world.wit:8\" :OCTETS T :PARAM-NAMES '(|ws|) :ASYNC T)",
 					"(RONTOLISP:WASM-EXPORT '|size| :PARAMS '(:STRING) :WIT \"...\" :WIT-WORLD \"analyzer\""
 							+ " :WIT-AT \"world.wit:9\" :PARAM-NAMES '(|s|) :RETURNS :S32)");
 		// The scalar backend's component declares the types too. A core module has
@@ -364,11 +364,6 @@ class WitExportDirectiveTest {
 				Backend.WASM_COMPONENT, Map.of("count-vowels", List.of("d"))))
 			.hasMessageStartingWith("world.wit:19: interface 'root:component/clock' declares the resource 'timer', "
 					+ "and an export carries no resource");
-		// An async export stays on the flat types.
-		assertThatThrownBy(
-				() -> lower(world("  export count-vowels: async func(s: list<u8>) -> s32;"), Backend.WASM_COMPONENT))
-			.hasMessageStartingWith("world.wit:4: export 'count-vowels' is an async func, and an async export carries "
-					+ "the flat types only");
 	}
 
 	@Test
