@@ -1401,7 +1401,10 @@ exports the component's entry points.** The user's request (2026-11-24): the opp
 - **Uncaught** (`JavaLowering.reportingExports`): the top level is `(%reporting-uncaught
   #'line nil init..)`, so an export call, and the initialization its first call runs, write
   the line a command writes (`Exception in thread "main" ...`) and trap; `after` is nil, a
-  host call ending as a trap. It is what a command pays, on wasm-GC EH mode: measured
+  host call ending as a trap. Not on a reactor (`JavaBoundary.reportsUncaught`): a
+  `--component --no-wasi` component imports nothing, its standard error a sink (the counter
+  7,202 -> 6,748 B without the report, 2026-11-26), and `--no-gc` has no condition to write a
+  line from. It is what a command pays, on wasm-GC EH mode: measured
   2026-11-25, `examples/java/rust-calls-java`'s counter 7,853 -> 15,056 B, gzip 4,006 -> 6,961
   (EH mode and the `%warn` +4.1 KB, `%java-uncaught-line` and the host-report readers +3.1 KB), a counter
   that throws 3,898 -> 43,738 B, the same code as a command 49,226 B. The `--no-wasi`
@@ -1412,7 +1415,7 @@ exports the component's entry points.** The user's request (2026-11-24): the opp
   Lisp one of `examples/wit/rust-calls-lisp` 3,879 B over `(find c "aeiouAEIOU")`.
 - **Pinned by** `JavaWitImportTest.aClassImplementsTheWorldAComponentExports` (each scalar kind,
   an interface, static state, each refusal, no `wasi:cli/exit`; JDK, interpreter, JVM,
-  component) and
+  component, the `--no-gc` component and its bare trap) and
   `examples.yaml`'s `java/rust-calls-java`; by hand, the example's `CounterTest` under
   `rontolisp test`, `MavenBuildE2eTest` with no `<mainClass>`.
 
@@ -1491,9 +1494,14 @@ is a trap", "Exact mode"), so no backend learns a Java name.**
   assigned during a call (the call's memory is given back when it ends). At the innermost form
   the lowering locates, or with the chain of methods that reached a library's function.
 - **A command is refused** (`exports nothing`): a `main` makes one, and the scalar module is a
-  reactor (`.todo/111`). **`--component` is refused by name** (`CompileFrontend.run`): a Java
-  component's exports are a `@WitExport` world, whose uncaught report needs a condition --
-  `.todo/m47-a-java-witexport-world-on-no-gc-component.md`.
+  reactor (`.todo/111`).
+- **`--component`: a `@WitExport` world** ("WIT exports"), the lowering the GC component's but
+  for the report (`JavaBoundary.reportsUncaught`, false on every reactor): the initialization
+  is the top level as is, the start function's, and an uncaught exception the bare trap.
+  Measured 2026-11-26: `rust-calls-java`'s counter with `indexOf(char)` written as `==`s 2,040
+  / 1,075 B gzip against 12,988 / 5,913 as a wasm-GC component (the example as written,
+  15,076, stops at `position` in `%java-index-of-char`: the nil-or-integer of `indexOf`);
+  `JavaWitImportTest`'s `Kinds` with its `StringBuilder` a `String`, 2,226 B.
 - **Pinned by** `JavaReactorTest.aReactorOfScalarValuesCompilesWithNoGcAndWhatLeavesTheSubsetIsRefusedByName`
   (a JDK against the module under node, no glue; the traps; the refusals),
   `RontoLispCliStreamsTest.aJavaFileRunsCompilesAndIsRefusedWhereItCannot` (a command).

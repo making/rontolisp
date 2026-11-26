@@ -1053,7 +1053,8 @@ final class JavaLowering implements JavaEmitter.Context {
 		made.addAll(this.internings);
 		made.addAll(this.settings);
 		LispVal started = runs ? uncaught(initialization, entry)
-				: this.classes.exports.entries ? reportingExports(initialization) : progn(initialization);
+				: this.classes.exports.entries && this.classes.wit.boundary.reportsUncaught()
+						? reportingExports(initialization) : progn(initialization);
 		if (this.reporter != null) {
 			made.add(this.reporter);
 		}
