@@ -1920,6 +1920,33 @@
 
 #+rontolisp-wasm (defun rontolisp::%java-file-make (path mode dirp) 4)
 
+;; What the host's stat (FOLLOW true) or lstat says of PATH beyond %java-file-stat: the
+;; long[] of its owner's and group's numbers, its inode, its device, the device it is,
+;; its links, the time its status last changed (nanoseconds since 1970) and its whole
+;; mode; or #(why), %java-file-stat's why.
+#-rontolisp-wasm
+(defun rontolisp::%java-file-unix (path follow)
+  (let ((unix (%file-unix path follow nil)))
+    (if (consp unix) (rontolisp::%java-list-array unix) (vector unix))))
+
+#+rontolisp-wasm (defun rontolisp::%java-file-unix (path follow) (vector 4))
+
+;; The String[] of the names of PATH's owner and group, nil where the host cannot say.
+#-rontolisp-wasm
+(defun rontolisp::%java-file-owners (path follow)
+  (let ((unix (%file-unix path follow t)))
+    (if (consp unix) (rontolisp::%java-list-array (nthcdr 8 unix)) nil)))
+
+#+rontolisp-wasm (defun rontolisp::%java-file-owners (path follow) nil)
+
+;; Gives PATH the owner UID and the group GID, -1 leaving one: 0, or %java-file-stat's
+;; why not, 5 where the host does not allow it.
+#-rontolisp-wasm
+(defun rontolisp::%java-file-set-owner (path follow uid gid)
+  (%file-set-owner path follow uid gid))
+
+#+rontolisp-wasm (defun rontolisp::%java-file-set-owner (path follow uid gid) 4)
+
 ;; Gives PATH its times of last writing and last access, each a Long of nanoseconds since
 ;; 1970 -- the cons (value . :long) -- or nil to leave it: 0, or %java-file-stat's why not.
 (defun rontolisp::%java-file-set-times (path follow modified accessed)

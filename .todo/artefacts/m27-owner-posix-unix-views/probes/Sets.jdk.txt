@@ -1,0 +1,76 @@
+set mode: 100751
+set mode high: 104751
+set mode setuid: 104751
+set mode long: java.lang.ClassCastException: class java.lang.Long cannot be cast to class java.lang.Integer (java.lang.Long and java.lang.Integer are in module java.base of loader 'bootstrap')
+set mode null: java.lang.NullPointerException: Cannot invoke "java.lang.Integer.intValue()" because "value" is null
+set perms: 100640
+set perms unix: 100644
+set perms null: java.lang.NullPointerException: Cannot invoke "java.util.Set.iterator()" because "perms" is null
+set perms bad: java.lang.ClassCastException: class java.lang.String cannot be cast to class java.util.Set (java.lang.String and java.util.Set are in module java.base of loader 'bootstrap')
+set owner same: f.txt
+set owner owner: f.txt
+set owner unix: f.txt
+set group same: f.txt
+set owner root: java.nio.file.FileSystemException: f.txt: Operation not permitted
+set group root: java.nio.file.FileSystemException: f.txt: Operation not permitted
+set owner group: java.io.IOException: 'owner' parameter can't be a group
+set group user: java.lang.ClassCastException: class sun.nio.fs.UnixUserPrincipals$User cannot be cast to class java.nio.file.attribute.GroupPrincipal (sun.nio.fs.UnixUserPrincipals$User and java.nio.file.attribute.GroupPrincipal are in module java.base of loader 'bootstrap')
+set owner null: java.lang.NullPointerException: 'owner' is null
+set uid: f.txt
+set uid root: java.nio.file.FileSystemException: f.txt: Operation not permitted
+set gid: f.txt
+set gid 4: adm 4
+set gid back: <user>
+set ino: java.lang.IllegalArgumentException: 'unix:ino' not recognized
+set nlink: java.lang.IllegalArgumentException: 'unix:nlink' not recognized
+set ctime: java.lang.IllegalArgumentException: 'unix:ctime' not recognized
+set unix lastModifiedTime: 1970-01-01T00:00:05Z
+set posix lastModifiedTime: 1970-01-01T00:00:06Z
+set posix size: java.lang.IllegalArgumentException: 'posix:size' not recognized
+set posix foo: java.lang.IllegalArgumentException: 'posix:foo' not recognized
+set owner size: java.lang.IllegalArgumentException: 'owner:size' not recognized
+set owner foo on missing: java.lang.IllegalArgumentException: 'owner:foo' not recognized
+set owner missing: java.nio.file.NoSuchFileException: none
+set mode missing: java.nio.file.NoSuchFileException: none
+set perms missing: java.nio.file.NoSuchFileException: none
+setOwner: f.txt
+setOwner root: java.nio.file.FileSystemException: f.txt: Operation not permitted
+setOwner null: java.lang.NullPointerException: 'owner' is null
+setOwner missing: java.nio.file.NoSuchFileException: none
+setOwner group: java.io.IOException: 'owner' parameter can't be a group
+setOwner locked: locked.txt
+getOwner locked: <user>
+unix locked: {mode=32768, nlink=1}
+mode locked set: 100000
+getOwner link nofollow: <user>
+getOwner dangling: java.nio.file.NoSuchFileException: dl
+link mode: 120777 {mode=41471, nlink=1} {mode=33188, nlink=1}
+link pfa: rwxrwxrwx
+link ino: true false
+fileKey eq: true 3967702 3965651
+view setOwner nofollow: ok
+view setOwner dangling: java.nio.file.NoSuchFileException: dl
+view setPerms nofollow: ok
+view setPerms null: java.lang.NullPointerException: Cannot invoke "java.util.Set.iterator()" because "perms" is null
+view setOwner null: java.lang.NullPointerException: 'owner' is null
+view setGroup null: java.lang.NullPointerException: 'owner' is null
+view setGroup: ok
+view setTimes: java.nio.file.AccessDeniedException: f.txt
+view owner setOwner missing: java.nio.file.NoSuchFileException: none
+setPosixFilePermissions set mode: 100700
+set perms keeps setuid: 100700
+view perms keeps setuid: 100700
+principal eq name: false root 0 0
+principal toString: <user>|<user>|<user>
+views of missing: posix
+view equals: false
+readAttributes posixview class: true
+readAttributes basic class: false
+null class: java.lang.NullPointerException
+null view: java.lang.NullPointerException
+posix attributes nofollow dangling: <user>
+posix attributes dangling: java.nio.file.NoSuchFileException: dl
+loop: java.nio.file.FileSystemException: loop1: Too many levels of symbolic links or unable to access attributes of symbolic link
+under a file: java.nio.file.NoSuchFileException: f.txt/x
+under a file posix: java.nio.file.NoSuchFileException: f.txt/x
+dir in locked: java.nio.file.AccessDeniedException: ld/x

@@ -3347,9 +3347,10 @@ public final class LispEvaluator {
 					return new LispInteger(this.sourceLoader.setTimes(path.value(), args.get(1) != LispNil.INSTANCE,
 							nanosecondsOrNull(args.get(2)), nanosecondsOrNull(args.get(3))));
 				}));
-		// %file-access, %file-space, %file-set-mode and %file-make: what a host with
-		// permission bits answers beside its stat (runtime/RontoFileModes, through the
-		// SourceLoader). The Java subset's files ask them; no WASI host has them.
+		// %file-access, %file-space, %file-set-mode, %file-make, %file-unix and
+		// %file-set-owner: what a host with permission bits answers beside its stat
+		// (runtime/RontoFileModes, through the SourceLoader). The Java subset's files ask
+		// them; no WASI host has them.
 		this.globalEnv.defineFunction(LispNames.FILE_ACCESS_INTERNAL,
 				new LispFunction(LispNames.FILE_ACCESS_INTERNAL, args -> {
 					String path = filePrimitivePath(LispNames.FILE_ACCESS_INTERNAL, args, 2);
@@ -3373,6 +3374,28 @@ public final class LispEvaluator {
 					String path = filePrimitivePath(LispNames.FILE_MAKE_INTERNAL, args, 3);
 					return new LispInteger(this.sourceLoader.make(path,
 							fileFixnum(LispNames.FILE_MAKE_INTERNAL, args.get(1)), args.get(2) != LispNil.INSTANCE));
+				}));
+		this.globalEnv.defineFunction(LispNames.FILE_UNIX_INTERNAL,
+				new LispFunction(LispNames.FILE_UNIX_INTERNAL, args -> {
+					String path = filePrimitivePath(LispNames.FILE_UNIX_INTERNAL, args, 3);
+					Object answer = this.sourceLoader.unix(path, args.get(1) != LispNil.INSTANCE,
+							args.get(2) != LispNil.INSTANCE);
+					if (!(answer instanceof Object[] values)) {
+						return new LispInteger(((Number) answer).longValue());
+					}
+					List<LispVal> list = new ArrayList<>();
+					for (Object value : values) {
+						list.add(value instanceof String name ? new LispString(name)
+								: new LispInteger(((Number) value).longValue()));
+					}
+					return valueList(list);
+				}));
+		this.globalEnv.defineFunction(LispNames.FILE_SET_OWNER_INTERNAL,
+				new LispFunction(LispNames.FILE_SET_OWNER_INTERNAL, args -> {
+					String path = filePrimitivePath(LispNames.FILE_SET_OWNER_INTERNAL, args, 4);
+					return new LispInteger(this.sourceLoader.setOwner(path, args.get(1) != LispNil.INSTANCE,
+							fileFixnum(LispNames.FILE_SET_OWNER_INTERNAL, args.get(2)),
+							fileFixnum(LispNames.FILE_SET_OWNER_INTERNAL, args.get(3))));
 				}));
 		// %terminal-p: whether a process standard stream is a terminal (isatty through
 		// RontoTerminal). Standard output and input count only while the evaluator

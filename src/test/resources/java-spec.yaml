@@ -28882,8 +28882,8 @@ standalone:
     # links told apart where they are not followed and walked into with FOLLOW_LINKS, the
     # times to the nanosecond written and copied, the basic view by name and as a view;
     # links made, read and copied as links, an absolute one made and read where a WASI host
-    # refuses it (links:, wasi:); permission bits read, written, made with and copied, which
-    # a WASI host has none of (wasi:).
+    # refuses it (links:, wasi:); permission bits read, written, made with and copied, and
+    # the owner, posix and unix views, which a WASI host has none of (wasi:).
     file: FilesOfNio.java
     directory: true
     files:
@@ -28926,14 +28926,20 @@ standalone:
       import java.nio.file.attribute.BasicFileAttributes;
       import java.nio.file.attribute.FileAttribute;
       import java.nio.file.attribute.FileAttributeView;
+      import java.nio.file.attribute.FileOwnerAttributeView;
       import java.nio.file.attribute.FileTime;
+      import java.nio.file.attribute.GroupPrincipal;
+      import java.nio.file.attribute.PosixFileAttributeView;
+      import java.nio.file.attribute.PosixFileAttributes;
       import java.nio.file.attribute.PosixFilePermission;
       import java.nio.file.attribute.PosixFilePermissions;
+      import java.nio.file.attribute.UserPrincipal;
       import java.time.Instant;
       import java.util.ArrayList;
       import java.util.Arrays;
       import java.util.EnumSet;
       import java.util.List;
+      import java.util.Map;
       import java.util.Set;
       import java.util.concurrent.TimeUnit;
       import java.util.stream.Collectors;
@@ -29438,6 +29444,89 @@ standalone:
                           + PosixFilePermissions.toString(Files.getPosixFilePermissions(kept)) + " "
                           + Files.readString(copy);
               });
+              // the owner, posix and unix views, which a WASI host has none of; who owns a file
+              // differs from host to host, so the lines print what holds on every one
+              Path x = Path.of("x.sh");
+              show("views", () -> {
+                  Set<String> views = FileSystems.getDefault().supportedFileAttributeViews();
+                  return views.contains("basic") + " " + views.contains("posix") + " " + views.contains("unix") + " "
+                          + views.contains("owner");
+              });
+              show("owner", () -> {
+                  UserPrincipal owner = Files.getOwner(x);
+                  GroupPrincipal group = (GroupPrincipal) Files.getAttribute(x, "posix:group");
+                  return owner.equals(Files.getOwner(Path.of("locked.txt"))) + " " + owner.equals(group) + " "
+                          + (owner instanceof GroupPrincipal) + " " + owner.getName().equals(owner.toString()) + " "
+                          + (owner.hashCode() == (Integer) Files.getAttribute(x, "unix:uid")) + " "
+                          + (group.hashCode() == (Integer) Files.getAttribute(x, "unix:gid")) + " "
+                          + owner.equals(Files.getAttribute(x, "owner:owner")) + " "
+                          + Files.getOwner(Path.of("links/dangling"), LinkOption.NOFOLLOW_LINKS).equals(owner);
+              });
+              show("owner missing", () -> Files.getOwner(Path.of("out/none")));
+              show("view names", () -> Files.readAttributes(x, "posix:*").keySet() + " "
+                      + Files.readAttributes(x, "unix:*").keySet() + " " + Files.readAttributes(x, "owner:*").keySet());
+              show("posix", () -> {
+                  PosixFileAttributes a = Files.readAttributes(x, PosixFileAttributes.class);
+                  Map<String, Object> m = Files.readAttributes(x, "posix:permissions,owner,size");
+                  return PosixFilePermissions.toString(a.permissions()) + " " + a.owner().equals(m.get("owner")) + " "
+                          + a.group().equals(Files.getAttribute(x, "unix:group")) + " " + a.isRegularFile() + " "
+                          + a.size() + " " + m.get("permissions") + " " + m.get("size");
+              });
+              show("posix missing", () -> Files.readAttributes(Path.of("out/none"), PosixFileAttributes.class));
+              show("unix", () -> {
+                  Files.createDirectories(Path.of("out/own/sub"));
+                  Map<String, Object> u = Files.readAttributes(x, "unix:*");
+                  Path ro = Path.of("ro");
+                  return Integer.toOctalString((Integer) u.get("mode")) + " "
+                          + Integer.toOctalString((Integer) Files.getAttribute(ro, "unix:mode")) + " "
+                          + Integer.toOctalString((Integer) Files.getAttribute(Path.of("locked.txt"), "unix:mode")) + " "
+                          + Integer.toOctalString((Integer) Files.getAttribute(Path.of("links/dangling"), "unix:mode",
+                                  LinkOption.NOFOLLOW_LINKS))
+                          + " " + u.get("nlink") + " " + Files.getAttribute(Path.of("out/own"), "unix:nlink") + " "
+                          + u.get("rdev") + " " + u.get("dev").equals(Files.getAttribute(ro, "unix:dev")) + " "
+                          + u.get("ino").equals(Files.getAttribute(ro, "unix:ino")) + " "
+                          + Files.getAttribute(Path.of("links/f.txt"), "unix:ino").equals(Files.getAttribute(lf, "unix:ino"))
+                          + " " + (u.get("ctime") instanceof FileTime) + " " + (u.get("uid") instanceof Integer) + " "
+                          + (u.get("ino") instanceof Long) + " " + (u.get("dev") instanceof Long) + " "
+                          + (u.get("nlink") instanceof Integer);
+              });
+              show("owner views", () -> {
+                  PosixFileAttributeView posix = Files.getFileAttributeView(x, PosixFileAttributeView.class);
+                  FileOwnerAttributeView owner = Files.getFileAttributeView(x, FileOwnerAttributeView.class);
+                  if (posix == null || owner == null) {
+                      return posix + " " + owner;
+                  }
+                  return posix.name() + " " + owner.name() + " " + posix.getOwner().equals(owner.getOwner()) + " "
+                          + PosixFilePermissions.toString(posix.readAttributes().permissions()) + " "
+                          + (owner instanceof PosixFileAttributeView);
+              });
+              show("owner view of a missing file", () -> {
+                  PosixFileAttributeView posix = Files.getFileAttributeView(Path.of("out/none"), PosixFileAttributeView.class);
+                  return posix == null ? null : posix.readAttributes();
+              });
+              show("owners written", () -> {
+                  Path w = Files.writeString(Path.of("out/own.txt"), "o");
+                  UserPrincipal owner = Files.getOwner(w);
+                  GroupPrincipal group = Files.readAttributes(w, PosixFileAttributes.class).group();
+                  Files.setOwner(w, owner);
+                  Files.setAttribute(w, "posix:group", group);
+                  Files.setAttribute(w, "unix:uid", owner.hashCode());
+                  Files.getFileAttributeView(w, PosixFileAttributeView.class).setGroup(group);
+                  Files.getFileAttributeView(Path.of("links/dangling"), FileOwnerAttributeView.class, LinkOption.NOFOLLOW_LINKS)
+                      .setOwner(owner);
+                  Files.setAttribute(w, "unix:mode", 04640);
+                  String moded = Integer.toOctalString((Integer) Files.getAttribute(w, "unix:mode"));
+                  Files.setAttribute(w, "posix:permissions", PosixFilePermissions.fromString("rw-r--r--"));
+                  return Files.getOwner(w).equals(owner) + " " + moded + " "
+                          + Integer.toOctalString((Integer) Files.getAttribute(w, "unix:mode"));
+              });
+              show("owner a group", () -> Files.setOwner(Path.of("out/own.txt"),
+                      (GroupPrincipal) Files.getAttribute(x, "posix:group")));
+              show("owner null", () -> Files.setOwner(Path.of("out/none"), null));
+              show("owner of a missing file", () -> Files.setAttribute(Path.of("out/none"), "owner:owner", Files.getOwner(x)));
+              show("posix name refused", () -> Files.readAttributes(x, "posix:size,uid"));
+              show("owner name refused", () -> Files.readAttributes(x, "owner:owner,size"));
+              show("unix set refused", () -> Files.setAttribute(x, "unix:ino", 1L));
           }
       }
     stdout: |
@@ -29581,6 +29670,22 @@ standalone:
       made with bits: rw------- rwx------ rwx------
       temporary bits: rw------- rwx------
       copied bits: r-xr-x--- r-xr-x--- s
+      views: true true true true
+      owner: true false false true true true true true
+      owner missing: java.nio.file.NoSuchFileException: out/none
+      view names: [owner, lastAccessTime, lastModifiedTime, size, creationTime, isSymbolicLink, permissions, isRegularFile, fileKey, isOther, isDirectory, group] [owner, lastAccessTime, lastModifiedTime, gid, creationTime, isRegularFile, nlink, fileKey, ino, mode, uid, size, dev, isSymbolicLink, permissions, rdev, ctime, isOther, isDirectory, group] [owner]
+      posix: rwxr-xr-x true true true 9 [OWNER_READ, OWNER_WRITE, OWNER_EXECUTE, GROUP_READ, GROUP_EXECUTE, OTHERS_READ, OTHERS_EXECUTE] 9
+      posix missing: java.nio.file.NoSuchFileException: out/none
+      unix: 100755 40555 100000 120777 1 3 0 true false true true true true true true
+      owner views: posix owner true rwxr-xr-x false
+      owner view of a missing file: java.nio.file.NoSuchFileException: out/none
+      owners written: true 104640 100644
+      owner a group: java.io.IOException: 'owner' parameter can't be a group
+      owner null: java.lang.NullPointerException: 'owner' is null
+      owner of a missing file: java.nio.file.NoSuchFileException: out/none
+      posix name refused: java.lang.IllegalArgumentException: 'uid' not recognized
+      owner name refused: java.lang.IllegalArgumentException: 'owner:size' not recognized
+      unix set refused: java.lang.IllegalArgumentException: 'unix:ino' not recognized
     wasi:
       absolute link: "java.nio.file.AccessDeniedException: links/abs"
       absolute link made: "java.nio.file.AccessDeniedException: out/abs false"
@@ -29591,6 +29696,22 @@ standalone:
       made with bits: "java.lang.UnsupportedOperationException: 'posix:permissions' not supported as initial attribute"
       temporary bits: java.lang.UnsupportedOperationException
       copied bits: java.lang.UnsupportedOperationException
+      views: true false false false
+      owner: java.lang.UnsupportedOperationException
+      owner missing: java.lang.UnsupportedOperationException
+      view names: "java.lang.UnsupportedOperationException: View 'posix' not available"
+      posix: java.lang.UnsupportedOperationException
+      posix missing: java.lang.UnsupportedOperationException
+      unix: "java.lang.UnsupportedOperationException: View 'unix' not available"
+      owner views: null null
+      owner view of a missing file: "null"
+      owners written: java.lang.UnsupportedOperationException
+      owner a group: "java.lang.UnsupportedOperationException: View 'posix' not available"
+      owner null: java.lang.UnsupportedOperationException
+      owner of a missing file: java.lang.UnsupportedOperationException
+      posix name refused: "java.lang.UnsupportedOperationException: View 'posix' not available"
+      owner name refused: "java.lang.UnsupportedOperationException: View 'owner' not available"
+      unix set refused: "java.lang.UnsupportedOperationException: View 'unix' not available"
   # A locale of any language (.kb/java-frontend.md, "A locale of any language"): a tag
   # read as far as it is well-formed, the grandfathered tags and the old codes, the
   # parts made into a locale, the builder's refusals, which makings answer one object;

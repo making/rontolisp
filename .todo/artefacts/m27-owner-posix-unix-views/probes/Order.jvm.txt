@@ -1,0 +1,21 @@
+setOwner null missing: java.lang.NullPointerException: 'owner' is null
+setOwner group missing: java.io.IOException: 'owner' parameter can't be a group
+set posix:owner group missing: java.io.IOException: 'owner' parameter can't be a group
+set posix:group user missing: java.lang.ClassCastException: class java.nio.file.Files$Owner cannot be cast to class java.nio.file.attribute.GroupPrincipal
+set unix:uid long missing: java.lang.ClassCastException: class java.lang.Long cannot be cast to class java.lang.Integer
+set unix:mode long missing: java.lang.ClassCastException: class java.lang.Long cannot be cast to class java.lang.Integer
+set perms bad missing: java.lang.ClassCastException: class java.lang.String cannot be cast to class java.util.Set
+view setGroup missing: java.nio.file.NoSuchFileException: none
+view setPerms missing: java.nio.file.NoSuchFileException: none
+view setPerms null missing: java.lang.NullPointerException
+view getOwner missing: java.nio.file.NoSuchFileException: none
+getOwner null: java.lang.NullPointerException
+getOwner null option: java.lang.NullPointerException
+perm set wrong element: java.lang.RuntimeException: Enum.ordinal: The value "x" is not of type java.lang.Enum
+perm set null element: java.lang.NullPointerException
+owner setOwner of view on group: java.io.IOException: 'owner' parameter can't be a group
+owner hash eq: 1000 1000 true false false
+views set order: [owner, basic, posix, unix] [owner, dos, basic, posix, user, unix]
+unix map keys order basic: [lastAccessTime, lastModifiedTime, size, creationTime, isSymbolicLink, isRegularFile, fileKey, isOther, isDirectory]
+dev null: {mode=8630, dev=5, rdev=259, nlink=1, isOther=true}
+nobody: {owner=root, group=root}

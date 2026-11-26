@@ -1,0 +1,35 @@
+view perms nofollow: 100700 120777
+set mode nofollow: 100640 120777
+set perms nofollow: 100600 120777
+set perms nofollow dangling: java.nio.file.NoSuchFileException: gdl
+set mode follow: 100604 120777
+set owner nofollow dangling: gdl
+set uid nofollow dangling: gdl
+set uid dangling: java.nio.file.NoSuchFileException: gdl
+set owner dangling: java.nio.file.NoSuchFileException: gdl
+owner:*,size: java.lang.IllegalArgumentException: 'owner:size' not recognized
+owner:owner,foo: java.lang.IllegalArgumentException: 'owner:foo' not recognized
+owner:: java.lang.IllegalArgumentException: 'owner:' not recognized
+posix:: java.lang.IllegalArgumentException: '' not recognized
+unix:,size: java.lang.IllegalArgumentException: '' not recognized
+posix:*,foo: java.lang.IllegalArgumentException: 'foo' not recognized
+posix:foo,*: java.lang.IllegalArgumentException: 'foo' not recognized
+owner:owner,owner: {owner=<user>}
+getAttribute posix:*: java.lang.IllegalArgumentException: posix:*
+getAttribute owner:*: java.lang.IllegalArgumentException: owner:*
+getAttribute unix:a,b: java.lang.IllegalArgumentException: unix:a,b
+get posix:foo: java.lang.IllegalArgumentException: 'foo' not recognized
+get unix:foo: java.lang.IllegalArgumentException: 'foo' not recognized
+get owner:foo: java.lang.IllegalArgumentException: 'owner:foo' not recognized
+get basic:foo: java.lang.IllegalArgumentException: 'foo' not recognized
+get posix:fileKey: false
+set basic owner: java.lang.IllegalArgumentException: 'basic:owner' not recognized
+set unix:group: g.txt
+set unix:ctime: g.txt
+set unix:uid long: java.lang.ClassCastException: class java.lang.Long cannot be cast to class java.lang.Integer
+set unix:mode missing name: java.lang.IllegalArgumentException: 'unix:' not recognized
+set owner on missing view: java.lang.UnsupportedOperationException: View 'foo' not available
+set gid locked: 100000
+owner map mutable: [owner, x]
+posix map mutable: java.lang.UnsupportedOperationException
+basic map mutable: java.lang.UnsupportedOperationException

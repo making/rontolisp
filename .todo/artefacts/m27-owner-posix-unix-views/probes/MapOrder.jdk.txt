@@ -1,0 +1,4 @@
+3000 [0, 0]
+basic:* [lastAccessTime, lastModifiedTime, size, creationTime, isSymbolicLink, isRegularFile, fileKey, isOther, isDirectory]
+posix:* [owner, lastAccessTime, lastModifiedTime, size, creationTime, isSymbolicLink, permissions, isRegularFile, fileKey, isOther, isDirectory, group]
+unix:* [owner, lastAccessTime, lastModifiedTime, gid, creationTime, isRegularFile, nlink, fileKey, ino, mode, uid, size, dev, isSymbolicLink, permissions, rdev, ctime, isOther, isDirectory, group]

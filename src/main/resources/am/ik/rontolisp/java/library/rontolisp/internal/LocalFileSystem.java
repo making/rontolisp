@@ -6,12 +6,17 @@ package rontolisp.internal;
 import java.nio.file.FileSystem;
 import java.nio.file.Path;
 import java.nio.file.PathMatcher;
+import java.util.Collections;
+import java.util.HashSet;
 import java.util.List;
+import java.util.Set;
 import java.util.regex.Pattern;
 
 // The host's file system, the one there is: every path is a LocalPath of it, its one root
 // is /, and it is never closed. A matcher's syntax is glob or regex in any case, matched
-// against the whole text of a path.
+// against the whole text of a path. Its views are the basic one, and the owner, posix and
+// unix ones where the host keeps permission bits (a JDK on a Unix host has dos and user
+// too).
 public final class LocalFileSystem extends FileSystem {
 
     public static final LocalFileSystem HOST = new LocalFileSystem();
@@ -41,6 +46,17 @@ public final class LocalFileSystem extends FileSystem {
 
     public void close() {
         throw new UnsupportedOperationException();
+    }
+
+    public Set<String> supportedFileAttributeViews() {
+        Set<String> views = new HashSet<>();
+        views.add("basic");
+        if (Disk.modes()) {
+            views.add("owner");
+            views.add("posix");
+            views.add("unix");
+        }
+        return Collections.unmodifiableSet(views);
     }
 
     public PathMatcher getPathMatcher(String syntaxAndPattern) {
