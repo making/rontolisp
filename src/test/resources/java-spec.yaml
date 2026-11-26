@@ -29632,6 +29632,15 @@ standalone:
               show("hard link key", () -> {
                   Object key = Files.readAttributes(hl, BasicFileAttributes.class).fileKey();
                   Object of = Files.getAttribute(Path.of("links/f.txt"), "fileKey");
+                  // a host's inode is a 64-bit hash on WASI: forty files make a negative one certain
+                  for (int i = 0; i < 40; i++) {
+                      Path k = Path.of("out/h/k" + i);
+                      Files.writeString(k, "k");
+                      if (!Files.readAttributes(k, BasicFileAttributes.class).fileKey().toString()
+                              .matches("[(]dev=[0-9a-f]+,ino=[0-9]+[)]")) {
+                          return "key " + i + " " + Files.readAttributes(k, BasicFileAttributes.class).fileKey();
+                      }
+                  }
                   return key.equals(of) + " " + (key.hashCode() == of.hashCode()) + " "
                           + key.equals(Files.readAttributes(lf, BasicFileAttributes.class, LinkOption.NOFOLLOW_LINKS).fileKey())
                           + " " + key.toString().matches("[(]dev=[0-9a-f]+,ino=[0-9]+[)]");
