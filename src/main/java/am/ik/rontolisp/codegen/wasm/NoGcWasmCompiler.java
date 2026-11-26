@@ -9405,10 +9405,10 @@ public final class NoGcWasmCompiler implements LispCompiler {
 		}
 		WasmWriter w = fn.writer;
 		LispVal x = args.get(2);
-		LispVal[] shift = unsignedShift(x);
+		LispMacroExpander.UnsignedShift shift = LispMacroExpander.unsignedShift(x);
 		if (shift != null) {
-			compileCoerced(shift[0], fn, Ty.INT);
-			compileCoerced(shift[1], fn, Ty.INT);
+			compileCoerced(shift.operand(), fn, Ty.INT);
+			compileCoerced(shift.count(), fn, Ty.INT);
 			w.write(Instruction.I64_SHR_U);
 		}
 		else if (x instanceof LispCons division && division.car() instanceof LispSymbol head
@@ -9441,44 +9441,6 @@ public final class NoGcWasmCompiler implements LispCompiler {
 			}
 		}
 		return Ty.INT;
-	}
-
-	/**
-	 * The operand and the count of an unsigned right shift of a 64-bit field --
-	 * {@code (ash (logand x 2^64-1) (- n))} with {@code n} a {@code (logand c 63)} or a
-	 * literal count from 0 to 63 -- or {@code null} for any other form: a count past 63
-	 * would be taken modulo 64 by the instruction.
-	 * @param form a form
-	 * @return {x, n}, or {@code null}
-	 */
-	private static LispVal @Nullable [] unsignedShift(LispVal form) {
-		if (!(form instanceof LispCons ash && ash.car() instanceof LispSymbol head && LispNames.ASH.equals(head.name())
-				&& ash.isProperList())) {
-			return null;
-		}
-		List<LispVal> parts = ash.toList();
-		if (parts.size() != 3 || !(parts.get(1) instanceof LispCons masked && masked.isProperList()
-				&& masked.car() instanceof LispSymbol and && LispNames.LOGAND.equals(and.name()))) {
-			return null;
-		}
-		List<LispVal> field = masked.toList();
-		if (field.size() != 3 || !(field.get(2) instanceof am.ik.rontolisp.LispBigInteger mask
-				&& mask.value().equals(java.math.BigInteger.ONE.shiftLeft(64).subtract(java.math.BigInteger.ONE)))) {
-			return null;
-		}
-		LispVal count = parts.get(2);
-		if (count instanceof LispInteger literal && literal.value() <= 0 && literal.value() >= -63) {
-			return new LispVal[] { field.get(1), new LispInteger(-literal.value()) };
-		}
-		if (count instanceof LispCons negated && negated.isProperList() && negated.toList().size() == 2
-				&& negated.car() instanceof LispSymbol minus && LispNames.SUB.equals(minus.name())
-				&& negated.toList().get(1) instanceof LispCons bounded && bounded.isProperList()
-				&& bounded.toList().size() == 3 && bounded.car() instanceof LispSymbol band
-				&& LispNames.LOGAND.equals(band.name()) && bounded.toList().get(2) instanceof LispInteger limit
-				&& limit.value() >= 0 && limit.value() <= 63) {
-			return new LispVal[] { field.get(1), bounded };
-		}
-		return null;
 	}
 
 	// Whether both operands of a two-argument division are integers here: what makes it
@@ -10135,10 +10097,10 @@ public final class NoGcWasmCompiler implements LispCompiler {
 		List<LispVal> args = cons.toList();
 		if (LispNames.MASK_SIGNED_FIELD.equals(name) && args.size() == 3) {
 			// the unsigned shift's 2^64-1 is no value: only its operand and count are
-			LispVal[] shift = unsignedShift(args.get(2));
+			LispMacroExpander.UnsignedShift shift = LispMacroExpander.unsignedShift(args.get(2));
 			if (shift != null) {
-				collectCalls(shift[0], bound, defuns, callees, fnName, false);
-				collectCalls(shift[1], bound, defuns, callees, fnName, false);
+				collectCalls(shift.operand(), bound, defuns, callees, fnName, false);
+				collectCalls(shift.count(), bound, defuns, callees, fnName, false);
 				return;
 			}
 		}

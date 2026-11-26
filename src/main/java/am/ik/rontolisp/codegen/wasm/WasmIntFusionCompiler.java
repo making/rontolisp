@@ -235,6 +235,15 @@ final class WasmIntFusionCompiler {
 			@Nullable String owner) implements Node {
 	}
 
+	/**
+	 * {@code (%mask-signed-field 64 (ash (logand a 2^64-1) (- n)))} over {@code (a, n)},
+	 * {@code n} from 0 to 63 ({@link LispMacroExpander#unsignedShift}): a Java
+	 * {@code long >>>}, one {@code i64.shr_u}. Its {@code a} is {@code (logand x -1)},
+	 * the application that signals where the masking {@code logand} would for a
+	 * non-integer {@code x}, in its place in the interpreter's order.
+	 */
+	private static final String USHR = "%ushr";
+
 	private record ConstLeaf(long value) implements Node {
 	}
 
@@ -2213,6 +2222,10 @@ final class WasmIntFusionCompiler {
 			if (size < 1 || size > 64) {
 				return env.isEmpty() ? registerLeaf(exprLeaf(expr, ctx), site) : null;
 			}
+			LispMacroExpander.UnsignedShift shift = size == 64 ? LispMacroExpander.unsignedShift(parts.get(2)) : null;
+			if (shift != null) {
+				return classifyUnsignedShift(shift, ctx, env, site, depth);
+			}
 			Node arg = classify(parts.get(2), ctx, env, site, depth);
 			return arg == null ? null : applied(makeOp(op, List.of(new ConstLeaf(size), arg), site), site);
 		}
@@ -2274,6 +2287,32 @@ final class WasmIntFusionCompiler {
 		}, site);
 	}
 
+	@Nullable private static Node classifyUnsignedShift(LispMacroExpander.UnsignedShift shift, WasmLispCompiler.Ctx ctx,
+			java.util.Map<String, Node> env, Site site, int depth) {
+		Node operand = classify(shift.operand(), ctx, env, site, depth);
+		if (operand == null) {
+			return null;
+		}
+		SourceLocation location = SourceProvenance.locate(shift.masked());
+		LispCons outerSource = site.source;
+		String outerOwner = site.sourceOwner;
+		if (location != null && location.file() != null) {
+			site.source = shift.masked();
+			site.sourceOwner = site.bodyOwner;
+		}
+		Node integer;
+		try {
+			integer = applied(makeOp(LispNames.LOGAND, List.of(operand, new ConstLeaf(-1)), site), site);
+		}
+		finally {
+			site.source = outerSource;
+			site.sourceOwner = outerOwner;
+		}
+		Node count = shift.count() instanceof LispInteger literal ? new ConstLeaf(literal.value())
+				: classify(shift.count(), ctx, env, site, depth);
+		return count == null ? null : applied(makeOp(USHR, List.of(integer, count), site), site);
+	}
+
 	/**
 	 * Builds an operation node, folding it to a constant when every argument is a literal
 	 * and the exact result fits an i64 -- inlined bodies produce shapes like
@@ -2313,6 +2352,7 @@ final class WasmIntFusionCompiler {
 					}
 					case LispNames.ASH -> foldAsh(acc, v);
 					case LispNames.MASK_SIGNED_FIELD -> signExtend(v, (int) acc);
+					case USHR -> acc >>> v;
 					default -> throw new ArithmeticException("not foldable");
 				};
 			}
@@ -3871,6 +3911,11 @@ final class WasmIntFusionCompiler {
 			case LispNames.MASK_SIGNED_FIELD -> {
 				return signedField((int) ((ConstLeaf) args.get(0)).value());
 			}
+			case USHR -> {
+				// a shift by one bit or more clears the sign
+				long least = range(args.get(1)).lo();
+				return least <= 0 ? Range.FULL : new Range(0, Long.MAX_VALUE >>> (least - 1));
+			}
 			case LispNames.LOGAND -> {
 				ConstLeaf mask = literalMask(op);
 				if (mask != null) {
@@ -4021,6 +4066,9 @@ final class WasmIntFusionCompiler {
 		if (LispNames.MASK_SIGNED_FIELD.equals(op.op())) {
 			return wrappedBails(args.get(1));
 		}
+		if (USHR.equals(op.op())) {
+			return wrappedBails(args.get(0)) || fastBails(args.get(1));
+		}
 		if (isQuotient(op)) {
 			return fastBails(args.get(0)) || fastBails(args.get(1)) || quotientOverflows(op);
 		}
@@ -4152,6 +4200,18 @@ final class WasmIntFusionCompiler {
 						ctx.writer.writeSignedLeb128(64 - size);
 						ctx.writer.write(Instruction.I64_SHR_S);
 					}
+					return;
+				}
+				// The 64-bit field reads the operand's low 64 bits, and the count is
+				// within 0..63.
+				if (USHR.equals(op.op())) {
+					Node operand = op.args().get(0);
+					emitFastWrapped(operand instanceof OpNode integer && LispNames.LOGAND.equals(integer.op())
+							&& integer.args().get(1) instanceof ConstLeaf all && all.value() == -1
+									? integer.args().get(0) : operand,
+							ctx);
+					emitFast(op.args().get(1), ctx);
+					ctx.writer.write(Instruction.I64_SHR_U);
 					return;
 				}
 				// (mod x 2^k) with a positive power-of-two literal is a plain mask --
@@ -4779,18 +4839,26 @@ final class WasmIntFusionCompiler {
 				// there.
 				WasmUncaughtLocations.Operation located = WasmUncaughtLocations.enterOperation(op.source(), op.owner(),
 						ctx);
-				int size = (int) ((ConstLeaf) op.args().get(0)).value();
-				long negativeSignBit = -(1L << (size - 1));
 				emitFallback(op.args().get(1), ctx);
-				WasmEmitHelper.compileIntegerLiteral(negativeSignBit, ctx);
-				WasmOperandTypes.withOperator(ctx, LispNames.LOGXOR,
-						() -> emitCall(WasmLispCompiler.FUNC_BIG_XOR, ctx));
+				emitSignedFieldFallback((int) ((ConstLeaf) op.args().get(0)).value(), ctx);
+				WasmUncaughtLocations.leaveOperation(located, ctx);
+			}
+			case OpNode op when USHR.equals(op.op()) -> {
+				// The lowering's own operations: (logand a 2^64-1), the count negated,
+				// ash, the 64-bit field -- none of which can signal over the integers
+				// the operand's (logand x -1) and the count's logand answer.
+				WasmUncaughtLocations.Operation located = WasmUncaughtLocations.enterOperation(op.source(), op.owner(),
+						ctx);
+				emitFallback(op.args().get(0), ctx);
 				WasmEmitHelper.compileExactIntegerLiteral(
-						java.math.BigInteger.ONE.shiftLeft(size).subtract(java.math.BigInteger.ONE), ctx);
+						java.math.BigInteger.ONE.shiftLeft(64).subtract(java.math.BigInteger.ONE), ctx);
 				WasmOperandTypes.withOperator(ctx, LispNames.LOGAND,
 						() -> emitCall(WasmLispCompiler.FUNC_BIG_AND, ctx));
-				WasmEmitHelper.compileIntegerLiteral(negativeSignBit, ctx);
-				WasmOperandTypes.withOperator(ctx, LispNames.ADD, () -> emitCall(WasmLispCompiler.FUNC_RAT_ADD, ctx));
+				WasmEmitHelper.compileIntegerLiteral(0, ctx);
+				emitFallback(op.args().get(1), ctx);
+				WasmOperandTypes.withOperator(ctx, LispNames.SUB, () -> emitCall(WasmLispCompiler.FUNC_RAT_SUB, ctx));
+				WasmOperandTypes.withOperator(ctx, LispNames.ASH, () -> emitCall(WasmLispCompiler.FUNC_BIG_ASH, ctx));
+				emitSignedFieldFallback(64, ctx);
 				WasmUncaughtLocations.leaveOperation(located, ctx);
 			}
 			case OpNode op when isQuotient(op) -> {
@@ -4829,6 +4897,23 @@ final class WasmIntFusionCompiler {
 				WasmUncaughtLocations.leaveOperation(located, ctx);
 			}
 		}
+	}
+
+	/**
+	 * The lowering's arm of {@code (%mask-signed-field size x)} over the {@code x} on the
+	 * stack (LispMacroExpander.expandMaskSignedField), through the generic helpers: flip
+	 * the sign bit, keep the field, take the sign bit's weight back off. A non-integer
+	 * fails in the logxor, as it does there.
+	 */
+	private static void emitSignedFieldFallback(int size, WasmLispCompiler.Ctx ctx) {
+		long negativeSignBit = -(1L << (size - 1));
+		WasmEmitHelper.compileIntegerLiteral(negativeSignBit, ctx);
+		WasmOperandTypes.withOperator(ctx, LispNames.LOGXOR, () -> emitCall(WasmLispCompiler.FUNC_BIG_XOR, ctx));
+		WasmEmitHelper.compileExactIntegerLiteral(
+				java.math.BigInteger.ONE.shiftLeft(size).subtract(java.math.BigInteger.ONE), ctx);
+		WasmOperandTypes.withOperator(ctx, LispNames.LOGAND, () -> emitCall(WasmLispCompiler.FUNC_BIG_AND, ctx));
+		WasmEmitHelper.compileIntegerLiteral(negativeSignBit, ctx);
+		WasmOperandTypes.withOperator(ctx, LispNames.ADD, () -> emitCall(WasmLispCompiler.FUNC_RAT_ADD, ctx));
 	}
 
 	private static int fallbackFunc(String op) {
