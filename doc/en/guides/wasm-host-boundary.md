@@ -485,7 +485,7 @@ A function whose result is a `result` answers its ok value, and its error arm by
 throwing the glue's `WitError` carrying the error's value
 (`throw new WitError({ tag: "other", val: "..." })`): the program sees the
 `rontolisp:wit-error` condition, a Java program the `WitException` its binding
-throws. Anything else a host function throws traps the call. A resource's value
+throws or the `WitResult.Err` it answers, as the method declares it. Anything else a host function throws traps the call. A resource's value
 stays on this side, in a table of the glue's; the module holds an index, which the
 resource's release (`[resource-drop]bucket`, implemented by the glue) takes out,
 calling a host entry of that name with the value if the host has one. `flags`, a

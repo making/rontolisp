@@ -235,6 +235,11 @@ Traps:
   Concurrent methods share the field, so one method's cleanup deletes the directory another is
   running in (seen as `NoSuchFileException` on a file the test had just created). Take it as a
   method parameter.
+- **A leg's directory named after something two cases share is a shared file.** Spec E2E
+  tests key a case's directories by its unique name, never by its file: `JavaSpecE2eTest`
+  named them by the file, three standalone cases are `app/Main.java`, and a JDK leg ran
+  another case's program once in a full run (the class alone passed). Its `standalone`
+  factory asserts the stems are distinct.
 
 ## No test reads a clock to judge cost
 

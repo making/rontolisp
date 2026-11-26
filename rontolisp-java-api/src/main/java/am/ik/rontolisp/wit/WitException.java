@@ -2,9 +2,10 @@ package am.ik.rontolisp.wit;
 
 /**
  * The error arm of a WIT {@code result} a function of a {@link WitImport} interface
- * answers: the function throws it in place of a value, carrying the error. A provider
- * throws it for its error arm; the host's binding rontolisp compiles throws it for the
- * host's.
+ * answers, where the method declares the ok arm as its answer (otherwise it answers a
+ * {@link WitResult}): the function throws it in place of a value, carrying the error. A
+ * provider throws it for its error arm; the host's binding rontolisp compiles throws it
+ * for the host's.
  */
 public class WitException extends RuntimeException {
 
