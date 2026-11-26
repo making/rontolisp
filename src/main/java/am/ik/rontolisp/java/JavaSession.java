@@ -71,6 +71,9 @@ public final class JavaSession {
 	 */
 	private final Map<String, Integer> jdkNumbers = new java.util.HashMap<>();
 
+	/** The arms those uses are called through, which a later buffer's functions keep. */
+	private final JavaLowering.JdkArmSet jdkArms = new JavaLowering.JdkArmSet();
+
 	/** The number of the last generated variable. */
 	private int echoes;
 
@@ -132,6 +135,7 @@ public final class JavaSession {
 		session.regions.addAll(this.regions);
 		session.everyRegion = this.everyRegion;
 		session.jdkNumbers.putAll(this.jdkNumbers);
+		session.jdkArms.copyFrom(this.jdkArms);
 		List<LispVal> forms = JavaLowering.lower(tree.unit(), text, null, this.files, session, false, null, false, null,
 				this.boundary);
 		// what the buffer leaves for the next ones
@@ -180,6 +184,7 @@ public final class JavaSession {
 		this.regions.addAll(session.regions);
 		this.everyRegion = session.everyRegion;
 		this.jdkNumbers.putAll(session.jdkNumbers);
+		this.jdkArms.copyFrom(session.jdkArms);
 		this.echoes = tree.echoes();
 		return steps;
 	}
