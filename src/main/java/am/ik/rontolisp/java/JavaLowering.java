@@ -2351,6 +2351,7 @@ final class JavaLowering implements JavaEmitter.Context {
 		ClassType site = target == this.currentClass ? target.self() : this.currentClass.supertype(target);
 		Resolved resolved = resolve(constructors(target), site, List.of(), arguments, null,
 				"constructor " + target.simpleName(), target, pos);
+		enumUniverse(resolved.method(), site);
 		raises(node, caret, resolved.thrown(), null);
 		checkAccess(resolved.method().isPrivate, resolved.method().declaration, resolved.method().owner,
 				target.simpleName() + resolved.method().parameterList(), pos);
@@ -8711,6 +8712,45 @@ final class JavaLowering implements JavaEmitter.Context {
 	}
 
 	/**
+	 * A call making an {@code EnumSet} (its static methods) or an {@code EnumMap} (its
+	 * constructors) over an enum's constants, which the enum's class object hands it
+	 * ({@code Support.universe}): the enum the call names as the type argument of what it
+	 * makes is called {@code values()} of, as a class object held by a program reaching
+	 * {@code getEnumConstants} is, and its class object holds the constants; one naming
+	 * no enum (a type variable, a raw type) has every enum's hold them. A copy of a set
+	 * or a map takes the constants of the one copied, and a call inside the class those
+	 * of the enum its own caller named.
+	 * @param made the type the call makes, or the class it is made as
+	 */
+	private void enumUniverse(Method method, @Nullable JavaType made) {
+		boolean making = method.owner.name.equals("java.util.EnumSet") ? method.isStatic
+				: method.owner.name.equals("java.util.EnumMap") && method.isConstructor();
+		if (!making || method.parameters.size() == 1
+				&& this.types.erased(method.parameters.get(0)) instanceof ClassType taken
+				&& taken.declaration() == method.owner) {
+			return;
+		}
+		JavaClass outermost = this.currentClass;
+		while (outermost.outer != null) {
+			outermost = outermost.outer;
+		}
+		if (outermost == method.owner) {
+			return;
+		}
+		JavaType element = made instanceof ClassType type && !type.arguments().isEmpty() ? type.arguments().get(0)
+				: null;
+		if (element instanceof ClassType named && enumValues(named.declaration().present()) != null) {
+			if (this.classes.universes.add(named.declaration()) && this.generationOver) {
+				this.classes.changed();
+			}
+		}
+		else if (!this.classes.enumConstants) {
+			this.classes.enumConstants = true;
+			this.classes.changed();
+		}
+	}
+
+	/**
 	 * The type a class literal names: a class, an interface, an array type, a primitive
 	 * type or {@code void}.
 	 */
@@ -13975,7 +14015,8 @@ final class JavaLowering implements JavaEmitter.Context {
 						interfaces.add(implemented);
 					}
 				}
-				if (reached.contains("getEnumConstants")) {
+				if (reached.contains("getEnumConstants") || reached.contains("universe")
+						&& (this.classes.enumConstants || this.classes.universes.contains(declaration))) {
 					Method values = enumValues(declaration);
 					if (values != null) {
 						constants = list(cl("lambda"), NIL, list(JavaNames.function(values)));
@@ -14316,6 +14357,7 @@ final class JavaLowering implements JavaEmitter.Context {
 				&& resolved.arguments().get(0).constant() instanceof String named) {
 			literalForName(named);
 		}
+		enumUniverse(method, resolved.returnType());
 		int caret = callCaret(pos, call.name());
 		raises(call, caret >= 0 ? caret : pos, resolved.thrown(), null);
 		uncheckedCall(method, site, caret);
@@ -15073,6 +15115,7 @@ final class JavaLowering implements JavaEmitter.Context {
 			uncheckedCall(resolved.method(), type, callCaret(pos, null));
 		}
 		raises(creation, pos, resolved.thrown(), null);
+		enumUniverse(resolved.method(), type);
 		if (resolved.method().emitter != null) {
 			this.classes.intrinsicsCalled.add(resolved.method());
 			return new Typed(
@@ -15141,6 +15184,7 @@ final class JavaLowering implements JavaEmitter.Context {
 			}
 			above = resolved.method();
 			arguments = resolved.forms();
+			enumUniverse(above, extendedType);
 			// its constructor throws what the one it hands its arguments to does
 			raises(creation, pos, resolved.thrown(), null);
 		}

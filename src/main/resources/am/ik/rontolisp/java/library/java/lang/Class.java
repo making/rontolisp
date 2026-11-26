@@ -789,6 +789,13 @@ public final class Class<T> implements GenericDeclaration, Type, AnnotatedElemen
 
     private static native Object[] constants0(Object constants);
 
+    // the constants of an enum a set or a map of them is made over (Support.universe):
+    // held by the class objects of the enums such a call names, where getEnumConstants
+    // has every enum's class object hold its own
+    private static Object[] universe(Class<?> type) {
+        return type.constants == null ? null : constants0(type.constants);
+    }
+
     // the names of the methods the class declares, a space between two; null for a class
     // whose methods are not known
     private static native String methods0(Class<?> type);

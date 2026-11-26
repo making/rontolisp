@@ -39,7 +39,7 @@ public abstract class EnumSet<E extends Enum<E>> extends AbstractSet<E> implemen
     }
 
     public static <E extends Enum<E>> EnumSet<E> noneOf(Class<E> elementType) {
-        return over(elementType, elementType.getEnumConstants());
+        return over(elementType, rontolisp.internal.Support.universe(elementType));
     }
 
     public static <E extends Enum<E>> EnumSet<E> allOf(Class<E> elementType) {

@@ -614,6 +614,31 @@ class JavaLoweringTest {
 			.anyMatch(form -> form.startsWith("(DEFSTRUCT (|rontolisp.internal.Sha512| "))
 			.anyMatch(form -> form.startsWith("(DEFSTRUCT (|rontolisp.internal.Sha3| "))
 			.anyMatch(form -> form.startsWith("(DEFSTRUCT (|rontolisp.internal.Md2| "));
+		// An EnumSet or an EnumMap of an enum its call names -- by a call, a reference,
+		// a creation or a class under the map -- takes the constants of that enum alone:
+		// another enum whose class object the program holds has no values(). One whose
+		// enum the call names by a type variable takes them from every enum's class
+		// object, as getEnumConstants does.
+		String sets = """
+				import java.util.*;
+				import java.util.function.Function;
+				enum A { X } enum B { X } enum C { X } enum D { X }
+				class L15 {
+				    static <E extends Enum<E>> EnumSet<E> none(Class<E> type) { return %s; }
+				    public static void main(String[] args) {
+				        Function<Class<A>, EnumSet<A>> made = EnumSet::noneOf;
+				        Object held = D.X;
+				        System.out.println(made.apply(A.class) + " " + new EnumMap<B, String>(B.class) + " "
+				                + new EnumMap<C, String>(C.class) { } + held.getClass() + none(A.class));
+				    }
+				}
+				""";
+		assertThat(lower(sets.formatted("null"), "L15.java")).anyMatch(form -> form.startsWith("(DEFUN |A.values()|"))
+			.anyMatch(form -> form.startsWith("(DEFUN |B.values()|"))
+			.anyMatch(form -> form.startsWith("(DEFUN |C.values()|"))
+			.noneMatch(form -> form.startsWith("(DEFUN |D.values()|"));
+		assertThat(lower(sets.formatted("EnumSet.noneOf(type)"), "L15.java"))
+			.anyMatch(form -> form.startsWith("(DEFUN |D.values()|"));
 		// A pool's afterExecute is handed what a task threw, which takes a catch of
 		// every exception around each task: the class holding it is made only in a
 		// program one of whose classes declares a hook.
