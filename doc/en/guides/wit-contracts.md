@@ -298,7 +298,7 @@ fixed surface instead — **174 lines**, eleven `wasi:*` imports — which is on
 more reason to read the emitted world rather than assume it.) Let that same
 `greet` call `rontolisp:fetch` and the build silently adds four more imports
 (`wasi:http/types` and `wasi:http/client`, plus the `wasi:filesystem/types` and
-`wasi:cli/stderr` the HTTP path can reach), for **190 lines**;
+`wasi:cli/stderr` the HTTP path can reach), for **168 lines**;
 `rontolisp:tcp-*` pulls in `wasi:sockets` the same way. Short of
 installing `wasm-tools` and introspecting the binary, `--emit-wit` is the
 only way to see what you actually built — and it is precisely what a host,
@@ -519,8 +519,10 @@ A component imports **only the functions the program actually calls** (there
 is no core tree shaker on this path, so unused interface members are dropped
 from the import itself; `--no-prune` keeps them all), and
 [`--emit-wit`](#emitting-the-wit-world---emit-wit) writes that pruned
-interface into the component's world — where `wasm-tools component wit`
-agrees with it, byte for byte. A component that imports nothing is
+interface into the component's world — the type `wasm-tools component wit`
+prints, byte for byte unless the interface spells a type through a `type`
+alias or a `use` clause, which the emitted world keeps and the tool expands or
+inlines. A component that imports nothing is
 byte-identical to one built before any of this existed.
 
 That is also how components **compose**: a component that imports
