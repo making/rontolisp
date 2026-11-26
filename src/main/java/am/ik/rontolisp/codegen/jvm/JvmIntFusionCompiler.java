@@ -3667,9 +3667,8 @@ final class JvmIntFusionCompiler {
 	 * {@link #buildElement} answers nothing for. Where Lisp code can run on another
 	 * thread ({@code concurrent}) the packed shape's list holds every element boxed as
 	 * well, and the store stores the box too, as {@code _rmSet} does
-	 * ({@code .kb/adjustable-arrays.md}, "Where another thread can run the program's
-	 * Lisp"). A store answered false wrote nothing: the fused store's fallback stores
-	 * through the generic helpers.
+	 * ({@code .kb/adjustable-arrays.md}, "Representation"). A store answered false wrote
+	 * nothing: the fused store's fallback stores through the generic helpers.
 	 */
 	static JvmNumericRuntimeBuilder.NumericMethod buildPut(ConstantPool cp, boolean concurrent) {
 		ClassEntry arrayListClass = cp.classEntry("java/util/ArrayList");
