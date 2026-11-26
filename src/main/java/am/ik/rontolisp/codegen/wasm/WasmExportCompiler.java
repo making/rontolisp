@@ -120,9 +120,22 @@ final class WasmExportCompiler {
 	 * no {@code paramTypes} and no {@code returnType} (empty and void here), and every
 	 * reader of those asks {@link #wit()} first. {@code rontolisp:wit-export} writes it
 	 * for an export the flat designators do not cover, on a component
+	 * @param typedBy the WIT function of a <strong>flat</strong> export whose world names
+	 * types ({@code :wit} beside {@code :params}), or {@code null}: the wrapper is the
+	 * flat one, and a component types the export from the WIT -- an alias of a flat type
+	 * by its name, among the types its scope declares
 	 */
 	record Decl(String name, String exportName, List<BoundaryType> paramTypes, List<String> paramNames,
-			BoundaryType returnType, boolean async, @Nullable String iface, @Nullable WitExportSignature wit) {
+			BoundaryType returnType, boolean async, @Nullable String iface, @Nullable WitExportSignature wit,
+			@Nullable WitExportSignature typedBy) {
+
+		/**
+		 * {@return the WIT function a component types this export from}: a canonical
+		 * export's own, a flat one's when its world names types, else {@code null}
+		 */
+		@Nullable WitExportSignature typing() {
+			return this.wit != null ? this.wit : this.typedBy;
+		}
 
 		/**
 		 * {@return the number of arguments the exported function takes}
@@ -267,17 +280,25 @@ final class WasmExportCompiler {
 			}
 			i += 2;
 		}
+		WitExportSignature signature = null;
 		if (wit != null) {
-			// A canonical export: the function's types are the WIT's, found by the world,
-			// the interface and the label.
-			if (witWorld == null || witAt == null || params != null || returns != null) {
+			// The function's types are the WIT's, found by the world, the interface and
+			// the label.
+			if (witWorld == null || witAt == null) {
 				throw new UnsupportedOperationException(
-						"rontolisp:wasm-export :wit names a world (:wit-world) and a line (:wit-at) and takes no "
-								+ ":params or :returns: " + form.print());
+						"rontolisp:wasm-export :wit names a world (:wit-world) and a line (:wit-at): " + form.print());
 			}
 			String label = exportName == null ? unqualifiedMember(name) : exportName;
-			WitExportSignature signature = WitExportSignature.of(wit, witWorld, iface, label, witAt, octets);
-			return new Decl(name, label, List.of(), signature.paramNames(), BoundaryType.VOID, async, iface, signature);
+			signature = WitExportSignature.of(wit, witWorld, iface, label, witAt, octets);
+			if (params == null) {
+				// A canonical export: the WIT is all of its signature.
+				if (returns != null) {
+					throw new UnsupportedOperationException(
+							"rontolisp:wasm-export :wit without :params takes no :returns: " + form.print());
+				}
+				return new Decl(name, label, List.of(), signature.paramNames(), BoundaryType.VOID, async, iface,
+						signature, null);
+			}
 		}
 		List<BoundaryType> types = params == null ? List.of() : params;
 		if (paramNames != null && paramNames.size() != types.size()) {
@@ -287,7 +308,7 @@ final class WasmExportCompiler {
 		// Omitted :returns (like nil / '() / :void) means a void result.
 		return new Decl(name, exportName == null ? unqualifiedMember(name) : exportName, types,
 				paramNames == null ? defaultParamNames(types.size()) : paramNames,
-				returns == null ? BoundaryType.VOID : returns, async, iface, null);
+				returns == null ? BoundaryType.VOID : returns, async, iface, null, signature);
 	}
 
 	private static String stringOption(LispVal value, String keyword, LispCons form) {

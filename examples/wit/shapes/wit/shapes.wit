@@ -1,7 +1,8 @@
 package example:shapes@0.1.0;
 
 /// Plane geometry over the values a component's export carries beyond numbers and
-/// strings: records, an enum, a variant, lists, an option, a tuple and a result.
+/// strings: records, an enum, flags, a variant, lists, an option, a tuple and a
+/// result.
 interface geometry {
   record point {
     x: s32,
@@ -20,9 +21,16 @@ interface geometry {
     dot,
   }
 
+  flags style {
+    filled,
+    dashed,
+    bold,
+  }
+
   record tagged {
     shape: shape,
     color: color,
+    style: style,
     label: option<string>,
   }
 
@@ -41,6 +49,9 @@ interface geometry {
 
   /// One line describing a tagged shape.
   caption: func(t: tagged) -> string;
+
+  /// The style with bold set.
+  embolden: func(s: style) -> style;
 }
 
 world shapes {

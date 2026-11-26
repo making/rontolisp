@@ -196,8 +196,8 @@ function whose WIT result is a `result` returns the ok value and signals
 `rontolisp:wit-error` for the error arm — what a
 [provider](#importing-a-wit-interface-wit-import) does, so the functions of
 `shapes.lisp` also answer a `wit-import` of the interface on the interpreter
-and the JVM. The full table, and what is not carried (`flags`, handles,
-streams, a type of another interface), is in the
+and the JVM. The full table, and what is not carried (handles, streams), is in
+the
 [reference](../reference/functions/rontolisp-wit-export.md#compound-types);
 [`examples/wit/shapes`](https://github.com/making/rontolisp/tree/develop/examples/wit/shapes)
 is this world with a second component calling it.
@@ -559,8 +559,8 @@ A `list<T>` argument is a list or a vector (a JSON array `rontolisp:json-parse`
 read passes as it is), which the wrapper writes into linear memory as a
 canonical array: `wasi:keyvalue/batch`'s `get-many` takes `'("a" "b")`, its
 `set-many` `'(("a" "1") ("b" "2"))`. Anything else -- a dotted list, a string --
-signals `type-error` before the call, on every backend. `flags` does not cross
-in either direction yet.
+signals `type-error` before the call, on every backend. `flags` is a list of
+keywords, one per label that is set.
 
 One interface a component **cannot** bind is one it already imports for its
 own WASI surface — and that surface grows with what the program uses
@@ -690,7 +690,7 @@ Current limitations:
   `async func` under `:blocking t` only, as a
   [call that waits](wasm-nogc.md#calls-that-wait-async-func): the future its
   binding answers elsewhere has no value there.
-- Under `--component` `flags` anywhere is a compile error.
+- `flags` crosses a component, not a `--no-wasi` module.
 - The directive binds an **interface**. A world's `import` items are still
   not read.
 - It must appear at top level **before** the code that calls the interface —

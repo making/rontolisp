@@ -239,6 +239,87 @@ class WitOracleE2eTest {
 						+ "func(areas: list<f64>) -> summary;\n  export example:shapes/geometry@0.1.0;")
 				.contains("    bounds: func(ps: list<point>) -> option<tuple<point, point>>;");
 		}
+		// A world that names types is the world its component is: `wasm-tools component
+		// targets` holds the component against the WIT. A type of another interface is
+		// the using scope's own (a value type is structural: no instance is imported),
+		// an alias of a flat type is declared though its export's wrapper is the flat
+		// one (on the scalar backend too), and an interface of types alone is exported.
+		Files.writeString(this.tempDir.resolve("uses.wit"), """
+				package example:uses@0.1.0;
+
+				interface geometry {
+				  record unused { a: string }
+				  record point { x: coord, y: coord }
+				  type coord = s32;
+				  enum color { red, green }
+				  type id = u32;
+				}
+
+				interface shapes {
+				  record segment { a: point, b: point, c: tint }
+				  use geometry.{point, color as tint};
+				  flip: func(p: point) -> point;
+				  len: func(s: segment) -> s32;
+				}
+
+				interface ids {
+				  use geometry.{id};
+				  next: func(i: id) -> id;
+				}
+
+				world typed {
+				  use geometry.{point, id};
+				  record pair { a: point, b: id }
+				  export geometry;
+				  export shapes;
+				  export ids;
+				  export head: func(p: pair) -> point;
+				  export inc: func(i: id) -> id;
+				}
+
+				world flat {
+				  export ids;
+				}
+				""");
+		String functions = """
+				(defun flip (p) (list :x (getf p :y) :y (getf p :x)))
+				(defun len (s) (+ (getf (getf s :a) :x) (getf (getf s :b) :y)))
+				(defun next (i) (+ i 1))
+				(defun head (p) (getf p :a))
+				(defun inc (i) (+ i 1))
+				""";
+		for (String world : List.of("typed", "flat")) {
+			Path lisp = this.tempDir.resolve(world + ".lisp");
+			Files.writeString(lisp, ("flat".equals(world) ? "(defun next (i) (+ i 1))\n" : functions)
+					+ "(rontolisp:wit-export \"uses.wit\" :world " + world + ")\n");
+			List<List<String>> outputs = new java.util.ArrayList<>(
+					List.of(List.of("--component"), List.of("--component", "--no-wasi")));
+			if ("flat".equals(world)) {
+				// the scalar backend's component, which carries the flat types alone
+				outputs.add(List.of("--component", "--no-gc"));
+			}
+			for (List<String> shape : outputs) {
+				byte[] exporting = compileFileViaCli(lisp, world, shape);
+				String wit = Files.readString(this.tempDir.resolve(world + ".wit"));
+				assertThat(wit).as(world + shape).isEqualTo(oracle(exporting));
+				Process targets = new ProcessBuilder("wasm-tools", "component", "targets",
+						this.tempDir.resolve("uses.wit").toString(), "--world", world,
+						this.tempDir.resolve(world + ".wasm").toString())
+					.redirectErrorStream(true)
+					.start();
+				String said = new String(targets.getInputStream().readAllBytes(), StandardCharsets.UTF_8);
+				assertThat(targets.waitFor()).as(world + shape + said).isZero();
+				if ("typed".equals(world)) {
+					assertThat(wit).contains(
+							"  record point {\n    x: s32,\n    y: s32,\n  }\n\n  type id = u32;\n\n  record pair {")
+						.contains("  export head: func(p: pair) -> point;\n  export inc: func(i: id) -> id;\n"
+								+ "  export example:uses/geometry@0.1.0;\n  export example:uses/shapes@0.1.0;\n"
+								+ "  export example:uses/ids@0.1.0;")
+						.contains("  interface ids {\n    type id = u32;\n\n    next: func(i: id) -> id;\n  }")
+						.contains("    enum tint {\n      red,\n      green,\n    }");
+				}
+			}
+		}
 	}
 
 	@Test
@@ -274,7 +355,9 @@ class WitOracleE2eTest {
 			assertThat(printed).as(exporter.getKey())
 				.isEqualTo(interpreted.toString(StandardCharsets.UTF_8))
 				.contains("bounds   ((:X 1 :Y 1) (:X 3 :Y 9))")
-				.contains("area     \"a dot has no area\"");
+				.contains("area     \"a dot has no area\"")
+				.contains("caption  \"a filled bold green dot called origin\"")
+				.contains("embolden (:DASHED :BOLD)");
 		}
 	}
 

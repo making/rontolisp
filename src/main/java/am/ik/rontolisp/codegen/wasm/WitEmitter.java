@@ -183,6 +183,12 @@ final class WitEmitter {
 		// instance. A flat export prints as an inline `export name: func(...)`.
 		List<WasmExportCompiler.Decl> flat = new ArrayList<>();
 		LinkedHashMap<String, List<WasmExportCompiler.Decl>> byInterface = new LinkedHashMap<>();
+		// The interfaces of a world that names types, in world order, one of types
+		// alone among them (the component's own order: WasmComponentBuilder).
+		Map<String, WitExportTypes.Scope> worldInterfaces = WitExportSignature.exportedInterfaces(exportDecls);
+		for (String ifaceId : worldInterfaces.keySet()) {
+			byInterface.put(ifaceId, new ArrayList<>());
+		}
 		for (WasmExportCompiler.Decl decl : exportDecls) {
 			if (decl.iface() == null) {
 				flat.add(decl);
@@ -204,11 +210,11 @@ final class WitEmitter {
 				}
 			}
 			items.addAll(firstExport, importItems);
-			// A canonical export of the world's own function declares the world's named
-			// types (type imports of the component), which the tool prints with the
-			// imports.
+			// An export of the world's own function that is typed from its WIT declares
+			// the world's named types (type imports of the component), which the tool
+			// prints with the imports.
 			for (WasmExportCompiler.Decl decl : flat) {
-				WitExportSignature wit = decl.wit();
+				WitExportSignature wit = decl.typing();
 				if (wit != null) {
 					items.addAll(firstExport + importItems.size(), WitExportTypes.declared(wit.abi()));
 					break;
@@ -229,7 +235,7 @@ final class WitEmitter {
 		// exported-interface package, defining the interfaces the world's `export <id>;`
 		// references -- the tail wasm-tools prints for a component's exported instances.
 		List<WitItem> extraBlocks = new ArrayList<>(importPackageBlocks);
-		extraBlocks.addAll(exportPackageBlocks(byInterface, forceAsync));
+		extraBlocks.addAll(exportPackageBlocks(byInterface, worldInterfaces, forceAsync));
 		if (!extraBlocks.isEmpty()) {
 			List<WitItem> items = new ArrayList<>(document.items());
 			items.addAll(extraBlocks);
@@ -462,18 +468,20 @@ final class WitEmitter {
 	// block), each defining the interface's exported functions -- the reconstruction of
 	// the component's exported instance type wasm-tools prints.
 	private static List<WitItem> exportPackageBlocks(LinkedHashMap<String, List<WasmExportCompiler.Decl>> byInterface,
-			boolean forceAsync) {
+			Map<String, WitExportTypes.Scope> worldInterfaces, boolean forceAsync) {
 		LinkedHashMap<WitPackageName, List<WitItem>> byPackage = new LinkedHashMap<>();
 		byInterface.forEach((ifaceId, decls) -> {
 			List<WitItem> members = new ArrayList<>();
-			// An interface with a canonical member exports every type it defines, ahead
-			// of its functions.
-			for (WasmExportCompiler.Decl decl : decls) {
-				WitExportSignature wit = decl.wit();
-				if (wit != null) {
-					members.addAll(WitExportTypes.declared(wit.abi()));
-					break;
-				}
+			// An interface with a member typed from its WIT, or of types alone, exports
+			// every type it defines, ahead of its functions.
+			WitExportTypes.Scope scope = decls.stream()
+				.map(WasmExportCompiler.Decl::typing)
+				.filter(java.util.Objects::nonNull)
+				.map(WitExportSignature::scope)
+				.findFirst()
+				.orElse(decls.isEmpty() ? worldInterfaces.get(ifaceId) : null);
+			if (scope != null) {
+				members.addAll(WitExportTypes.declared(scope.abi()));
 			}
 			for (WasmExportCompiler.Decl decl : decls) {
 				members.add(new WitItem.FuncDef(WitMeta.none(), decl.exportName(), WitItem.FuncKind.PLAIN,
@@ -516,10 +524,12 @@ final class WitEmitter {
 	}
 
 	private static WitFunc witFunc(WasmExportCompiler.Decl decl, boolean forceAsync) {
-		WitExportSignature wit = decl.wit();
+		WitExportSignature wit = decl.typing();
 		if (wit != null) {
-			// a canonical export's function is the WIT's own, type names and all
-			return wit.func();
+			// the function of an export typed from its WIT is the WIT's own, type names
+			// and all
+			WitFunc func = wit.func();
+			return forceAsync && !func.async() ? new WitFunc(true, func.params(), func.result()) : func;
 		}
 		List<WitFunc.Param> params = new ArrayList<>();
 		List<am.ik.rontolisp.compiler.BoundaryType> paramTypes = decl.paramTypes();

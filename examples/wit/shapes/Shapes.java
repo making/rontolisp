@@ -7,6 +7,7 @@
 //
 //   record           a record                          new Point(1, 2)
 //   enum             an enum                           Color.GREEN
+//   flags            a Set of an enum                  EnumSet.of(Style.FILLED, Style.BOLD)
 //   variant          a sealed interface of records     new Shape.Circle(2.0), new Shape.Dot()
 //   list<T>          a List
 //   tuple            a record of the class's own       new Corners(low, high)
@@ -25,8 +26,10 @@
 // implements it -- see README.md.
 
 import java.util.ArrayList;
+import java.util.EnumSet;
 import java.util.List;
 import java.util.Optional;
+import java.util.Set;
 
 import am.ik.rontolisp.wit.WitException;
 import am.ik.rontolisp.wit.WitExport;
@@ -69,7 +72,13 @@ public class Shapes {
             }
         }
 
-        public record Tagged(Shape shape, Color color, Optional<String> label) {
+        public enum Style {
+
+            FILLED, DASHED, BOLD
+
+        }
+
+        public record Tagged(Shape shape, Color color, Set<Style> style, Optional<String> label) {
         }
 
         // tuple<point, point>: a record of those components, named as the class likes
@@ -126,7 +135,20 @@ public class Shapes {
                 case GREEN -> "green";
                 case BLUE -> "blue";
             };
-            return "a " + color + " " + shape + tagged.label().map(label -> " called " + label).orElse("");
+            StringBuilder styles = new StringBuilder();
+            for (Style style : Style.values()) {
+                if (tagged.style().contains(style)) {
+                    styles.append(style.name().toLowerCase()).append(' ');
+                }
+            }
+            return "a " + styles + color + " " + shape + tagged.label().map(label -> " called " + label).orElse("");
+        }
+
+        // WIT: embolden: func(s: style) -> style
+        public static Set<Style> embolden(Set<Style> s) {
+            Set<Style> bold = EnumSet.of(Style.BOLD);
+            bold.addAll(s);
+            return bold;
         }
     }
 }

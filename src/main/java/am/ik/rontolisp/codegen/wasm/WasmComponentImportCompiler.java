@@ -7,6 +7,7 @@ import java.util.Objects;
 
 import am.ik.rontolisp.LispCons;
 import am.ik.rontolisp.LispNames;
+import am.ik.rontolisp.LispNil;
 import am.ik.rontolisp.LispString;
 import am.ik.rontolisp.LispSymbol;
 import am.ik.rontolisp.LispVal;
@@ -177,9 +178,12 @@ final class WasmComponentImportCompiler {
 	 * @param octets whether a {@code list<u8>} a future's payload carries lifts as a
 	 * packed {@code (unsigned-byte 8)} vector ({@code :octets t}); a byte stream's chunk
 	 * is one either way
+	 * @param blocking whether a read waits where it is in asyncMode too (a
+	 * {@code :blocking t} directive's, the entry's trailing {@code :blocking}), as a read
+	 * of values or of a future always does, rather than answering a pending future
 	 */
 	record Async(String lispName, String module, String field, String alias, AsyncOp op, WitCanonicalAbi abi,
-			WitType type, boolean octets) {
+			WitType type, boolean octets, boolean blocking) {
 
 		/**
 		 * Whether a read's lift calls {@code _bytes_from_mem}: a future's payload, or a
@@ -623,7 +627,10 @@ final class WasmComponentImportCompiler {
 				if (":ASYNC".equals(keyword.name())) {
 					if (!(rest.car() instanceof LispString alias) || !(rest.cdr() instanceof LispCons opCons)
 							|| !(opCons.car() instanceof LispString op) || !(opCons.cdr() instanceof LispCons nameCons)
-							|| !(nameCons.car() instanceof LispString asyncName)) {
+							|| !(nameCons.car() instanceof LispString asyncName)
+							|| !(nameCons.cdr() instanceof LispNil
+									|| nameCons.cdr() instanceof LispCons last && last.car() instanceof LispSymbol flag
+											&& ":BLOCKING".equals(flag.name()) && last.cdr() instanceof LispNil)) {
 						throw new UnsupportedOperationException(
 								"Malformed internal component-import member: " + items.get(i).print());
 					}
@@ -635,7 +642,7 @@ final class WasmComponentImportCompiler {
 					AsyncOp asyncOp = AsyncOp.of(op.value());
 					asyncs.add(new Async(asyncName.value(), ifaceId.value(),
 							"[async-" + asyncOp.suffix + "]" + alias.value(), alias.value(), asyncOp, target.abi(),
-							target.type(), octets));
+							target.type(), octets, nameCons.cdr() instanceof LispCons));
 					continue;
 				}
 				if (!":DROP".equals(keyword.name()) || !(rest.car() instanceof LispString resource)
@@ -1580,6 +1587,10 @@ final class WasmComponentImportCompiler {
 						case WitItem.EnumDef ignored -> emitLiftVariantFlats(abi, t, flats);
 						case WitItem.VariantDef ignored -> emitLiftVariantFlats(abi, t, flats);
 						case WitItem.RecordDef ignored -> emitLiftRecordFlats(abi, t, flats, true);
+						case WitItem.FlagsDef flags -> {
+							pushFlat(flats.get(0), Type.I32);
+							emitLiftFlags(flags);
+						}
 						default -> throw resultUnsupported(named.name());
 					}
 				}
@@ -1759,7 +1770,7 @@ final class WasmComponentImportCompiler {
 						emitValueStreamRead(async);
 					}
 					else if (async.stream()) {
-						emitStreamRead(async.handleElement());
+						emitStreamRead(async.handleElement(), async.blocking());
 					}
 					else {
 						emitFutureRead(async);
@@ -1814,8 +1825,9 @@ final class WasmComponentImportCompiler {
 		// is
 		// dropped (EOF). The completion value is (count << 4) | status; a read
 		// completes with at least one byte unless the writer is gone, so count 0 =
-		// EOF. Outside asyncMode a BLOCKED read parks the whole task on the
-		// waitable-set; in asyncMode it returns a PENDING future instead -- registered
+		// EOF. Outside asyncMode, and for a :blocking directive's read, a BLOCKED read
+		// parks the whole task on the waitable-set; in asyncMode it returns a PENDING
+		// future instead -- registered
 		// with the scheduler (kind 1) and settled by the EVENT_STREAM_READ dispatch in
 		// _sched_loop -- so other tasks' frames keep running while the chunk is in
 		// flight. The chunk buffer must outlive this call, so it never comes from the
@@ -1830,12 +1842,12 @@ final class WasmComponentImportCompiler {
 		// and another stream.read of the handle traps -- so every completion path
 		// latches the handle (streamEndedGlobal), and a read of a latched handle
 		// answers nil without touching it.
-		private void emitStreamRead(boolean handleElem) {
+		private void emitStreamRead(boolean handleElem, boolean blocking) {
 			if (this.streamEndedGlobal >= 0) {
 				emitEndedReadReturnsNil();
 			}
 			WasmFutureRuntimeBuilder.Sched wiring = this.sched;
-			if (wiring == null) {
+			if (wiring == null || blocking) {
 				emitStagingPrologue();
 				int buf = allocRetArea(ASYNC_READ_CHUNK);
 				int n = allocI32();
@@ -2566,6 +2578,7 @@ final class WasmComponentImportCompiler {
 						case WitItem.EnumDef ignored -> emitLowerVariantParam(abi, t, slot);
 						case WitItem.VariantDef ignored -> emitLowerVariantParam(abi, t, slot);
 						case WitItem.RecordDef ignored -> emitLowerRecordParam(abi, t, slot, true);
+						case WitItem.FlagsDef flags -> emitLowerFlags(flags, slot);
 						default -> throw paramUnsupported(named.name());
 					}
 				}
@@ -2576,6 +2589,80 @@ final class WasmComponentImportCompiler {
 		private void emitLowerHandleParam(int slot) {
 			getLocal(slot);
 			WasmEmitHelper.castI31GetS(this.ctx);
+		}
+
+		// Flags: a list of keywords, one per label that is set, against the i32 whose
+		// bit i is label i (the canonical ABI's packing, in memory and flattened). Leaves
+		// the i32 of the list in the slot on the stack. A keyword that names no label
+		// traps, as one that names no case of a variant does, and so does anything but
+		// a list; a label named twice is set once.
+		private void emitLowerFlags(WitItem.FlagsDef flags, int slot) {
+			int bits = allocI32();
+			int rest = this.ctx.allocTemp();
+			int label = this.ctx.allocTemp();
+			i32Const(0);
+			setLocal(bits);
+			getLocal(slot);
+			setLocal(rest);
+			this.w.write(Instruction.BLOCK, 0x40);
+			this.w.write(Instruction.LOOP, 0x40);
+			getLocal(rest);
+			this.w.write(Instruction.REF_IS_NULL);
+			this.w.write(Instruction.BR_IF);
+			this.w.writeUnsignedLeb128(1);
+			getLocal(rest);
+			structGet(WasmLispCompiler.TYPE_CONS, 0);
+			setLocal(label);
+			int id = emitTagId(label);
+			int labels = flags.cases().size();
+			for (int i = 0; i < labels; i++) {
+				getLocal(id);
+				i32Const(this.ctx.stringTable
+					.addString(":" + flags.cases().get(i).name().toUpperCase(java.util.Locale.ROOT))
+					.offset());
+				this.w.write(Instruction.I32_EQ);
+				this.w.write(Instruction.IF, 0x40);
+				getLocal(bits);
+				i32Const(1 << i);
+				this.w.write(Instruction.I32_OR);
+				setLocal(bits);
+				this.w.write(Instruction.ELSE);
+			}
+			this.w.write(Instruction.UNREACHABLE);
+			for (int i = 0; i < labels; i++) {
+				this.w.write(Instruction.END);
+			}
+			getLocal(rest);
+			structGet(WasmLispCompiler.TYPE_CONS, 1);
+			setLocal(rest);
+			this.w.write(Instruction.BR);
+			this.w.writeUnsignedLeb128(0);
+			this.w.write(Instruction.END);
+			this.w.write(Instruction.END);
+			getLocal(bits);
+		}
+
+		// The flags the i32 on the stack holds: the keywords of its set labels, in label
+		// order. A bit past the labels is not read (the canonical ABI's rule).
+		private void emitLiftFlags(WitItem.FlagsDef flags) {
+			int bits = allocI32();
+			int list = this.ctx.allocTemp();
+			setLocal(bits);
+			refNullEq();
+			setLocal(list);
+			for (int i = flags.cases().size() - 1; i >= 0; i--) {
+				getLocal(bits);
+				i32Const(1 << i);
+				this.w.write(Instruction.I32_AND);
+				this.w.write(Instruction.IF, 0x40);
+				WasmEmitHelper.compileStringLiteral(
+						":" + flags.cases().get(i).name().toUpperCase(java.util.Locale.ROOT), this.ctx);
+				getLocal(list);
+				newCons();
+				setLocal(list);
+				this.w.write(Instruction.END);
+			}
+			getLocal(list);
 		}
 
 		// A variant-shaped parameter (variant / enum / option / result): flats are
@@ -3127,6 +3214,13 @@ final class WasmComponentImportCompiler {
 						case WitItem.EnumDef ignored -> emitLowerVariantAt(abi, t, slot, base, offset);
 						case WitItem.VariantDef ignored -> emitLowerVariantAt(abi, t, slot, base, offset);
 						case WitItem.RecordDef ignored -> emitLowerRecordAt(abi, t, slot, base, offset, true);
+						case WitItem.FlagsDef flags -> {
+							int size = WitCanonicalAbi.flagsSize(flags);
+							getLocal(base);
+							emitLowerFlags(flags, slot);
+							store(offset, size == 1 ? Instruction.I32_STORE8
+									: size == 2 ? Instruction.I32_STORE16 : Instruction.I32_STORE, size >> 1);
+						}
 						default -> throw paramUnsupported(named.name());
 					}
 				}
@@ -3353,6 +3447,7 @@ final class WasmComponentImportCompiler {
 						case WitItem.EnumDef ignored -> emitLiftVariantFromStackDisc(abi, t);
 						case WitItem.VariantDef ignored -> emitLiftVariantFromStackDisc(abi, t);
 						case WitItem.RecordDef ignored -> emitLiftRecordFlat(abi, t, true);
+						case WitItem.FlagsDef flags -> emitLiftFlags(flags);
 						default -> throw resultUnsupported(named.name());
 					}
 				}
@@ -3514,6 +3609,12 @@ final class WasmComponentImportCompiler {
 						case WitItem.RecordDef ignored -> emitLiftRecordAt(abi, t, base, offset, true);
 						case WitItem.VariantDef ignored -> emitLiftVariantAt(abi, t, base, offset);
 						case WitItem.EnumDef ignored -> emitLiftVariantAt(abi, t, base, offset);
+						case WitItem.FlagsDef flags -> {
+							int size = WitCanonicalAbi.flagsSize(flags);
+							load(base, offset, size == 1 ? Instruction.I32_LOAD8_U
+									: size == 2 ? Instruction.I32_LOAD16_U : Instruction.I32_LOAD, size >> 1);
+							emitLiftFlags(flags);
+						}
 						default -> throw resultUnsupported(named.name());
 					}
 				}

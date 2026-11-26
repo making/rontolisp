@@ -228,7 +228,9 @@ class WitExportDirectiveTest {
 		// An export whose types the flat designators do not cover is the WIT's own
 		// function: the form names its place -- the world, the label, the line -- and
 		// carries the text, and the backend marshals it through the canonical ABI. A
-		// type alias of a flat type stays flat, the hand-written form.
+		// type alias of a flat type stays flat, the hand-written form with the WIT
+		// beside it: a component of a world that names types declares them, and types
+		// each export from the WIT.
 		String wit = """
 				package root:component;
 
@@ -255,7 +257,32 @@ class WitExportDirectiveTest {
 					"(DEFUN |longest%wit-export| (P0) (CONS :OK (|longest| P0)))",
 					"(RONTOLISP:WASM-EXPORT '|longest%wit-export| :AS \"longest\" :WIT \"...\" :WIT-WORLD \"analyzer\""
 							+ " :WIT-AT \"world.wit:8\" :OCTETS T :PARAM-NAMES '(|ws|))",
-					"(RONTOLISP:WASM-EXPORT '|size| :PARAMS '(:STRING) :PARAM-NAMES '(|s|) :RETURNS :S32)");
+					"(RONTOLISP:WASM-EXPORT '|size| :PARAMS '(:STRING) :WIT \"...\" :WIT-WORLD \"analyzer\""
+							+ " :WIT-AT \"world.wit:9\" :PARAM-NAMES '(|s|) :RETURNS :S32)");
+		// The scalar backend's component declares the types too. A core module has
+		// none to declare, and the interpreter and the JVM compile no export: the
+		// hand-written form alone.
+		String aliased = """
+				package root:component;
+
+				interface ops {
+				  type id = u32;
+				  next: func(x: id) -> id;
+				}
+
+				world analyzer {
+				  export ops;
+				}
+				""";
+		for (Backend backend : Backend.values()) {
+			boolean component = backend == Backend.WASM_COMPONENT || backend == Backend.WASM_NO_GC_COMPONENT;
+			assertThat(printed(lower(aliased, backend, Map.of("next", List.of("x")))).replaceAll(":WIT \"[^\"]*\"",
+					":WIT \"...\""))
+				.as(backend.name())
+				.isEqualTo("(RONTOLISP:WASM-EXPORT '|next| :PARAMS '(:U32) "
+						+ (component ? ":WIT \"...\" :WIT-WORLD \"analyzer\" :WIT-AT \"world.wit:9\" " : "")
+						+ ":PARAM-NAMES '(|x|) :RETURNS :U32 :INTERFACE \"root:component/ops\")");
+		}
 		// The text is the whole document, which the backend reads no file for.
 		assertThat(forms.get(0).print()).contains("record word {").contains("world analyzer {");
 		// A program holding the WIT run time may signal rontolisp:wit-error: the error
@@ -282,30 +309,66 @@ class WitExportDirectiveTest {
 			.hasMessageContaining("BYTE_STRING")
 			// a message cites no .todo file, which is deleted the moment the work lands
 			.hasMessageNotContaining(".todo");
-		// What no export carries is named as it nests, and the result as such.
+		// What no export carries is named as it nests, and the result as such. A type
+		// of another interface is carried as the scope's own (a value type is
+		// structural), all but what holds a resource, which is nominal.
+		String clock = """
+				package root:component;
+
+				interface clock {
+				  type duration = u64;
+				  record span { from: instant, to: instant }
+				  record instant { seconds: duration }
+				  resource timer;
+				  record alarm { at: instant, by: borrow<timer> }
+				}
+
+				interface timers {
+				  use clock.{span};
+				  longer: func(a: span, b: span) -> span;
+				}
+
+				world analyzer {
+				  use clock.{%s};
+				  flags perms { r, w }
+				  export count-vowels: %s;
+				}
+				""";
 		for (var refusal : Map
-			.of("func(p: perms)", "the WIT type of p holds the flags 'perms'", "func() -> list<stream<u8>>",
-					"the WIT type of the result holds a stream", "func(d: option<duration>)",
-					"the WIT type of d holds 'duration', a type of another interface (a use clause)")
+			.of("func() -> list<stream<u8>>", "the WIT type of the result holds a stream", "func(d: option<alarm>)",
+					"the WIT type of d holds a handle of the resource 'timer'")
 			.entrySet()) {
-			assertThatThrownBy(() -> lower("""
-					package root:component;
-
-					interface clock {
-					  type duration = u64;
-					}
-
-					world analyzer {
-					  use clock.{duration};
-					  flags perms { r, w }
-					  export count-vowels: %s;
-					}
-					""".formatted(refusal.getKey()), Backend.WASM_COMPONENT,
+			assertThatThrownBy(() -> lower(clock.formatted("duration, alarm", refusal.getKey()), Backend.WASM_COMPONENT,
 					Map.of("count-vowels", refusal.getKey().contains("()") ? List.of() : List.of("p"))))
 				.isInstanceOf(UnsupportedOperationException.class)
-				.hasMessageStartingWith("world.wit:10: export 'count-vowels': " + refusal.getValue())
+				.hasMessageStartingWith("world.wit:19: export 'count-vowels': " + refusal.getValue())
 				.hasMessageContaining("which an export does not carry");
 		}
+		for (String carried : List.of("func(d: option<instant>) -> duration", "func(p: perms) -> perms")) {
+			assertThat(printed(lower(clock.formatted("duration, instant", carried), Backend.WASM_COMPONENT,
+					Map.of("count-vowels", List.of("d")))))
+				.startsWith("(RONTOLISP:WASM-EXPORT '|count-vowels| :AS \"count-vowels\" :WIT ");
+		}
+		// A world's types are imports of the component: a record a used type holds is
+		// one the clause names, where an interface (whose types are its exports) brings
+		// it under its own name.
+		assertThatThrownBy(() -> lower(clock.formatted("span", "func(d: span) -> u64"), Backend.WASM_COMPONENT,
+				Map.of("count-vowels", List.of("d"))))
+			.hasMessage("world.wit:17: use clock brings the type 'instant', which the world does not name (a world's "
+					+ "types are imports of the component); name it in the clause ('instant')");
+		assertThat(printed(lower(
+				clock.formatted("duration", "func(d: duration) -> u64")
+					.replace("export count-vowels", "export timers;\n  export count-vowels"),
+				Backend.WASM_COMPONENT, Map.of("count-vowels", List.of("d"), "longer", List.of("a", "b")))))
+			.contains("(RONTOLISP:WASM-EXPORT '|longer| :AS \"longer\" :WIT ");
+		// An interface's resource is an export this boundary does not make, and an
+		// interface of neither a function nor a type exports nothing.
+		assertThatThrownBy(() -> lower(
+				clock.formatted("duration", "func(d: duration) -> u64")
+					.replace("export count-vowels", "export clock;\n  export count-vowels"),
+				Backend.WASM_COMPONENT, Map.of("count-vowels", List.of("d"))))
+			.hasMessageStartingWith("world.wit:19: interface 'root:component/clock' declares the resource 'timer', "
+					+ "and an export carries no resource");
 		// An async export stays on the flat types.
 		assertThatThrownBy(
 				() -> lower(world("  export count-vowels: async func(s: list<u8>) -> s32;"), Backend.WASM_COMPONENT))
