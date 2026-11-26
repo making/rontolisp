@@ -49,9 +49,10 @@ class JvmRuntimeClassFilesTest {
 					JvmFetchRuntimeBuilder.RUNTIME_CLASS_FILES, JvmAsyncRuntimeBuilder.RUNTIME_CLASS_FILES,
 					JvmLispCompiler.INFLATE_RUNTIME_CLASS_FILES, JvmLispCompiler.CONDITION_VARIABLE_RUNTIME_CLASS_FILES,
 					JvmLispCompiler.PROCESS_RUNTIME_CLASS_FILES, JvmLispCompiler.CONS_CAS_RUNTIME_CLASS_FILES,
-					JvmSignalThrow.RUNTIME_CLASS_FILES, JvmInterruptPoll.RUNTIME_CLASS_FILES,
-					JvmLispCompiler.TERMINAL_RUNTIME_CLASS_FILES, JvmLispCompiler.FILE_MODES_RUNTIME_CLASS_FILES,
-					JvmIoRuntimeBuilder.RUNTIME_CLASS_FILES, JvmIoRuntimeBuilder.CHAR_FILE_RUNTIME_CLASS_FILES,
+					JvmLispCompiler.STUB_CLASSES_RUNTIME_CLASS_FILES, JvmSignalThrow.RUNTIME_CLASS_FILES,
+					JvmInterruptPoll.RUNTIME_CLASS_FILES, JvmLispCompiler.TERMINAL_RUNTIME_CLASS_FILES,
+					JvmLispCompiler.FILE_MODES_RUNTIME_CLASS_FILES, JvmIoRuntimeBuilder.RUNTIME_CLASS_FILES,
+					JvmIoRuntimeBuilder.CHAR_FILE_RUNTIME_CLASS_FILES,
 					JvmIoRuntimeBuilder.STRING_INPUT_RUNTIME_CLASS_FILES, JvmSocketRuntimeBuilder.RUNTIME_CLASS_FILES,
 					JvmJavaImplementations.RUNTIME_CLASS_FILES, JvmJavaImplementations.VIEW_RUNTIME_CLASS_FILES)
 				.flatMap(List::stream)

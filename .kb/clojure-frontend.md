@@ -66,6 +66,7 @@ with `deviating(...)`, never globally, so the row fails if either side moves. It
 | list, seq | a CL list; lazy `(:C%LAZY cell)` | "Laziness" |
 | atom, volatile, ref, agent | `(:C%ATOM #(value))`, a volatile `#(value :C%VOLATILE)`; `#(value nil validator state watches)` for a validated ref, an agent, and every atom and ref of a program that may give a reference a validator or watch | one cell shape, so STM verbs accept atoms; `volatile?` reads the length 2, so slot 1 of the longer cells stays nil ("State") |
 | record / deftype / reify | `(:C%RECORD tag fields table class)` / `(:C%TYPE ...)` / a fresh `:C%REIFY` tag | "Dispatch", "Host interfaces"; a record's or deftype's tag is its class value ("Record and deftype class values") |
+| class value (`class`, a class literal) | the host's `java.lang.Class` (a `clojure.lang` class a stub class) where the program reaches the host, else `(:C%CLASS name)` | "Class values"; the kind keywords stay the dispatch tags |
 | `#"re"` | `(:C%PATTERN stamp ...)` | the stamp is a gensym, so `=` is identity like the oracle |
 | byte array (`byte-array`, `.getBytes`) | `(:C%BYTES octets)` | "Byte arrays" |
 | transient | `(:C%TRANSIENT #(kind data count live))` | "Transients" |
@@ -1053,8 +1054,8 @@ for line. The first probes' gaps are pinned by clojure-spec cases named after ea
 | aero 1.1.6 | = | = | = | = | wasm: `System/getenv` reads the WASI environment, `System/getProperty` of a computed key answers like a host without the property ("HashMap construction") |
 | core.logic 1.1.1 | = but 1 | = but 1 | = but 1 | = but 1 | `appendo`'s line prints `nil` for the oracle's `()` (the pinned empty-list deviation); wasm warns `JAVA:CALL`/`JAVA:STATIC` off the path |
 | rewrite-clj 1.3.59 | = | = | = | = | wasm warns `JAVA:STATIC`/`JAVA:NEW` off the path |
-| core.match 1.1.1 | stop | stop | stop | stop | macro time: `Unsupported tag type:clojure.lang.IPersistentVector`, `(class? the-tag)` of a class keyword being false (`.todo/h09`); past that hunk `=` |
-| schema 1.4.2 | stop | stop | stop | stop | seven lines (the `enum` one in the pinned set order), then `Assert failed: Cannot declare class schema for non-class :keyword`, `(class? (class f))` of a fn (`.todo/h09`); past that hunk the oracle's lines but the set-order one; wasm warns `JAVA:STATIC` off the path |
+| core.match 1.1.1 | = | = | = | = | a 7-line probe (vector, rest, map, `:or`, guard patterns), 2026-11-26 |
+| schema 1.4.2 | = | = | = | = | an 8-line probe (`validate`, `check`, `s/defrecord`, `s/defn` with fn validation, `explain`), 2026-11-26; wasm warns `JAVA:STATIC` off the path |
 | persistent-sorted-set 0.3.1 | = | = | = | = | read from its `.cljs` port ("ClojureScript ports"); `seek` of `(seq set)` takes no `Iter` here (the seq view), so the probe seeks a `slice` |
 | datascript 1.8.1 | = | = | = | = | its indexes are persistent-sorted-set's port, `datascript.storage` its storage-less `.cljs` ("ClojureScript ports"); wasm warns `JAVA:CALL`/`JAVA:NEW`/`JAVA:STATIC` off the path |
 | specter 1.1.6 | = | = | = | = | riddley is the built-in one ("riddley (j27)"); without a host, `MutableCell` and `Util` are read from their class files ("Portable reading of a dependency's Java class"); wasm warns `JAVA:NEW`/`JAVA:FIELD` off the path. A path closing over a local compiles through `eval` at its first call, refused on wasm ("Lowering at run time"); `setval` of `NONE` over a lazy seq answers it reversed on every backend (`(empty (range 3))` is nil here, so its `list?` arm misses) |
@@ -1079,22 +1080,18 @@ Probe `{:deps {org.clojure/core.async {:mvn/version "1.6.681"}}}`,
   `Compiler/LOADER` bound to `(RT/makeClassLoader)` (`No such class: clojure.lang.Compiler`),
   then (3) `build-ns-map`'s `ns-map` over `(all-ns)`, refused for a computed namespace at macro
   time and re-run after every expansion of a macro outside `ns-safe-macro`.
-- **Class values block the analyzer.** `analyze` run at run time on the interpreter (a
-  computed `ns-map` lowers there, so (2) and (3) are out of the way) over a copy with
-  `RT/baseLoader`, `RT/classForName` and `Compiler/LOADER` patched to host calls: `1`,
-  `(let [x 1] x)`, `(:a {:a 1})`, `(throw ...)`, `'(1 2)`, a var, `case` and `letfn` analyze;
-  every form holding a string, keyword, vector, map, set or fn refuses in `validate`,
-  `Class not found: :string` (`:keyword`, `:vector`, `:clojure.lang.AFunction`, `:map`,
-  `:set`): `annotate-tag` tags a constant with `(class val)`, a kind keyword here, which
-  `validate-tag`'s `maybe-class`, a multimethod on `class` with `Class`, `String` and `Symbol`
-  methods, sends to its nil `:default` (`(class :string)` is `:keyword`). With that throw
-  patched out too, an import (`catch Exception`, `(instance? String x)`), a `Class/member`
-  (`Math/PI`) and map destructuring's `PersistentArrayMap/createAsIfByAssoc` refuse next
-  (`ns-map` maps an import to a symbol of its class where the oracle maps the `Class`, and no
-  `clojure.lang` class is on this class path); `members*` calls `.getName` on a nil
-  `(maybe-class tag)`; `box` and `infer-tag` call `.isAssignableFrom` on tags. So the passes
-  need every class value to be a `java.lang.Class`, which the kind keywords are not
-  ("Boxed-integer limits, class designators, number classes ..."): `.todo/h09`.
+- **Class values no longer block the analyzer** (2026-11-26, "Class values"). `analyze` run at
+  run time on the interpreter (a computed `ns-map` lowers there, so (2) and (3) are out of the
+  way) over a copy with `RT/baseLoader`, `RT/classForName` and `Compiler/LOADER` patched to host
+  calls answers the oracle's op and tag for all 18 forms of the measured list: `1`,
+  `(let [x 1] x)`, `(:a {:a 1})`, `(throw (Exception. "x"))`, `'(1 2)`, a var, `case`, `letfn`, a
+  string, keyword, vector, map, set and fn, `(try 1 (catch Exception e 2))`,
+  `(let [x 1] (instance? String x))`, `Math/PI` and map destructuring (its
+  `PersistentArrayMap/createAsIfByAssoc` a stub's member). Two blockers besides the class values:
+  `ns-map` mapped an import to a symbol (now its class value), and a `defmulti` dropped its
+  docstring and attr map, so `box`'s and `warn-on-reflection`'s `:pass-info` were missing and
+  `schedule` ran `warn-on-reflection` ahead of `validate` (clojure-spec
+  `var-quote-metadata-and-test`).
 - **Cost of the namespace maps** (interpreter, run-time lowering): every `ns-map` holds
   clojure.core's ~770 referred vars, each a var site lowered and evaluated:
   `(ns-map 'clojure.core)` 173 ms literal, 205-290 ms computed, a small program's 11
@@ -2090,7 +2087,7 @@ refused, so load-time `def`s need these:
   literal keeps its `forName` object. A designator is a class value with no host object, on every
   backend: printed and hashed by its name, `identical?` to every other of its name, `class?`,
   `java.lang.Class` from `class`. Its arms (the `CLASS_DESIGNATOR` family) fold in a program
-  naming no `:C%CLASS` construction and no `type`. Traps: a producer spelled inside an arm makes
+  making no class value ("Class values"). Traps: a producer spelled inside an arm makes
   the family, so no arm spells the tag (`class` of a designator answers
   `(%clojure-designator-class)`, the value-method arm tests through the family's function); the
   printer's arm reads `(cadr x)`, since `(car (cdr x))` breaks the `cond`'s aligned layout and the
@@ -2098,14 +2095,13 @@ refused, so load-time `def`s need these:
 - **The chain** (`ClojureDateBuilderLowering`): a `DateTimeFormatterBuilder` chain, `ofPattern`,
   `ZoneId/of` and the `ChronoField` constants a load reads answer markers (malli's formatter
   `def`s); a use keeps the oracle-words refusal.
-- **Number classes** (`%clojure-number-class`): `class` of a number, and its protocol tag, is the
-  keyword of the oracle's class (`:java.lang.Long` ...; "Decimals"), chained like the oracle's
-  `bases` (`ClojureClassBases.NUMBER_SUPERS`) up to `java.lang.Number`, so `Number`/`Comparable`
-  methods and a protocol extended to `Number` reach it. `Long`/`Double` in value position read as
-  that keyword on every backend (`ClojureInteropLowering.classValue`), so `(= Long (class 1))`
-  holds; the cost: `Long` prints `:java.lang.Long` and is no host `Class` on the interpreter and
-  the JVM. `Integer`/`Short`/`Byte`/`Float` are no class a value has (casts answer plain
-  integers), so a method or extension under one is reached by nothing. Pin: clojure-spec
+- **Number classes** (`%clojure-number-class`): a number's dispatch tag is the keyword of the
+  oracle's class (`:java.lang.Long` ...; "Decimals"), chained like the oracle's `bases`
+  (`ClojureClassBases.NUMBER_SUPERS`) up to `java.lang.Number`, so `Number`/`Comparable` methods
+  and a protocol extended to `Number` reach it; `class` answers that class's class value, and so
+  does `Long`/`Double` in value position ("Class values"). `Integer`/`Short`/`Byte`/`Float` are
+  no class a value has (casts answer plain integers), so a method or extension under one is
+  reached by nothing. Pin: clojure-spec
   `class-dispatch-maps-host-spellings-to-kind-keywords` (all four, oracle-identical).
 - **Pins**: clojure-spec `boxed-integer-limits-answer-themselves-where-the-host-is-not`,
   `class-literals-and-date-builder-chains-evaluate-where-the-host-is-not` (all four);
@@ -2113,6 +2109,75 @@ refused, so load-time `def`s need these:
   `doubleLimitsAnswerThemselvesWhereTheHostIsNot` /
   `aClassLiteralIsItsDesignatorWhereTheHostIsNot` /
   `dateBuilderChainsThreadTheirMarkerWhereTheHostIsNot`.
+
+## Class values
+
+**`class`, `type`, a class literal, `Class/forName` and `ns-map`'s imports answer ONE class value
+per class and program: the host's `java.lang.Class` where the program reaches the host (the
+interpreter; a JVM program naming a `java:` operator), the `(:C%CLASS name)` designator
+elsewhere (wasm; a JVM program naming none, where no Java API can tell them apart).** The
+dispatch tags stay keywords: `class` is `%clojure-class-of` over the tag `classTagForm` answers
+(inside a `defmulti` dispatch function the tag itself), and a class value reads back as its tag
+where a table is keyed (`%clojure-dispatch-kind`, `%clojure-kind-of-class`,
+`%clojure-class-designator-key`). Why one value per program: a JVM program's reflection answers
+real `Class` objects, so a class value of another shape would be unequal to them; a
+`java:`-free program gets the designator from the `HOST_ARMS_WITHOUT_JAVA` stand-in of
+`%clojure-host-class-named`, so `class` costs it no bridge (a `java:static` there was +122 KB).
+
+- **`clojure.lang` classes are stub classes** (`runtime/RontoStubClasses`,
+  `rontolisp::%host-stub-class`; the JVM output carries it only where the primitive is
+  referenced): a member-less class file (JVMS 4.1) with the oracle's name, modifiers,
+  superclass and interfaces, defined in ONE loader per process that is no parent of the
+  program's class path, so a dependency compiled against `clojure.lang` keeps failing to link
+  ("Classes compiled against `clojure.lang`") and the ClojureScript-port trigger is unchanged.
+  The rows (`%clojure-lang-classes`, read off clj 1.12.6 by reflection) are the classes a value
+  here has, the classes whose statics `ClojureLangClasses` answers, and their supertypes; every
+  row is stubbed at the first stub (`%clojure-lang-stub`) so the member signatures' types
+  resolve. A stub declares, as `native` methods and fields, exactly the statics this front end
+  answers (`PersistentArrayMap/createAsIfByAssoc` ...), so reflection -- tools.analyzer.jvm's
+  `validate` above all -- sees what a call can reach. `PersistentQueue` stays out: it is a
+  deftype of the shipped `clojure.lang` namespace, whose class value is its tag.
+- Traps: a native image defines no class (`org.graalvm.nativeimage.imagecode`) and registers no
+  reflection a class value's readers ask, so there every class value is a designator
+  (`%clojure-host-classes-p`, probed by defining the `IFn` stub): a host class in the binary's
+  REPL crashed on `Class.getInterfaces` (`MissingReflectionRegistrationError`, an `Error` no
+  `handler-case` takes) before the probe. The rows are literal strings
+  (an interface list is one space-separated string), since on the JVM a string `format` builds
+  is no `java.lang.String` and the runtime class reads quoted strings only.
+- **Readers**: a `Class/forName` of a `clojure.lang` row name answers the stub, one or three
+  arguments (`langClassForName`); `.isInstance` of a host class is `instance?`, since the host's
+  takes a fixnum as its narrowest box; `instance?` of a host class value over a Lisp value is
+  `isAssignableFrom` of what `class` answers for it (`%clojure-host-class-assignable-p`), a
+  condition by its chain. A class value in a walk that is not the host's reads as its kind or
+  class keyword (`%clojure-class-designator-key`; on the interpreter a `java:`-free program still
+  holds host classes); a `class` call sets `classObjects`, so the readers answer class values.
+  `methods` keys a row a class spelling stored by its class value: the defmethod notes it
+  (`%clojure-note-class-row`), a statement of `METHOD_CLASS_ROW`, which only a `methods` call
+  keeps.
+- Deviations (user doc `reference/class.md`): one class per kind's value -- every fn
+  `AFunction`, every strict seq `PersistentList`, a two-member vector `PersistentVector`;
+  records and deftypes keep their designators on every backend, so Java sees no class of
+  theirs (a handle); a stub's `getMethods` lists the answered statics alone; `supers`/`bases`
+  stay refused (`.todo/m64`).
+- Measured 2026-11-26 (oracle `clj` 1.12.6): tools.analyzer.jvm 1.2.3 analyzes all 18 forms of
+  "core.async and tools.analyzer.jvm"'s list to the oracle's op and tag (interpreter, run-time
+  `analyze` over the copy with `RT`/`Compiler/LOADER` patched); core.match 1.1.1 and schema
+  1.4.2 probes print the oracle's lines on all four backends.
+- Size, measured 2026-11-26 (wasm P1 / `--optimize=size` / component / JVM class):
+  `examples/clojure/demo.clj` byte-identical; `(println (class "a") (class 1) (class [1]))`
+  +1539 / +1337 / +1565 / +2936; a keyword multimethod -508 P1 / -777 JVM and a `class`
+  multimethod -60 / -643 (the dispatcher's class read folds where no class value exists); a
+  `java:` program calling `class` +34 KB on the JVM (the rows 23 KB, the stub classes 11 KB).
+- Pins: clojure-spec `class-dispatch-maps-host-spellings-to-kind-keywords`,
+  `type-answers-a-host-class-designator-where-the-oracle-answers-a-class`,
+  `instance-of-a-class-value-tests-what-class-answers`,
+  `instance-of-an-interface-or-a-host-class-tests-the-classes-of-each-kind`,
+  `methods-answers-the-method-table-as-a-map`,
+  `ancestors-of-a-kind-hold-the-classes-its-values-implement-and-class-names-read-as-keywords`
+  (all four); `ClojureLoweringTest#typeAndClassAnswerClassValuesAKindDispatchesBy`,
+  `ClojureInteropTest#classOfAnExceptionIsItsClassWithOrWithoutInterop`,
+  `ClojureSessionTest#aSessionReadsAClassKeywordsSupersInALaterBuffer`,
+  `JvmRuntimeClassFilesTest` (the stub classes travel).
 
 ## Record and deftype class values
 
@@ -2126,8 +2191,9 @@ refused, so load-time `def`s need these:
   inline, interface, multimethod, hierarchy, `print-method`, registry) is keyed by the tag through
   `equal` tables, so a computed class reaches each row as the name does, with no mapping per
   consumer (`[(class a) (class b)]` would need one per element). `%clojure-dispatch-value` and
-  `%clojure-extends-key` keep a registered tag as itself, not a kind keyword. h09 would give the
-  host targets generated `Class` objects; the tag form is one function to change.
+  `%clojure-extends-key` keep a registered tag as itself, not a kind keyword. A record's class
+  stays the designator where the core kinds' classes are host classes ("Class values"); a
+  generated class per record would replace it at `typeTagForm`.
 - **Across the `java:` boundary** (interpreter, JVM): one `java:handle` per class name
   (`%clojure-designator-handles`), class `java.lang.Class`, so a Java map -- schema's
   `WeakHashMap` registry too -- keys a record's class like the oracle's one `Class` object; Java
@@ -2138,7 +2204,7 @@ refused, so load-time `def`s need these:
   `(defrecord R ...)`); a reference above the definition reads the class (the oracle's `Unable to
   resolve symbol`). `supers` stays refused.
 - **Libraries**: specter's `dynamic-param?` and schema's `record*` `(class? klass)` run verbatim
-  on this; schema's `s/defn` still stops on `(class f)`, the `:function` keyword (h09). Trap:
+  on this. Trap:
   probe the oracle on the verbatim jars; with rewrite-clj's `make-printable!` or schema's
   `register-schema-print-as-explain` patched out it prints records, not `(maybe Int)`.
 - **Pins**: clojure-spec `a-record-or-deftype-name-is-its-class-value` (all four,
@@ -2583,12 +2649,14 @@ refused, so load-time `def`s need these:
   `anon-fn-reads-as-fn-star-over-generated-parameters`,
   `a-macro-argument-holding-an-anonymous-fn-expands` (oracle-identical but the parameter
   numbers).
-- **A class value decodes to a constant** (`ClojureMacroLowering.decodeClass`): a
-  `(:C%CLASS name)` designator travels under `%embedded` as its construction (a `quote` round
-  trip would turn its head into a `:C%KEYWORD` wrapper). A host `java.lang.Class` a body
-  evaluated decodes to the class literal's spelling: its `forName` object where a host is,
-  else (and for a name no spelling loads, `clojure.core$long`) the designator. So datascript's
-  `defn+` `:tag` is the oracle's class on the interpreter and the JVM, a designator on wasm.
+- **A class value decodes to a constant** (`ClojureMacroLowering.classSpelling`): a host
+  `java.lang.Class` a body evaluated and a `(:C%CLASS name)` designator alike decode to what the
+  class's source spelling lowers to (`classValue`, `classKeyword`: `%clojure-class-value` or the
+  `forName` object), else -- a record's or deftype's class -- the designator's construction
+  under `%embedded` (a `quote` round trip would turn its head into a `:C%KEYWORD` wrapper). One
+  form for both, since the binary's macro-time class values are designators ("Class values")
+  and its IR must be the JVM's (`ClojureNativeLoweringE2eTest`). So datascript's `defn+` `:tag`
+  is the oracle's class on the interpreter and the JVM, a designator on wasm.
   Pins: clojure-spec `a-macro-expansion-holding-a-class-value-lowers`,
   `a-macro-expansions-tag-metadata-holds-the-class-value` (the host legs),
   `ClojureLoweringTest#aMacroExpansionHoldingAClassValueLowersAsAConstant`.
@@ -2758,7 +2826,7 @@ function replacement.
   default stay): `ClojureLowering.multimethods`, by var key, survives buffers and is cleared by
   every other definition, never by the pre-scan. Static, so a `defmulti` run repeatedly inside a
   function still redefines.
-- An exception or a runtime error answers its class as a keyword, ahead of the host arm
+- An exception or a runtime error answers its class, its tag a keyword, ahead of the host arm
   ("Catching").
 - `class`'s last arm, `%clojure-host-class`, is `(java:call x "getClass")` under `handler-case`:
   `java:call` refuses every non-host value, so its refusal is the host test. Where the program
@@ -2797,10 +2865,8 @@ function replacement.
   `ClojureInteropTest#aHostDateOrUuidIsEqualToAndComparesBesideOneMadeHere`,
   `ClojureLoweringTest#printMethodStoresUnderTheRowItsDispatchValueNames`.
 - `type` (`ClojureDispatchLowering.typeForm`; `doc/en/clojure/reference/type.md`): the `:type`
-  entry, else `class`'s keyword, but a `(:C%CLASS name)` designator for exactly the kinds whose
-  keyword would collide with a schema registry entry (malli's `-lookup` falls back to
-  `(type x)`); the dispatcher and `instance?` read a designator back as its kind
-  (`%clojure-designator-kind`). Pins: clojure-spec
+  entry, else what `class` answers (inside a dispatch function the tag); malli's `-lookup` falls
+  back to `(type x)` and misses with a class value like the oracle's. Pins: clojure-spec
   `type-reads-the-type-metadata-else-the-class`,
   `type-answers-a-host-class-designator-where-the-oracle-answers-a-class`,
   `a-type-designator-dispatches-and-instances-as-its-kind`, `type-of-a-pattern-is-the-pattern-class`
@@ -2964,20 +3030,15 @@ function replacement.
   `class` reads a condition -- every program calling `class` on one would carry the table and the
   write, while the rows are known at lowering time for every class but a host-returned
   throwable's.
-- **Class values in the readers**. In a program spelling a class value no keyword is
-  (`ClojureLowering.classObjects`: a class literal through `ClojureInteropLowering.classValue`,
-  a `Class/forName`), `parents`/`ancestors`/`descendants` answer each class keyword of
-  `C%H-CLASS-OBJECTS` -- the emitted rows' classes, names and bases, but a number's, a record's
-  and a `clojure.lang` class the program's classes lack -- as the value its name reads as: the
-  host's `forName` object where the walk is the host's (the keyword where it has none), its
-  designator where no host is
-  (`clojure.lisp` "Class values"). So `(contains? (ancestors Long) Number)` holds and the set
-  prints like the oracle's. The list asks the host nothing for a class it lacks: the test
-  JVM's reflection holds `jakarta.servlet`, the jar's and the class files' do not
-  (`ClojureClassFilesLoweringTest`). Where no host is, `isa?` and the readers read a designator of such
-  a class as its keyword first (`%clojure-class-designator-key`), so a member walks on. A
-  program spelling none keeps the keywords. Cost: `(class e)` of a throwable or stream is still
-  its keyword (`.todo/h09`), so it is no member of such a set, where the keyword was. A kind's
+- **Class values in the readers**. In a program that can hold a class value
+  (`ClojureLowering.classObjects`: a class literal, a `class` call, a `Class/forName`),
+  `parents`/`ancestors`/`descendants` answer each class keyword of `C%H-CLASS-OBJECTS` -- the
+  emitted rows' classes, names and bases, but a record's -- as its class value
+  (`%clojure-class-value`, "Class values"). So `(contains? (ancestors Long) Number)` holds and
+  the set prints like the oracle's. The list asks the host nothing: a row's class is one of the
+  tables. Where the walk is not the host's, `isa?` and the readers read a class value of such a
+  class as its keyword first (`%clojure-class-designator-key`), so a member walks on. A program
+  holding none keeps the keywords. A kind's
   row leaves out its values' own class when that class spells the kind (`kindSupers`: `String`
   is `:string`), so `(parents String)` is the oracle's six. Size, measured 2026-11-25 (wasm P1 /
   `--optimize=size` / component / JVM class): `examples/clojure/demo.clj`, a program of class

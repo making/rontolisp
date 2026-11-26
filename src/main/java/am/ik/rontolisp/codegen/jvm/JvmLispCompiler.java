@@ -238,6 +238,22 @@ public final class JvmLispCompiler implements LispCompiler {
 	/** Whether the output needs {@link #CONS_CAS_RUNTIME_CLASS_FILES}. */
 	private boolean needsConsCasRuntime;
 
+	/**
+	 * The stub classes behind {@code rontolisp::%host-stub-class}, in internal form: the
+	 * class {@code JvmExprCompiler} calls it on, which travels with the output.
+	 */
+	static final String STUB_CLASSES_CLASS = "am/ik/rontolisp/runtime/RontoStubClasses";
+
+	/**
+	 * The runtime class files a program defining stub classes carries beside it: the
+	 * class, its loader and its constant pool.
+	 */
+	static final List<String> STUB_CLASSES_RUNTIME_CLASS_FILES = List.of(STUB_CLASSES_CLASS + ".class",
+			STUB_CLASSES_CLASS + "$Loader.class", STUB_CLASSES_CLASS + "$Pool.class");
+
+	/** Whether the output needs {@link #STUB_CLASSES_RUNTIME_CLASS_FILES}. */
+	private boolean needsStubClassesRuntime;
+
 	/** Whether the output needs {@link JvmSignalThrow#RUNTIME_CLASS_FILES}. */
 	private boolean needsSignalRuntime;
 
@@ -1115,6 +1131,9 @@ public final class JvmLispCompiler implements LispCompiler {
 		}
 		if (this.needsConsCasRuntime) {
 			files.putAll(JvmRuntimeClassFiles.read(CONS_CAS_RUNTIME_CLASS_FILES));
+		}
+		if (this.needsStubClassesRuntime) {
+			files.putAll(JvmRuntimeClassFiles.read(STUB_CLASSES_RUNTIME_CLASS_FILES));
 		}
 		if (this.needsSignalRuntime) {
 			files.putAll(JvmRuntimeClassFiles.read(JvmSignalThrow.RUNTIME_CLASS_FILES));
@@ -2838,6 +2857,7 @@ public final class JvmLispCompiler implements LispCompiler {
 		this.needsProcessRuntime = programUsesSymbol(program, LispNames.RUN_PROGRAM_INTERNAL_QUALIFIED);
 		this.needsConsCasRuntime = programUsesSymbol(program, LispNames.CONS_CAS_CAR_INTERNAL_QUALIFIED)
 				|| programUsesSymbol(program, LispNames.CONS_CAS_CDR_INTERNAL_QUALIFIED);
+		this.needsStubClassesRuntime = programUsesSymbol(program, LispNames.HOST_STUB_CLASS_INTERNAL_QUALIFIED);
 		this.needsTerminalRuntime = programUsesSymbol(program, LispNames.TERMINAL_P_INTERNAL);
 		this.needsFileModesRuntime = programUsesSymbol(program, LispNames.FILE_ACCESS_INTERNAL)
 				|| programUsesSymbol(program, LispNames.FILE_SPACE_INTERNAL)

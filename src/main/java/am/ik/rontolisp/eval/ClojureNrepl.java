@@ -444,8 +444,8 @@ public final class ClojureNrepl {
 	private static String describing(int line, @Nullable String name) {
 		String place = ":clojure.error/line " + line
 				+ (name == null ? "" : " :clojure.error/source " + LispString.literal(name).print());
-		return "(clojure.core/str (clojure.core/name (clojure.core/class *e)) \"\\n\""
-				+ " (clojure.core/name (clojure.core/class (clojure.main/root-cause *e))) \"\\n\""
+		return "(clojure.core/str (.getName (clojure.core/class *e)) \"\\n\""
+				+ " (.getName (clojure.core/class (clojure.main/root-cause *e))) \"\\n\""
 				+ " (clojure.main/ex-str (clojure.core/merge {" + place + "}"
 				+ " (clojure.main/ex-triage (clojure.core/Throwable->map *e)))))";
 	}

@@ -2,9 +2,9 @@
 
 `(class? x)`
 
-`clojure.core/class?`: ホストのクラスオブジェクト（値としての `String` や `java.io.File`）なら `true` を返します。これは interop でしか得られません（インタプリタと JVM）。ホストオブジェクトのないクラス値（record・deftype のクラス、[type](type.md) の答え、wasm バックエンドのクラスリテラル）にも `true` を返します。ここではほとんどの Lisp の値に対する `class` は種類のキーワードを返すため、`(class? (class 1))` は `false` です（オラクルは `true`）。値としては1引数の関数です。
+`clojure.core/class?`: クラス値（[class](class.md) と [type](type.md) の答え、値としてのクラスリテラル（`String`・`java.io.File`・`clojure.lang.IFn`）、record・deftype のクラス）なら `true` を返します。オラクルの `(instance? Class x)` と同じです。値としては1引数の関数です。
 
 ```clojure
 (defrecord R [a])
-(println (class? 1) (class? (class 1)) (class? R) (class? (class (->R 1))))  ; false false true true
+(println (class? 1) (class? (class 1)) (class? R) (class? (class (->R 1))))  ; false true true true
 ```

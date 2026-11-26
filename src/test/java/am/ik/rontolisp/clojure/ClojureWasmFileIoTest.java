@@ -32,14 +32,14 @@ class ClojureWasmFileIoTest {
 	void spitSlurpLineSeqAndReaderRunWithAPreopenOnPreview1() throws Exception {
 		assertThat(runWithPreopen(false))
 			.isEqualTo("a\nb\n(a b)\n(1 2)\n[1 2]\n{:a 1}\n42\n\"\"\ns#fileio.Rec{:a 1, :b 2}\n7\n"
-					+ "(#fileio.Rec{:a 1, :b \"x\"}) :eof\n35\nStream closed\n:java.io.BufferedReader\n");
+					+ "(#fileio.Rec{:a 1, :b \"x\"}) :eof\n35\nStream closed\njava.io.BufferedReader\n");
 	}
 
 	@Test
 	void spitSlurpLineSeqAndReaderRunWithAPreopenOnTheComponent() throws Exception {
 		assertThat(runWithPreopen(true))
 			.isEqualTo("a\nb\n(a b)\n(1 2)\n[1 2]\n{:a 1}\n42\n\"\"\ns#fileio.Rec{:a 1, :b 2}\n7\n"
-					+ "(#fileio.Rec{:a 1, :b \"x\"}) :eof\n35\nStream closed\n:java.io.BufferedReader\n");
+					+ "(#fileio.Rec{:a 1, :b \"x\"}) :eof\n35\nStream closed\njava.io.BufferedReader\n");
 	}
 
 	private static String runWithPreopen(boolean component) throws Exception {

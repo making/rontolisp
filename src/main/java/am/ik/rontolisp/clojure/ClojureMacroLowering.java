@@ -1137,7 +1137,7 @@ final class ClojureMacroLowering {
 					return decodePattern(cons);
 				}
 				if (tag.name().equals(":C%CLASS")) {
-					return decodeClass(cons);
+					return decodeClass(ctx, cons);
 				}
 				if (tag.name().equals(":C%INST") || tag.name().equals(":C%TIMESTAMP")
 						|| tag.name().equals(":C%CALENDAR") || tag.name().equals(":C%UUID")) {
@@ -1241,34 +1241,41 @@ final class ClojureMacroLowering {
 		}
 		if (ref instanceof Class<?> type) {
 			// a class value the oracle's compiler embeds as a constant: the class
-			// literal's own spelling, its forName object where a host is and its
-			// designator where none is -- the same value a source spelling lowers to
-			LispVal literal = ClojureInteropLowering.classValue(ctx, type.getName());
-			// a class no source spelling here names (clojure.core$long): its
-			// designator
-			if (literal == null) {
-				literal = ClojureCoreLowering.classDesignator(type.getName());
-			}
-			return ClojureLowerUtil.list(ClojureRunTime.EMBEDDED, literal);
+			// literal's own spelling, the same value a source spelling lowers to
+			return ClojureLowerUtil.list(ClojureRunTime.EMBEDDED, classSpelling(ctx, type.getName()));
 		}
 		return null;
 	}
 
 	/**
-	 * A class designator answer -- {@code (:C%CLASS name)}, what {@code type} answers for
-	 * a kind whose keyword collides with a schema registry entry and what a class literal
-	 * is where no host is -- back to the construction it is. Its head is this front end's
-	 * own keyword symbol, which no quoted datum spells (a keyword literal quotes to the
-	 * {@code :C%KEYWORD} wrapper), so it travels under {@link ClojureRunTime#EMBEDDED} as
-	 * the {@code (list :C%CLASS name)} form the lowering emits for it: the same value on
-	 * every backend.
+	 * A class designator answer -- {@code (:C%CLASS name)}, a class value where the
+	 * macro-time host makes none (a native image), a record's or deftype's class -- back
+	 * to the value it is ({@link #classSpelling}), the same form a macro-time host class
+	 * decodes to ({@link #decodeHostValue}), so the binary lowers as the JVM does. Its
+	 * head is this front end's own keyword symbol, which no quoted datum spells (a
+	 * keyword literal quotes to the {@code :C%KEYWORD} wrapper), so it travels under
+	 * {@link ClojureRunTime#EMBEDDED}.
 	 */
-	static LispVal decodeClass(LispCons wrapper) {
+	static LispVal decodeClass(ClojureLowering ctx, LispCons wrapper) {
 		List<LispVal> parts = ClojureLowerUtil.items(wrapper);
 		if (parts != null && parts.size() == 2 && parts.get(1) instanceof LispString name) {
-			return ClojureLowerUtil.list(ClojureRunTime.EMBEDDED, ClojureCoreLowering.classDesignator(name.value()));
+			return ClojureLowerUtil.list(ClojureRunTime.EMBEDDED, classSpelling(ctx, name.value()));
 		}
 		throw new LispReadException("an unreadable value: " + wrapper.print());
+	}
+
+	/**
+	 * The form a class value of the class {@code name} lowers to as the class's source
+	 * spelling would ({@link ClojureInteropLowering#classValue},
+	 * {@link ClojureValueClasses#classKeyword}), else -- a record's or deftype's class, a
+	 * class no spelling here names -- its {@code (list :C%CLASS name)} construction.
+	 */
+	private static LispVal classSpelling(ClojureLowering ctx, String name) {
+		LispVal literal = ClojureInteropLowering.classValue(ctx, name);
+		if (literal == null) {
+			literal = ClojureValueClasses.classKeyword(ctx, name);
+		}
+		return literal != null ? literal : ClojureCoreLowering.classDesignator(name);
 	}
 
 	/**

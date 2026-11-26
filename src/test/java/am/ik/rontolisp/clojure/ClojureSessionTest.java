@@ -436,14 +436,14 @@ class ClojureSessionTest {
 	void aSessionReadsAClassKeywordsSupersInALaterBuffer() {
 		// the hierarchy runtime of a first buffer without a class takes the class rows'
 		// readers when a later one spells a class, and a later record joins the rows;
-		// a later class literal makes the readers answer class values, an earlier
-		// buffer's rows included
+		// a later class value (a class call, a class literal) makes the readers answer
+		// class values, an earlier buffer's rows included
 		assertThat(runSession("(derive :s/a :s/b) (println (parents :s/a) (ancestors :s/none))",
 				"(println (parents NumberFormatException) (isa? (class \"a\") Object))",
 				"(defrecord SR [x]) (println (ancestors SR) (ancestors (class (->SR 1))))",
 				"(println (contains? (ancestors Long) Number) (parents NumberFormatException))"))
-			.isEqualTo("#{:s/b} nil\n#{:java.lang.IllegalArgumentException} true\n"
-					+ "#{:java.lang.Object} #{:java.lang.Object}\n" + "true #{java.lang.IllegalArgumentException}\n");
+			.isEqualTo("#{:s/b} nil\n#{java.lang.IllegalArgumentException} true\n"
+					+ "#{java.lang.Object} #{java.lang.Object}\n" + "true #{java.lang.IllegalArgumentException}\n");
 	}
 
 	@Test

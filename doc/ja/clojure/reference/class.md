@@ -2,28 +2,38 @@
 
 `(class x)`
 
-値の種類をキーワードで返します。`:map`・`:vector`・`:set`・`:list`・`:string`・
-`:keyword`・`:symbol`・`:char`・`:boolean`・`:nil`・`:function`・`:atom` です
-（ソート済みマップは `:map`、ソート済みセットは `:set`）。数値はそのクラス名のキーワードを返します。
-`:java.lang.Long`・`:java.lang.Double`・`:clojure.lang.Ratio`、long を超える整数は
-`:clojure.lang.BigInt` です（ここでは `1N` は `Long`、小数は `Ratio`）。値の位置の `Long` と
-`Double` も同じキーワードとして読むので、`(= Long (class 1))` は `true` です。バイト配列は `byte[]` のバイナリ名
-の `:[B` を返します。
-オラクルはホストクラスを返しますが、wasm バックエンドにはないため、全バックエンド共通で
-種類名のキーワードを返します。record/deftype はそのクラスを返します。これは名前を値として評価した
-ものと同じで、オラクルと同じく `user.R` と印字され、`str` は `"class user.R"` を返します。クラス値
-（record のクラスや [type](type.md) の答え）には `java.lang.Class` を返します。例外と実行時エラーは
-クラス名をキーワードで返します（`:java.lang.IllegalArgumentException`、`:clojure.lang.ExceptionInfo`。
-実行時エラーと拒否はオラクルがその箇所で投げるクラス、クラスを示さないエラーは
-`:java.lang.RuntimeException`）。ストリーム（`*out*`・`*in*`・`*err*`、`StringWriter`、リーダー）はプリンタが示すホストクラスを
-キーワードで返します（`:java.io.OutputStreamWriter`・`:java.io.StringWriter`・`:java.io.BufferedReader` など）。ホストオブジェクトは
-インタプリタと JVM でホストクラスを返すため、それに対する `class` ディスパッチは `Object` か
-`:default` のメソッドに届きます。例外やストリームの `.getClass` も同じキーワードを返し、
-そのクラスを書いた `defmethod` や階層操作（`isa?`・`derive`・`ancestors` など）はクラス名をそのキーワードとして読みます。
-値としては1引数ラムダです。
+値のクラスを、オラクルが印字・比較するとおりに返します。`java.lang.String`・
+`java.lang.Long`・`java.lang.Double`・`java.lang.Character`・`java.lang.Boolean`・
+`clojure.lang.Keyword`・`clojure.lang.Symbol`・`clojure.lang.PersistentVector`・
+`clojure.lang.PersistentArrayMap`（9エントリ以上は `clojure.lang.PersistentHashMap`）・
+`clojure.lang.PersistentHashSet`・`clojure.lang.PersistentTreeMap`・`clojure.lang.PersistentList`・
+`clojure.lang.LazySeq`・`clojure.lang.AFunction`・`clojure.lang.Atom` などです。nil には nil を返します。
+`(= (class "a") String)` と `(class? (class 1))` は `true` です。
+
+インタプリタと、Java 相互運用を使う JVM プログラムでは、クラスは `java.lang.Class` です。
+JDK のクラスはホスト自身のもの、`clojure.lang` のクラスはオラクルと同じ名前・修飾子・スーパークラス・
+インタフェースで定義したもので、`.getName`・`.isInterface`・`.isAssignableFrom`・`Class/forName`
+やクラスを受け取る Java メソッドはオラクルと同じ答えを返します
+（`(.isAssignableFrom java.util.List (class []))` は `true`）。宣言されたメンバは、このフロントエンドが
+答える静的メンバ（`clojure.lang.PersistentArrayMap/createAsIfByAssoc` など）です。
+それ以外（wasm バックエンド、相互運用を使わない JVM プログラム、ネイティブバイナリ）では、
+印字・比較・ハッシュ・`class?` が同じクラス値です。
+
+record/deftype はそのクラスを返します。これは名前を値として評価したものと同じです（`user.R`、
+`str` は `"class user.R"`）。例外と実行時エラーはそのクラス（`clojure.lang.ExceptionInfo`・
+`java.lang.IllegalArgumentException`。実行時エラーと拒否はオラクルがその箇所で投げるクラス、
+クラスを示さないエラーは `java.lang.RuntimeException`）、ストリームはプリンタが示すクラス
+（`java.io.OutputStreamWriter`・`java.io.StringWriter` など）、ホストオブジェクトはホストクラス
+（インタプリタと JVM）を返します。値としては1引数ラムダです。
+
+逸脱: ここでは `1N` は `Long`、小数は `Ratio` です。縮小キャストは `Long` を返します。
+関数はすべて `clojure.lang.AFunction`（オラクルは関数ごとにそれを継承したクラスを作ります）、
+遅延シーケンスでないシーケンスはすべて `clojure.lang.PersistentList`、2要素のベクタは
+`PersistentVector`（オラクルのマップエントリは `MapEntry`）、型付き配列は `PersistentVector` です。
+バイト配列のクラスはバイナリ名 `[B` で印字されます（オラクルは `byte/1`）。
 
 ```clojure
-(println (class "a") (class 1) (class 1.5)) ; :string :java.lang.Long :java.lang.Double
-(println (class *out*) (class (java.io.StringWriter.))) ; :java.io.OutputStreamWriter :java.io.StringWriter
-(println (class (ex-info "m" {})) (try (+ 1 "a") (catch Exception e (class e)))) ; :clojure.lang.ExceptionInfo :java.lang.ClassCastException
+(println (class "a") (class 1) (class [1]) (class nil)) ; java.lang.String java.lang.Long clojure.lang.PersistentVector nil
+(println (= (class "a") String) (class? (class 1))) ; true true
+(println (class (ex-info "m" {})) (try (+ 1 "a") (catch Exception e (class e)))) ; clojure.lang.ExceptionInfo java.lang.ClassCastException
 ```

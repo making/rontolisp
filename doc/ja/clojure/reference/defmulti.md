@@ -8,7 +8,7 @@ multimethod を定義します。ディスパッチ値をキーとするメソ�
 
 すでに multimethod を保持する名前への `defmulti` は、オラクルと同じく何も変えません。メソッド・ディスパッチ関数・デフォルトはそのまま残ります。その間に同じ名前の別の定義（`defn`・`def` 等）があれば、次の `defmulti` は再び定義します。
 
-`class` ディスパッチは `class` が答えるキーワード（`:string`、`:map`、`:java.lang.Long`、…）
+`class` ディスパッチはディスパッチ関数の中で `class` が答えるタグ（`:string`、`:map`、`:java.lang.Long`、…）
 の上で走るので、ホストの綴りが同じ行を指します。`String`、`Long`、`Double`、`Number`
 （`Long` や `Double` は階層検索でここへ届きます）、`java.util.Map`
 のようなドット名、`clojure.lang.IPersistentVector`、`nil` です。`Object` メソッドは階層

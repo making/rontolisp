@@ -19,8 +19,13 @@ holding a string, keyword, collection or fn refuses (`Class not found: :string`)
 first stop), `mapv`/`mapcat` lockstep, threading into a hinted step, `intern` of a symbol
 carrying metadata, the `Var` members. Plan, in order:
 
-1. `.todo/h09`: class values are `java.lang.Class` objects on the interpreter and the JVM. Then
-   re-run the kb's tools.analyzer.jvm measurement: every form of its list must analyze.
+1. Done 2026-11-26: class values are `java.lang.Class` objects on the interpreter and the JVM
+   (`clojure.lang` ones stub classes declaring the statics this front end answers), and every
+   form of the kb's measured list analyzes to the oracle's op and tag over the copy with `RT`
+   and `Compiler/LOADER` patched (`.kb/clojure-frontend.md`, "Class values"). A static or
+   constructor of `clojure.lang` that a go body's expansion reaches and no stub declares is
+   `validate`'s `No matching method` until `ClojureLangClasses` answers it and its row declares
+   it.
 2. Namespace maps at macro time: `all-ns`/`find-ns`/`the-ns` answering the lowering's current
    namespaces in the macro-time evaluator (their KNOWN list is the call site's, which predates
    `clojure.core.async`), `ns-map`/`ns-aliases` of a computed namespace through the lowering
