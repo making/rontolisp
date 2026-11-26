@@ -80,10 +80,37 @@ public final class WitLibrary {
 		return cached;
 	}
 
+	@Nullable private static volatile List<LispVal> resourceForms;
+
+	/**
+	 * Returns the slot store behind the handles of an exported resource
+	 * ({@code wit-resource.lisp}): what {@code WitExportInliner} splices into a program
+	 * whose world exports one, on a component.
+	 * @return the forms, read once
+	 */
+	public static List<LispVal> resourceForms() {
+		List<LispVal> cached = resourceForms;
+		if (cached == null) {
+			synchronized (WitLibrary.class) {
+				cached = resourceForms;
+				if (cached == null) {
+					cached = List
+						.copyOf(LispReader.readAllFromString(readSource("wit-resource.lisp"), Features.INTERPRETER));
+					resourceForms = cached;
+				}
+			}
+		}
+		return cached;
+	}
+
 	private static String readSource() {
-		try (InputStream in = WitLibrary.class.getResourceAsStream("wit.lisp")) {
+		return readSource("wit.lisp");
+	}
+
+	private static String readSource(String name) {
+		try (InputStream in = WitLibrary.class.getResourceAsStream(name)) {
 			if (in == null) {
-				throw new IllegalStateException("wit.lisp is missing from the classpath");
+				throw new IllegalStateException(name + " is missing from the classpath");
 			}
 			return new String(in.readAllBytes(), StandardCharsets.UTF_8);
 		}

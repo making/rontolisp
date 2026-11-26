@@ -356,14 +356,136 @@ class WitExportDirectiveTest {
 					.replace("export count-vowels", "export timers;\n  export count-vowels"),
 				Backend.WASM_COMPONENT, Map.of("count-vowels", List.of("d"), "longer", List.of("a", "b")))))
 			.contains("(RONTOLISP:WASM-EXPORT '|longer| :AS \"longer\" :WIT ");
-		// An interface's resource is an export this boundary does not make, and an
-		// interface of neither a function nor a type exports nothing.
+		// A resource of an exported interface is the component's own: its functions are
+		// exports under the canonical ABI's names, each implemented by the function its
+		// member name spells (as an import of the interface binds it), a method taking
+		// the value its handle stands for first. The destructor is a core export the
+		// resource type names: the slot store's own, or a defun calling the program's
+		// <resource>-drop where there is one. A handle of it crosses anywhere a value
+		// does.
+		String counters = """
+				package root:component;
+
+				interface counters {
+				  resource counter {
+				    constructor(start: u32);
+				    add: func(n: u32) -> u32;
+				    merge: static func(a: counter, b: borrow<counter>) -> counter;
+				    count: static func() -> u32;
+				  }
+				  resource token;
+				  record pair { a: counter, b: token }
+				  split: func(p: pair) -> list<counter>;
+				%s}
+
+				interface tags {
+				  resource counter { name: func() -> string; }
+				}
+
+				world analyzer {
+				  export counters;%s
+				}
+				""";
+		Map<String, List<String>> counting = new java.util.HashMap<>(
+				Map.of("counter-new", List.of("start"), "COUNTER-ADD", List.of("self", "n"), "counter-merge",
+						List.of("a", "b"), "counter-count", List.of(), "split", List.of("p")));
+		String ops = "\"...\" :WIT-WORLD \"analyzer\" :WIT-AT \"world.wit:20\"";
+		String iface = " :INTERFACE \"root:component/counters\")";
+		assertThat(lower(counters.formatted("", ""), Backend.WASM_COMPONENT, counting).stream()
+			.map(form -> form.print().replaceAll(":WIT \"[^\"]*\"", ":WIT \"...\""))).containsExactly(
+					"(RONTOLISP:WASM-EXPORT 'RONTOLISP::%WIT-REP-FREE :AS \"[dtor]counter\" :PARAMS '(:S32)" + iface,
+					"(RONTOLISP:WASM-EXPORT '|counter-new| :AS \"[constructor]counter\" :WIT " + ops
+							+ " :PARAM-NAMES '(|start|)" + iface,
+					"(RONTOLISP:WASM-EXPORT 'COUNTER-ADD :AS \"[method]counter.add\" :WIT " + ops
+							+ " :PARAM-NAMES '(|self| |n|)" + iface,
+					"(RONTOLISP:WASM-EXPORT '|counter-merge| :AS \"[static]counter.merge\" :WIT " + ops
+							+ " :PARAM-NAMES '(|a| |b|)" + iface,
+					// a flat function of a resource is the flat wrapper under its name
+					"(RONTOLISP:WASM-EXPORT '|counter-count| :AS \"[static]counter.count\" :PARAMS 'NIL :WIT " + ops
+							+ " :PARAM-NAMES 'NIL :RETURNS :U32" + iface,
+					"(RONTOLISP:WASM-EXPORT 'RONTOLISP::%WIT-REP-FREE :AS \"[dtor]token\" :PARAMS '(:S32)" + iface,
+					"(RONTOLISP:WASM-EXPORT '|split| :AS \"split\" :WIT " + ops + " :PARAM-NAMES '(|p|)" + iface);
+		counting.put("counter-drop", List.of("c"));
+		List<LispVal> dropping = lower(counters.formatted("", ""), Backend.WASM_COMPONENT, counting);
+		assertThat(printed(dropping))
+			.startsWith("(DEFUN |counter%wit-dtor| (REP) (LET ((VALUE (RONTOLISP::%WIT-REP-FREE REP))) (IF (EQ VALUE"
+					+ " 'RONTOLISP::%WIT-REP-TAKEN) NIL (|counter-drop| VALUE))))\n"
+					+ "(RONTOLISP:WASM-EXPORT '|counter%wit-dtor| :AS \"[dtor]counter\" :PARAMS '(:S32)" + iface);
+		assertThat(WitExportDirective.exportsResource(dropping)).isTrue();
+		assertThat(WitExportDirective.exportsResource(forms)).isFalse();
+		// The interpreter and the JVM check the functions and compile no export: no
+		// destructor is made, and a handle is the value itself.
+		assertThat(printed(lower(counters.formatted("", ""), Backend.OTHER, counting)))
+			.doesNotContain("[dtor]", "DEFUN")
+			.contains("(RONTOLISP:WASM-EXPORT 'COUNTER-ADD :AS \"[method]counter.add\" :WIT ");
+		// What a program gets wrong is said against the export's line, by the function
+		// that implements it.
+		Map<String, List<String>> wrong = new java.util.HashMap<>(counting);
+		wrong.put("COUNTER-ADD", List.of("n"));
+		assertThatThrownBy(() -> lower(counters.formatted("", ""), Backend.WASM_COMPONENT, wrong)).hasMessage(
+				"world.wit:20: export '[method]counter.add' declares 2 parameter(s), but (defun counter-add ...) takes 1");
+		wrong.remove("COUNTER-ADD");
+		assertThatThrownBy(() -> lower(counters.formatted("", ""), Backend.WASM_COMPONENT, wrong)).hasMessage(
+				"world.wit:20: export '[method]counter.add' has no matching (defun counter-add ...) in the program");
+		counting.put("counter-drop", List.of("c", "d"));
+		assertThatThrownBy(() -> lower(counters.formatted("", ""), Backend.OTHER, counting))
+			.hasMessage("world.wit:20: the destructor of the resource 'counter' maps to (defun counter-drop ...), "
+					+ "which takes one required parameter, the value");
+		counting.remove("counter-drop");
+		for (var refusal : Map
+			.of("  counter-add: func(n: u32) -> u32;\n",
+					"exports '[method]counter.add' and 'counter-add' of interface 'root:component/counters' are both "
+							+ "implemented by (defun counter-add ...); rename one in the WIT",
+					"  peek: func() -> option<borrow<counter>>;\n",
+					"export 'peek': the WIT type of the result holds a borrowed handle of the resource 'counter' in "
+							+ "a result, which an export does not carry")
+			.entrySet()) {
+			Map<String, List<String>> peeking = new java.util.HashMap<>(counting);
+			peeking.put("peek", List.of());
+			assertThatThrownBy(() -> lower(counters.formatted(refusal.getKey(), ""), Backend.WASM_COMPONENT, peeking))
+				.hasMessageStartingWith("world.wit:21: " + refusal.getValue());
+		}
+		// Only a component of the default backend defines a resource type, and a front
+		// end that binds its own names has no value for a handle.
+		for (Backend backend : List.of(Backend.WASM_GC, Backend.WASM_NO_GC, Backend.WASM_NO_GC_COMPONENT)) {
+			assertThatThrownBy(() -> lower(counters.formatted("", ""), backend, counting)).as(backend.name())
+				.hasMessageStartingWith("world.wit:20: interface 'root:component/counters' declares the resource "
+						+ "'counter', which only a component of the default backend exports");
+		}
+		assertThatThrownBy(() -> WitExportDirective.describe(new Directive(WIT, null), counters.formatted("", ""), WIT))
+			.hasMessageStartingWith("world.wit:20: interface 'root:component/counters' declares the resource "
+					+ "'counter', which this language does not export");
+		// Two interfaces' resources of one name are two resources: with the functions
+		// named by a table, each has its own destructor.
+		Map<String, String> table = new java.util.HashMap<>();
+		for (String member : List.of("counter-new", "counter-add", "counter-merge", "counter-count", "split",
+				"counter-drop")) {
+			table.put("root:component/counters#" + member, member);
+		}
+		table.put("root:component/tags#counter-name", "tag-name");
+		table.put("root:component/tags#counter-drop", "tag-drop");
+		counting.put("COUNTER-ADD", List.of("self", "n"));
+		counting.put("counter-add", List.of("self", "n"));
+		counting.put("counter-drop", List.of("c"));
+		counting.put("tag-name", List.of("self"));
+		counting.put("tag-drop", List.of("c"));
+		assertThat(printed(WitExportDirective.lower(new Directive(WIT, null, table, false),
+				counters.formatted("", "\n  export tags;"), WIT, defuns(counting), Backend.WASM_COMPONENT)))
+			.contains("(DEFUN |counter%wit-dtor| (REP) ", "(|counter-drop| VALUE)",
+					"(DEFUN |counter%wit-dtor%1| (REP) ", "(|tag-drop| VALUE)",
+					"(RONTOLISP:WASM-EXPORT '|counter%wit-dtor%1| :AS \"[dtor]counter\" :PARAMS '(:S32) :INTERFACE"
+							+ " \"root:component/tags\")",
+					"(RONTOLISP:WASM-EXPORT '|tag-name| :AS \"[method]counter.name\" :WIT ");
+		// A resource no exported interface declares is an import of the component,
+		// whose handles an export does not carry: the world's own, and another
+		// interface's, named in a use clause or held by a type of it.
 		assertThatThrownBy(() -> lower(
 				clock.formatted("duration", "func(d: duration) -> u64")
-					.replace("export count-vowels", "export clock;\n  export count-vowels"),
+					.replace("export count-vowels", "resource thing;\n  export count-vowels")
+					.replace("func(d: duration)", "func(d: borrow<thing>)"),
 				Backend.WASM_COMPONENT, Map.of("count-vowels", List.of("d"))))
-			.hasMessageStartingWith("world.wit:19: interface 'root:component/clock' declares the resource 'timer', "
-					+ "and an export carries no resource");
+			.hasMessageStartingWith("world.wit:20: export 'count-vowels': the WIT type of d holds a handle of the "
+					+ "resource 'thing' (no interface the world exports declares it), which an export does not carry");
 		// An async export stays on the flat types.
 		assertThatThrownBy(
 				() -> lower(world("  export count-vowels: async func(s: list<u8>) -> s32;"), Backend.WASM_COMPONENT))

@@ -354,8 +354,14 @@ is s32, which is int in Java, not long
 
 ### The types of an export
 
-The types are those of [the table above](#the-types), but the ones no world's export
-carries, each refused at its WIT line: a resource, a `stream` and a `future`. A named type
+The types are those of [the table above](#the-types), but the ones a `@WitExport` class
+does not carry, each refused at its WIT line: a resource, a `stream` and a `future`. A
+resource is refused where the world exports its interface -- an exported interface that
+declares one, or names one of another interface in a `use` clause, is refused whether or
+not a function takes it -- on the interpreter and on every output (a component,
+`--no-wasi`, a Preview 1 module, `--no-gc`, `--no-gc --component`). A Common Lisp program exports one from a component
+([`rontolisp:wit-export`](../reference/functions/rontolisp-wit-export.md#resources)), and a
+Java program imports it from that component as any resource, with `@WitImport`. A named type
 is a member type, as an imported interface's is: of the annotated class for a type the
 world defines, of the interface's member class for a type an exported interface defines.
 A type the world or the interface takes from another with `use` is a member type too,
@@ -480,7 +486,11 @@ public static int pause(int ms) throws InterruptedException {
   `option` of a `bool`, a `list`, `flags` or an `option`, whose none the boundary cannot
   tell apart; a resource of another interface; a tuple in an error arm thrown as a
   `WitException`, for which no type is written (a `WitResult` answer carries it).
-- A world's export carries no resource, `stream` or `future`; an `async func` export
+- A `@WitExport` world's export carries no resource, `stream` or `future`: an exported
+  interface that declares a `resource`, or whose `use` clause names a resource or a type
+  holding a handle, is refused at the world's `export` line, whether or not a function
+  takes the type. A `use` of a resource in the world itself is left out, and a function of
+  the world naming it is refused. An `async func` export
   takes `bool`, the integers, `f64` and `string`
   alone, and is refused under `--no-gc`. Two exports of one label (a function of the world
   and an interface's, or two interfaces') are two methods, each of its own class.

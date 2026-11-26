@@ -1223,14 +1223,18 @@ final class WasmComponentImportCompiler {
 	 * @param cabiReallocFuncIndex the function index of the core's {@code cabi_realloc},
 	 * whose post-return releases what the result staged, or -1 in a core module, whose
 	 * host brackets the call
+	 * @param handles what crosses a handle of a resource the world exports, or
+	 * {@code null} when it exports none
 	 * @return the marshalling
 	 */
 	static ExportMarshal exportMarshal(WasmLispCompiler.Ctx ctx, WasmExportCompiler.Decl decl, ExportPools pools,
-			int allocFuncIndex, int strFromMemFuncIndex, int bytesFromMemFuncIndex, int cabiReallocFuncIndex) {
+			int allocFuncIndex, int strFromMemFuncIndex, int bytesFromMemFuncIndex, int cabiReallocFuncIndex,
+			@Nullable ExportHandles handles) {
 		WitExportSignature signature = java.util.Objects.requireNonNull(decl.wit());
 		Gen gen = new Gen(ctx, decl.exportName(), signature.coreParams().length, -1, allocFuncIndex,
 				strFromMemFuncIndex, pools.i32(), pools.i64(), true);
 		gen.octetsFromMemFuncIndex = octetsLift(signature.liftsOctets(), bytesFromMemFuncIndex, decl.exportName());
+		gen.exportHandles = handles;
 		return new ExportMarshal(gen, signature, cabiReallocFuncIndex);
 	}
 
@@ -1243,15 +1247,17 @@ final class WasmComponentImportCompiler {
 	 * @param allocFuncIndex the function index of {@code __ronto_alloc}
 	 * @param strFromMemFuncIndex the function index of {@code _str_from_mem}
 	 * @param bytesFromMemFuncIndex the function index of {@code _bytes_from_mem}, or -1
+	 * @param handles what crosses a handle of a resource the world exports, or
+	 * {@code null}
 	 * @return the pools' sizes
 	 */
 	static ExportPools measureExport(WasmLispCompiler.Ctx.Builder ctxBuilder, WasmExportCompiler.Decl decl,
-			int allocFuncIndex, int strFromMemFuncIndex, int bytesFromMemFuncIndex) {
+			int allocFuncIndex, int strFromMemFuncIndex, int bytesFromMemFuncIndex, @Nullable ExportHandles handles) {
 		ByteArrayOutputStream bodyStream = new am.ik.wasm.UnsynchronizedByteArrayOutputStream();
 		am.ik.wasm.WasmWriter writer = new am.ik.wasm.WasmWriter(bodyStream);
 		WasmLispCompiler.Ctx ctx = ctxBuilder.writer(writer).bodyStream(bodyStream).build();
 		ExportMarshal marshal = exportMarshal(ctx, decl, new ExportPools(MAX_SCRATCH, MAX_SCRATCH), allocFuncIndex,
-				strFromMemFuncIndex, bytesFromMemFuncIndex, 0);
+				strFromMemFuncIndex, bytesFromMemFuncIndex, 0, handles);
 		marshal.liftParams();
 		marshal.lowerResult();
 		return new ExportPools(marshal.gen.i32High, marshal.gen.i64High);
@@ -1332,6 +1338,10 @@ final class WasmComponentImportCompiler {
 		// _bytes_from_mem, the lift of a byte-stream read's chunk (a packed
 		// (unsigned-byte 8) vector); set for the async built-in wrappers, -1 elsewhere.
 		private int bytesFromMemFuncIndex = -1;
+
+		// What crosses a handle of a resource the export's component defines; null in an
+		// import's wrapper and in an export of a world that exports no resource.
+		private @Nullable ExportHandles exportHandles;
 
 		// _bytes_from_mem again, as the lift of every list<u8> of an :octets binding's
 		// result (a packed (unsigned-byte 8) vector, the octets as the host wrote them);
@@ -1579,11 +1589,23 @@ final class WasmComponentImportCompiler {
 					emitLiftElements(abi, list.element(), elems, count);
 					this.i32Cursor = save;
 				}
+				case WitType.BorrowOf borrow -> {
+					pushFlat(flats.get(0), Type.I32);
+					emitLiftHandle(abi, borrow.resource(), true);
+				}
+				case WitType.OwnOf own -> {
+					pushFlat(flats.get(0), Type.I32);
+					emitLiftHandle(abi, own.resource(), false);
+				}
 				case WitType.OptionOf ignored -> emitLiftVariantFlats(abi, t, flats);
 				case WitType.ResultOf ignored -> emitLiftVariantFlats(abi, t, flats);
 				case WitType.TupleOf ignored -> emitLiftRecordFlats(abi, t, flats, false);
 				case WitType.Named named -> {
 					switch (abi.resolveNamed(named)) {
+						case WitItem.ResourceDef ignored -> {
+							pushFlat(flats.get(0), Type.I32);
+							emitLiftHandle(abi, named.name(), false);
+						}
 						case WitItem.EnumDef ignored -> emitLiftVariantFlats(abi, t, flats);
 						case WitItem.VariantDef ignored -> emitLiftVariantFlats(abi, t, flats);
 						case WitItem.RecordDef ignored -> emitLiftRecordFlats(abi, t, flats, true);
@@ -2563,8 +2585,8 @@ final class WasmComponentImportCompiler {
 				}
 				case WitType.ListOf list when abi.isU8(list.element()) -> emitStageBytesParam(slot);
 				case WitType.ListOf list -> emitStageListParam(abi, list.element(), slot);
-				case WitType.BorrowOf ignored -> emitLowerHandleParam(slot);
-				case WitType.OwnOf ignored -> emitLowerHandleParam(slot);
+				case WitType.BorrowOf borrow -> emitLowerHandle(abi, borrow.resource(), slot);
+				case WitType.OwnOf own -> emitLowerHandle(abi, own.resource(), slot);
 				// A stream/future crosses as its bare i32 end handle; the async built-ins
 				// (not this lowering) are what read/write through it.
 				case WitType.StreamOf ignored -> emitLowerHandleParam(slot);
@@ -2574,7 +2596,7 @@ final class WasmComponentImportCompiler {
 				case WitType.TupleOf ignored -> emitLowerRecordParam(abi, t, slot, false);
 				case WitType.Named named -> {
 					switch (abi.resolveNamed(named)) {
-						case WitItem.ResourceDef ignored -> emitLowerHandleParam(slot);
+						case WitItem.ResourceDef ignored -> emitLowerHandle(abi, named.name(), slot);
 						case WitItem.EnumDef ignored -> emitLowerVariantParam(abi, t, slot);
 						case WitItem.VariantDef ignored -> emitLowerVariantParam(abi, t, slot);
 						case WitItem.RecordDef ignored -> emitLowerRecordParam(abi, t, slot, true);
@@ -2589,6 +2611,89 @@ final class WasmComponentImportCompiler {
 		private void emitLowerHandleParam(int slot) {
 			getLocal(slot);
 			WasmEmitHelper.castI31GetS(this.ctx);
+		}
+
+		// --- handles of a resource the component itself defines (an exported one) ---
+
+		// The built-ins of the resource a handle in an export's signature is of, when
+		// the export's own component defines it: the value behind such a handle is the
+		// program's, kept in the slot store (wit-resource.lisp). Null for a handle
+		// that is the integer it crosses as: every handle of an import's wrapper, and
+		// of a resource the component imports.
+		private ExportHandles.@Nullable Resource exported(WitCanonicalAbi abi, String resource) {
+			ExportHandles handles = this.exportHandles;
+			if (handles == null) {
+				return null;
+			}
+			WitResolver.Owned owned = abi.resolveOwned(new WitType.Named(resource));
+			return handles.of(owned.owner(), WitComponentTypeEncoder.definedNameOf(owned.item()));
+		}
+
+		// Pushes the i32 an owned handle of the value in the slot is: a handle made
+		// over a fresh representation of the value. (No function answers a borrowed
+		// handle, so an exported resource's handle is always owned here.)
+		private void emitLowerHandle(WitCanonicalAbi abi, String resource, int slot) {
+			ExportHandles.Resource builtins = exported(abi, resource);
+			if (builtins == null) {
+				emitLowerHandleParam(slot);
+				return;
+			}
+			this.w.write(Instruction.REF_NULL);
+			this.w.writeHeapType(Type.EQ.code());
+			getLocal(slot);
+			this.w.write(Instruction.CALL);
+			this.w.writeUnsignedLeb128(java.util.Objects.requireNonNull(this.exportHandles).repNew());
+			WasmEmitHelper.castI31GetS(this.ctx);
+			this.w.write(Instruction.CALL);
+			this.w.writeUnsignedLeb128(WasmImportCompiler.PLACEHOLDER_FUNC_BASE + builtins.resourceNew());
+		}
+
+		private void emitStoreResourceAt(WitCanonicalAbi abi, String resource, int slot, int base, int offset) {
+			getLocal(base);
+			emitLowerHandle(abi, resource, slot);
+			store(offset, Instruction.I32_STORE, 2);
+		}
+
+		// Turns the i32 on the stack -- a handle as the host lowered it -- into the
+		// boxed value. A borrowed handle of the component's own resource arrives as
+		// its representation; an owned one as a handle in this instance's table, which
+		// is read for its representation and released once the value is out of the
+		// store (the destructor that release calls finds the slot taken).
+		private void emitLiftHandle(WitCanonicalAbi abi, String resource, boolean borrowed) {
+			ExportHandles.Resource builtins = exported(abi, resource);
+			if (builtins == null) {
+				boxI31();
+				return;
+			}
+			ExportHandles handles = java.util.Objects.requireNonNull(this.exportHandles);
+			int boxed = this.ctx.allocTemp();
+			if (borrowed) {
+				boxI31();
+				setLocal(boxed);
+				this.w.write(Instruction.REF_NULL);
+				this.w.writeHeapType(Type.EQ.code());
+				getLocal(boxed);
+				this.w.write(Instruction.CALL);
+				this.w.writeUnsignedLeb128(handles.repValue());
+				return;
+			}
+			int save = this.i32Cursor;
+			int handle = allocI32();
+			setLocal(handle);
+			getLocal(handle);
+			this.w.write(Instruction.CALL);
+			this.w.writeUnsignedLeb128(WasmImportCompiler.PLACEHOLDER_FUNC_BASE + builtins.resourceRep());
+			boxI31();
+			setLocal(boxed);
+			this.w.write(Instruction.REF_NULL);
+			this.w.writeHeapType(Type.EQ.code());
+			getLocal(boxed);
+			this.w.write(Instruction.CALL);
+			this.w.writeUnsignedLeb128(handles.repTake());
+			getLocal(handle);
+			this.w.write(Instruction.CALL);
+			this.w.writeUnsignedLeb128(WasmImportCompiler.PLACEHOLDER_FUNC_BASE + builtins.resourceDrop());
+			this.i32Cursor = save;
 		}
 
 		// Flags: a list of keywords, one per label that is set, against the i32 whose
@@ -3201,8 +3306,8 @@ final class WasmComponentImportCompiler {
 				}
 				case WitType.ListOf list when abi.isU8(list.element()) -> emitStoreStringAt(slot, base, offset, true);
 				case WitType.ListOf list -> emitStoreListAt(abi, list.element(), slot, base, offset);
-				case WitType.BorrowOf ignored -> emitStoreHandleAt(slot, base, offset);
-				case WitType.OwnOf ignored -> emitStoreHandleAt(slot, base, offset);
+				case WitType.BorrowOf borrow -> emitStoreResourceAt(abi, borrow.resource(), slot, base, offset);
+				case WitType.OwnOf own -> emitStoreResourceAt(abi, own.resource(), slot, base, offset);
 				case WitType.StreamOf ignored -> emitStoreHandleAt(slot, base, offset);
 				case WitType.FutureOf ignored -> emitStoreHandleAt(slot, base, offset);
 				case WitType.OptionOf ignored -> emitLowerVariantAt(abi, t, slot, base, offset);
@@ -3210,7 +3315,7 @@ final class WasmComponentImportCompiler {
 				case WitType.TupleOf ignored -> emitLowerRecordAt(abi, t, slot, base, offset, false);
 				case WitType.Named named -> {
 					switch (abi.resolveNamed(named)) {
-						case WitItem.ResourceDef ignored -> emitStoreHandleAt(slot, base, offset);
+						case WitItem.ResourceDef ignored -> emitStoreResourceAt(abi, named.name(), slot, base, offset);
 						case WitItem.EnumDef ignored -> emitLowerVariantAt(abi, t, slot, base, offset);
 						case WitItem.VariantDef ignored -> emitLowerVariantAt(abi, t, slot, base, offset);
 						case WitItem.RecordDef ignored -> emitLowerRecordAt(abi, t, slot, base, offset, true);
@@ -3434,8 +3539,8 @@ final class WasmComponentImportCompiler {
 						default -> throw resultUnsupported(prim.name());
 					}
 				}
-				case WitType.BorrowOf ignored -> boxI31();
-				case WitType.OwnOf ignored -> boxI31();
+				case WitType.BorrowOf borrow -> emitLiftHandle(abi, borrow.resource(), true);
+				case WitType.OwnOf own -> emitLiftHandle(abi, own.resource(), false);
 				case WitType.StreamOf ignored -> boxI31();
 				case WitType.FutureOf ignored -> boxI31();
 				case WitType.ResultOf ignored -> emitLiftVariantFromStackDisc(abi, t);
@@ -3443,7 +3548,7 @@ final class WasmComponentImportCompiler {
 				case WitType.TupleOf ignored -> emitLiftRecordFlat(abi, t, false);
 				case WitType.Named named -> {
 					switch (abi.resolveNamed(named)) {
-						case WitItem.ResourceDef ignored -> boxI31();
+						case WitItem.ResourceDef ignored -> emitLiftHandle(abi, named.name(), false);
 						case WitItem.EnumDef ignored -> emitLiftVariantFromStackDisc(abi, t);
 						case WitItem.VariantDef ignored -> emitLiftVariantFromStackDisc(abi, t);
 						case WitItem.RecordDef ignored -> emitLiftRecordFlat(abi, t, true);
@@ -3581,13 +3686,13 @@ final class WasmComponentImportCompiler {
 				case WitType.ListOf list when abi.isU8(list.element()) -> emitLiftFromMem(base, offset,
 						this.octetsFromMemFuncIndex < 0 ? this.strFromMemFuncIndex : this.octetsFromMemFuncIndex);
 				case WitType.ListOf list -> emitLiftList(abi, list.element(), base, offset);
-				case WitType.BorrowOf ignored -> {
+				case WitType.BorrowOf borrow -> {
 					load(base, offset, Instruction.I32_LOAD, 2);
-					boxI31();
+					emitLiftHandle(abi, borrow.resource(), true);
 				}
-				case WitType.OwnOf ignored -> {
+				case WitType.OwnOf own -> {
 					load(base, offset, Instruction.I32_LOAD, 2);
-					boxI31();
+					emitLiftHandle(abi, own.resource(), false);
 				}
 				case WitType.StreamOf ignored -> {
 					load(base, offset, Instruction.I32_LOAD, 2);
@@ -3604,7 +3709,7 @@ final class WasmComponentImportCompiler {
 					switch (abi.resolveNamed(named)) {
 						case WitItem.ResourceDef ignored -> {
 							load(base, offset, Instruction.I32_LOAD, 2);
-							boxI31();
+							emitLiftHandle(abi, named.name(), false);
 						}
 						case WitItem.RecordDef ignored -> emitLiftRecordAt(abi, t, base, offset, true);
 						case WitItem.VariantDef ignored -> emitLiftVariantAt(abi, t, base, offset);

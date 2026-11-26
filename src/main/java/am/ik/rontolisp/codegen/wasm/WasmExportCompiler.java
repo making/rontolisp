@@ -137,6 +137,18 @@ final class WasmExportCompiler {
 		}
 
 		/**
+		 * {@return the resource this export is the destructor of}, or {@code null} for
+		 * any other export. {@code rontolisp:wit-export} writes one per resource of an
+		 * exported interface ({@code :as "[dtor]counter"}): a core export the component's
+		 * resource type names, which no component function is lifted from.
+		 */
+		@Nullable String destructorOf() {
+			String prefix = am.ik.rontolisp.compiler.WitExportDirective.DESTRUCTOR_PREFIX;
+			return this.iface != null && this.exportName.startsWith(prefix) ? this.exportName.substring(prefix.length())
+					: null;
+		}
+
+		/**
 		 * {@return the number of arguments the exported function takes}
 		 */
 		int arity() {
@@ -170,6 +182,21 @@ final class WasmExportCompiler {
 		}
 		return false;
 	}
+
+	/**
+	 * {@return whether the export's name is one of a resource's}: a function of a
+	 * resource an exported interface declares ({@code [constructor]r},
+	 * {@code [method]r.m}, {@code [static]r.f}), or the resource's destructor. Such a
+	 * name is the canonical ABI's, not a label.
+	 * @param decl the export
+	 */
+	static boolean isResourceExportName(Decl decl) {
+		return decl.iface() != null && RESOURCE_EXPORT_NAME.matcher(decl.exportName()).matches();
+	}
+
+	private static final java.util.regex.Pattern RESOURCE_EXPORT_NAME = java.util.regex.Pattern
+		.compile("\\[(constructor|dtor)\\]" + COMPONENT_EXPORT_NAME.pattern() + "|\\[(method|static)\\]"
+				+ COMPONENT_EXPORT_NAME.pattern() + "\\." + COMPONENT_EXPORT_NAME.pattern());
 
 	/**
 	 * {@return whether this export is the one a Proxy-Wasm host tells a module's ABI by}
@@ -610,7 +637,12 @@ final class WasmExportCompiler {
 		// the call, as serve's is: an export reached from the top level itself does not
 		// run it again. A top level that failed (_start answers nonzero after reporting
 		// what escaped) leaves nothing an export could run on, so the call traps.
-		if (ctx.reactor) {
+		// A resource's destructor runs inside another export's call when that export
+		// releases an owned handle a host passed it, so it leaves the call's own state
+		// alone: no top level to run (a handle exists only after an export made it), no
+		// task to begin, no future to drive.
+		final boolean destructor = decl.destructorOf() != null;
+		if (ctx.reactor && !destructor) {
 			ctx.writer.write(Instruction.GET_GLOBAL);
 			ctx.writer.writeUnsignedLeb128(ctx.initOnceGlobalIndex);
 			ctx.writer.write(Instruction.I32_EQZ);
@@ -644,14 +676,14 @@ final class WasmExportCompiler {
 		// keyed on the target's name. Unlike P1, the component's guarantee costs the
 		// poll + ref.test + _sched_loop branch per export wrapper; a component with no
 		// async surface has no asyncFuncBase and stays byte-identical.
-		final boolean asyncBoundary = ctx.asyncFuncBase >= 0;
+		final boolean asyncBoundary = ctx.asyncFuncBase >= 0 && !destructor;
 		final boolean callbackDriven = asyncBoundary && isCallbackExport(ctx, decl);
 		// asyncMode: every host entry re-establishes the CURRENT task. A callback
 		// export begins a fresh task record (frames created while the target runs
 		// eagerly are owned by it, and its waitable-set starts empty); every other
 		// wrapper runs as a synchronous boundary, so a stale record from an earlier
 		// task on a reused instance must not leak in.
-		if (ctx.asyncFuncBase >= 0 && ctx.currentTaskGlobalIndex >= 0) {
+		if (asyncBoundary && ctx.currentTaskGlobalIndex >= 0) {
 			if (callbackDriven) {
 				ctx.writer.write(Instruction.CALL);
 				ctx.writer.writeUnsignedLeb128(ctx.asyncFuncBase + WasmFutureRuntimeBuilder.OFF_TASK_BEGIN);

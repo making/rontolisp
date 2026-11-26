@@ -207,10 +207,94 @@ world の型はコンポーネントのインポートになるので、world �
 `use` 句の行でエラーになるので、句の中で名前を変えます (`point as corner`)。
 
 次のものは受け渡せず、エクスポートの WIT の行を示すコンパイルエラーになります。
-リソースのハンドル、`stream`、`future`、`async func` の中の複合型です。`resource` を
-宣言するインタフェースは、エクスポートそのものを拒否します。WASI モジュール
+`stream`、`future`、world がエクスポートしないリソースのハンドル
+([リソース](#resources))、`async func` の中の複合型です。WASI モジュール
 (`-o out.wasm` だけ) と `--no-gc` はフラットな型だけをエクスポートでき、
 それ以外の型を含む world を拒否します。
+
+### リソース
+
+エクスポートするインタフェースが宣言する `resource` は、コンポーネント
+(`--component`、`--no-wasi` の有無は問いません) がエクスポートします。リソースの関数は
+`defun` で実装し、名前は [`rontolisp:wit-import`](rontolisp-wit-import.md) が
+インポート側で束縛する名前と同じです。
+
+| WIT | `defun` | 引数 |
+| --- | --- | --- |
+| `counter` の `constructor(...)` | `counter-new` | コンストラクタの引数 |
+| メソッド `add: func(...)` | `counter-add` | リソース、続いてメソッドの引数 |
+| `merge: static func(...)` | `counter-merge` | 関数の引数 |
+| (ハンドルの解放) | `counter-drop` (省略可) | リソース |
+
+**コンストラクタが返した値がリソースです**。構造体、コンス、クロージャなど、どの Lisp の
+値でも構いません。ホストが持つのはその値のハンドルです。WIT が `counter`、
+`own<counter>`、`borrow<counter>` と書く場所では、引数、結果、レコードのフィールド、
+リストの要素のどこであっても、関数はその値を受け取り、その値を返します。
+
+```console
+// wit/counters.wit
+package example:counters@0.1.0;
+
+interface registry {
+  resource counter {
+    constructor(name: string, start: u32);
+    add: func(by: u32) -> u32;
+    merge: static func(a: counter, b: borrow<counter>) -> counter;
+  }
+
+  total: func(counters: list<borrow<counter>>) -> u32;
+}
+
+world counters {
+  export registry;
+}
+```
+
+```console
+(defstruct counter name value)
+
+(defun counter-new (name start) (make-counter :name name :value start))
+
+(defun counter-add (self by) (incf (counter-value self) by))
+
+(defun counter-merge (a b)
+  (incf (counter-value a) (counter-value b))
+  a)
+
+(defun total (counters) (reduce #'+ counters :key #'counter-value))
+
+(rontolisp:wit-export "wit/counters.wit" :reactor t)
+```
+
+- **借用**のハンドル (`borrow<counter>`、メソッド自身のリソース) では、呼び出しの間だけ
+  値を使えます。**所有**のハンドル (`counter`、`own<counter>`) では値が関数に移ります。
+  呼び出し側のハンドルは無効になり、関数はその値を保持しても、書き換えても、再び返しても
+  構いません。所有のハンドルとして返した値には、返すたびに新しいハンドルが作られます。
+- プログラムが `counter-drop` を定義していれば、ハンドルの持ち主がハンドルを解放する
+  たびに、その値を引数として呼ばれます。エクスポートに所有で渡されたハンドルは解放では
+  ないので、呼ばれません。ハンドルがなくなった値は、通常のガベージです。
+- エクスポートする別のインタフェースは、`use` 句 (`use registry.{counter};`) でその
+  リソースを取り込み、受け取ることも返すこともできます。取り込んだリソースは宣言元と
+  同じリソースで、コンポーネントは宣言元のインタフェースを先にエクスポートします。world が
+  エクスポートしないインタフェースのリソースを取り込む `use` 句は、関数がその名前を
+  使うかどうかにかかわらず拒否します。ハンドルを含む型を別のインタフェースから取り込む
+  `use` 句も拒否します (句にはリソースを書き、型は使う側のインタフェースで定義します)。
+  world 自身の `use` で取り込んだリソースと、world が宣言する `resource` は
+  コンポーネントのインポートなので、world の関数はそのハンドルを受け渡せません。
+- 1 つの `defun` が 2 つのエクスポートの実装になる場合 (メソッド `counter.add` と関数
+  `counter-add`) は拒否します。`:names` の表では、リソースの関数をメンバー名
+  (`"counter-add"`) で指定します。
+
+インタプリタと JVM では、ディレクティブはこれらの関数もほかの関数と同じように検査し、
+何もエクスポートしません。インタフェースの[プロバイダ](rontolisp-wit-provide.md)として
+束縛すれば、同じ関数がプロセス内でそのインタフェースの `wit-import` に応え、その場合の
+ハンドルは値そのものです。
+[`examples/wit/resource`](https://github.com/making/rontolisp/tree/develop/examples/wit/resource)
+は、1 つのプログラムを両方の形で実行する例です。
+
+コアモジュール (`-o out.wasm` だけ、`--component` なしの `--no-wasi`) と `--no-gc` は、
+リソースを宣言するインタフェースを拒否します。Clojure と Java のフロントエンドも
+拒否します。
 
 `--no-wasi` のモジュールも、`flags` 以外の複合型をエクスポートできます。コアのエクスポートは正準 ABI の
 コアの値を受け取り、[`--emit-js-glue`](../../guides/wasm-host-boundary.md#wit-interfaces-beyond-the-flat-set)
@@ -244,8 +328,12 @@ try {
   (エクスポートされる関数は必須引数のみを取ります。`&optional` / `&rest` /
   `&key` は拒否されます)
 - エクスポートで受け渡せない WIT 型。WASI モジュールと `--no-gc` ではフラットな型以外、
-  それ以外の出力でもハンドル、`stream`、`future`
-- `resource` を宣言するインタフェースのエクスポート。また、取り込んだ型が含む型に
+  それ以外の出力でも `stream`、`future`、world がエクスポートしないリソースのハンドル
+- リソースの関数に対応する `defun` (`counter-new`、`counter-add`) がない、または引数の数が
+  合わない場合。値 1 つを取らない `counter-drop`。既定のバックエンドのコンポーネント
+  以外の出力で、`resource` を宣言するインタフェースをエクスポートする場合
+- エクスポートするインタフェースの `use` 句が、world がエクスポートしないインタフェースの
+  リソース、またはハンドルを含む型を取り込む場合。また、取り込んだ型が含む型に
   スコープ (world) が名前を与えていない `use` 句と、スコープが別の型に与えている名前を
   使う `use` 句
 - `--no-gc --component` での `async func` (アダプタのないリアクターには非同期の

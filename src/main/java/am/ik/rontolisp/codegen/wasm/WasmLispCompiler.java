@@ -6397,6 +6397,40 @@ public final class WasmLispCompiler implements LispCompiler {
 					tasksGlobalIndex, taskSeqGlobalIndex);
 		}
 		final WasmFutureRuntimeBuilder.Cb cb = cbWiring;
+		// The built-ins of each resource the world exports (canon resource.new / .rep /
+		// .drop, which the component defines over its own resource type): the export
+		// wrappers call them where a handle crosses. Last in the ordinal space, so a
+		// program that exports no resource keeps every ordinal it had.
+		Map<String, ExportHandles.Resource> exportedResources = new LinkedHashMap<>();
+		for (WasmExportCompiler.Decl decl : exportDecls) {
+			String resource = decl.destructorOf();
+			if (resource == null) {
+				continue;
+			}
+			if (!this.component || this.serve) {
+				throw new UnsupportedOperationException("rontolisp:wasm-export '" + decl.exportName()
+						+ "' is the destructor of a resource, which only a component exports (--component)");
+			}
+			String module = ExportHandles.module(Objects.requireNonNull(decl.iface()));
+			int[] ordinals = new int[ExportHandles.FIELDS.size()];
+			for (int i = 0; i < ordinals.length; i++) {
+				String field = ExportHandles.FIELDS.get(i) + resource;
+				ordinals[i] = importSlots.size();
+				importSlotIndex.put(module + "\0" + field, ordinals[i]);
+				importSlots.add(new ImportSlot(module, field, new Type[] { Type.I32 },
+						i == ExportHandles.DROP ? new Type[] {} : new Type[] { Type.I32 }));
+			}
+			exportedResources.put(decl.iface() + "#" + resource, new ExportHandles.Resource(ordinals[ExportHandles.NEW],
+					ordinals[ExportHandles.REP], ordinals[ExportHandles.DROP]));
+		}
+		final ExportHandles exportHandles = exportedResources.isEmpty() ? null
+				: ExportHandles.of(exportedResources, exportDecls, name -> {
+					WasmFunctionInfo helper = functions.get(name);
+					if (helper == null) {
+						throw new IllegalStateException("the program exports a resource without " + name);
+					}
+					return helper.callIndex();
+				});
 		// Fill in the deferred import wrapper bodies now that the helper indices are
 		// known (their positions in userFunctionBodies were reserved in Pass 2a). Each
 		// wrapper calls its (module, field) slot's ordinal, so duplicate bindings
@@ -6506,7 +6540,7 @@ public final class WasmLispCompiler implements LispCompiler {
 							+ "' carries a type the flat set does not, whose answer stays on the bump heap until the"
 							+ " glue has read it, which overlapped calls would share; drop --reentrant");
 				}
-				if (this.component && !this.serve) {
+				if (this.component && !this.serve && !WasmExportCompiler.isResourceExportName(decl)) {
 					if (!WasmExportCompiler.COMPONENT_EXPORT_NAME.matcher(decl.exportName()).matches()) {
 						throw new UnsupportedOperationException("rontolisp:wasm-export name '" + decl.exportName()
 								+ "' is not a valid component-model export name (lower-kebab-case words, e.g."
@@ -6541,8 +6575,9 @@ public final class WasmLispCompiler implements LispCompiler {
 				}
 				// A canonical export's scratch is the two pools its marshalling draws
 				// from, sized by what its types' nesting measured.
-				WasmComponentImportCompiler.ExportPools pools = wit == null ? null : WasmComponentImportCompiler
-					.measureExport(ctxBuilder, decl, allocFuncIndex, strFromMemFuncIndex, bytesFromMemFuncIndex);
+				WasmComponentImportCompiler.ExportPools pools = wit == null ? null
+						: WasmComponentImportCompiler.measureExport(ctxBuilder, decl, allocFuncIndex,
+								strFromMemFuncIndex, bytesFromMemFuncIndex, exportHandles);
 				ByteArrayOutputStream bodyStream = new am.ik.wasm.UnsynchronizedByteArrayOutputStream();
 				WasmWriter bodyWriter = new WasmWriter(bodyStream);
 				Ctx wrapperCtx = ctxBuilder.writer(bodyWriter).bodyStream(bodyStream).build();
@@ -6563,7 +6598,8 @@ public final class WasmLispCompiler implements LispCompiler {
 				WasmComponentImportCompiler.ExportMarshal marshal = pools == null ? null
 						: WasmComponentImportCompiler.exportMarshal(wrapperCtx, decl, pools, allocFuncIndex,
 								strFromMemFuncIndex, bytesFromMemFuncIndex,
-								this.component ? exportHelperBase + helperFuncCount + exportDecls.size() : -1);
+								this.component ? exportHelperBase + helperFuncCount + exportDecls.size() : -1,
+								exportHandles);
 				WasmExportCompiler.emitBody(wrapperCtx, decl, target.callIndex(), strFromMemFuncIndex,
 						bytesFromMemFuncIndex, bytesCopyFuncIndex, marshal);
 				exportBodies.add(assembleEntry(wrapperCtx, scratch, wrapperCtx.nextLocal - paramSlots - scratch.size(),
@@ -10524,7 +10560,11 @@ public final class WasmLispCompiler implements LispCompiler {
 			// canonical string options over the appended ABI helpers.
 			List<WasmExportCompiler.Decl> componentExportDecls = new ArrayList<>();
 			for (ExportPlan p : exportPlans) {
-				componentExportDecls.add(p.decl());
+				// a resource's destructor is a core export the resource type names,
+				// not a function the component lifts
+				if (p.decl().destructorOf() == null) {
+					componentExportDecls.add(p.decl());
+				}
 			}
 			if (this.noWasi) {
 				// --no-wasi: a REACTOR component that imports nothing -- no import

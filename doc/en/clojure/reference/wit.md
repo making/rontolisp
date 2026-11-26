@@ -144,7 +144,9 @@ carries the integers up to 32 bits, the floats, `bool`, `string`, `list<u8>` and
 member reaching beyond them is refused where the program calls it; a component's import carries
 every row but an argument list of anything but `u8`. A component's export carries
 every row but handles, and a world whose types reach one, a stream or a
-future is refused at the WIT line, and a `--no-wasi` module's export carries the same but
+future is refused at the WIT line, as is an exported interface that declares a resource or
+names one in a `use` clause (a Common Lisp program exports one:
+[Resources](../../reference/functions/rontolisp-wit-export.md#resources)), and a `--no-wasi` module's export carries the same but
 flags through its `--emit-js-glue` glue; a WASI module's and `--no-gc`'s
 exports carry the integers, `f64`, `bool` and `string`
 ([`rontolisp:wit-export`](../../reference/functions/rontolisp-wit-export.md#compound-types)).

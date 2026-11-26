@@ -486,7 +486,7 @@ final class NoGcWasmComponentBuilder {
 			}
 			c.rawSection(ComponentWriter.SEC_ALIAS, ComponentWriter.vec(aliases));
 			ComponentExportWiring.append(c, exported, coreMemory, realloc, nextType, nextComponentFunc,
-					nextComponentInstance, printUsed);
+					nextComponentInstance, printUsed, Map.of());
 			return c.toByteArray();
 		}
 		// Per export i: alias the core wrapper, declare its function type, lift it and

@@ -214,11 +214,98 @@ such a type itself (`use geometry.{line, point};`). A name the scope already
 gives another type is refused at the clause; rename it there
 (`point as corner`).
 
-Not carried, each a compile error at the export's WIT line: a resource handle,
-a `stream`, a `future`, and a compound type in an `async func`; an
-exported interface that declares a `resource` is refused as a whole. A WASI
+Not carried, each a compile error at the export's WIT line: a `stream`, a
+`future`, a handle of a resource the world does not export
+([Resources](#resources)), and a compound type in an `async func`. A WASI
 module (`-o out.wasm` alone) and `--no-gc` export the flat types alone and
 refuse a world with any other.
+
+### Resources
+
+A `resource` an exported interface declares is exported by a component
+(`--component`, with or without `--no-wasi`). Its functions are `defun`s named
+as [`rontolisp:wit-import`](rontolisp-wit-import.md) binds them on the other
+side:
+
+| WIT | `defun` | Arguments |
+| --- | --- | --- |
+| `constructor(...)` of `counter` | `counter-new` | the constructor's |
+| a method `add: func(...)` | `counter-add` | the resource, then the method's |
+| `merge: static func(...)` | `counter-merge` | the function's |
+| (a handle is released) | `counter-drop`, optional | the resource |
+
+**The value the constructor answers is the resource**: any Lisp value -- a
+struct, a cons, a closure. The host holds a handle of it, and wherever the WIT
+says `counter`, `own<counter>` or `borrow<counter>` -- a parameter, a result, a
+record's field, a list's element -- the function takes or answers that value.
+
+```console
+// wit/counters.wit
+package example:counters@0.1.0;
+
+interface registry {
+  resource counter {
+    constructor(name: string, start: u32);
+    add: func(by: u32) -> u32;
+    merge: static func(a: counter, b: borrow<counter>) -> counter;
+  }
+
+  total: func(counters: list<borrow<counter>>) -> u32;
+}
+
+world counters {
+  export registry;
+}
+```
+
+```console
+(defstruct counter name value)
+
+(defun counter-new (name start) (make-counter :name name :value start))
+
+(defun counter-add (self by) (incf (counter-value self) by))
+
+(defun counter-merge (a b)
+  (incf (counter-value a) (counter-value b))
+  a)
+
+(defun total (counters) (reduce #'+ counters :key #'counter-value))
+
+(rontolisp:wit-export "wit/counters.wit" :reactor t)
+```
+
+- A **borrowed** handle (`borrow<counter>`, a method's own resource) lends the
+  value for the call. An **owned** one (`counter`, `own<counter>`) hands it
+  over: the caller's handle is gone, and the function keeps the value, changes
+  it or answers it again. Every owned handle answered is a new handle of the
+  value.
+- `counter-drop`, when the program defines it, is called with the value each
+  time a holder releases a handle. It is not called for a handle handed over to
+  an export, which released nothing. A value with no handle left is ordinary
+  garbage.
+- A second exported interface may name the resource in a `use` clause
+  (`use registry.{counter};`) and take or answer it: it is the same resource,
+  and the component exports the declaring interface first. A resource of an
+  interface the world does not export is refused -- at the clause, whether or
+  not a function names it --, as is a type of another interface that holds a
+  handle (name the resource in the clause and define the type where it is
+  used). A world's own `use` of a resource, and a `resource` the world
+  declares, are imports of the component: a function of the world carries no
+  handle of them.
+- Two exports that one `defun` would implement (a method `counter.add` and a
+  function `counter-add`) are refused; under a `:names` table a resource's
+  function is named by its member name (`"counter-add"`).
+
+On the interpreter and the JVM the directive checks these functions like any
+other and exports nothing; bound as the
+[provider](rontolisp-wit-provide.md) of the interface, they answer a
+`wit-import` of it in process, a handle there being the value itself.
+[`examples/wit/resource`](https://github.com/making/rontolisp/tree/develop/examples/wit/resource)
+runs one program both ways.
+
+A core module (`-o out.wasm` alone, `--no-wasi` without `--component`) and
+`--no-gc` refuse an interface that declares a resource, and so do the Clojure
+and the Java front ends.
 
 A `--no-wasi` module exports them too, all but `flags`. Its core export takes the canonical ABI's
 core values, and the [`--emit-js-glue`](../../guides/wasm-host-boundary.md#wit-interfaces-beyond-the-flat-set)
@@ -252,10 +339,16 @@ offending export:
   (an exported function takes required parameters only: `&optional` / `&rest` /
   `&key` are rejected)
 - a WIT type the export does not carry: beyond the flat types on a WASI module
-  or under `--no-gc`, and a handle, a `stream` or a `future` anywhere
-- an exported interface that declares a `resource`, and a `use` clause whose
-  type holds one the scope has no name for (a world's) or whose name the scope
-  gives another type
+  or under `--no-gc`, and a `stream`, a `future` or a handle of a resource the
+  world does not export anywhere
+- a resource's function with no matching `defun` (`counter-new`, `counter-add`)
+  or another arity, a `counter-drop` that does not take the one value, and an
+  exported interface that declares a `resource` where the output is no component
+  of the default backend
+- a `use` clause of an exported interface that names a resource of an interface
+  the world does not export, or a type that holds a handle; and one whose type
+  the scope has no name for (a world's) or whose name the scope gives another
+  type
 - an `async func` under `--no-gc --component`, whose adapter-free reactor has no
   async machinery
 - an export name that is not a component-model label (lower-kebab-case words), a

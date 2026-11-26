@@ -354,8 +354,16 @@ is s32, which is int in Java, not long
 
 ### エクスポートの型
 
-型は[上の表](#the-types)のとおりです。ただし、world のエクスポートが受け渡せない型は、
-WIT の行で拒否されます。リソース、`stream`、`future` です。名前の付いた型は、インポートする
+型は[上の表](#the-types)のとおりです。ただし、`@WitExport` のクラスが受け渡せない型は、
+WIT の行で拒否されます。リソース、`stream`、`future` です。リソースは、world がその
+インタフェースをエクスポートする時点で拒否されます。エクスポートするインタフェースが
+リソースを宣言する場合と、`use` 句でほかのインタフェースのリソースを取り込む場合は、
+関数がその型を使うかどうかにかかわらず、インタプリタでも、どの出力（コンポーネント、
+`--no-wasi`、Preview 1 のモジュール、`--no-gc`、`--no-gc --component`）でも拒否されます。Common Lisp の
+プログラムはコンポーネントからリソースをエクスポートでき
+（[`rontolisp:wit-export`](../reference/functions/rontolisp-wit-export.md#resources)）、Java の
+プログラムはそのコンポーネントのリソースを、ほかのリソースと同じく `@WitImport` で
+インポートできます。名前の付いた型は、インポートする
 インタフェースの場合と同じくメンバー型です。
 world が定義する型はアノテーションを付けたクラスのメンバー型で、エクスポートするインタフェースが
 定義する型は、そのインタフェースのメンバークラスのメンバー型です。world やインタフェースが
@@ -481,7 +489,11 @@ public static int pause(int ms) throws InterruptedException {
   捨てた future と境界が見分けられないため）。`bool`、`list`、`flags`、`option` を要素とする `option`
   （境界がその none を見分けられないため）。ほかのインタフェースのリソース。`WitException` として
   投げるエラーの型にある tuple（型を書く場所がないため。`WitResult` の戻り値なら書けます）。
-- world のエクスポートは、リソース、`stream`、`future` を受け渡せません。`async func` のエクスポートで使える型は `bool`、整数、`f64`、`string` だけで、
+- `@WitExport` の world のエクスポートは、リソース、`stream`、`future` を受け渡せません。
+  エクスポートするインタフェースが `resource` を宣言する場合と、その `use` 句がリソースまたは
+  ハンドルを含む型を取り込む場合は、関数がその型を使うかどうかにかかわらず、world の
+  `export` の行で拒否されます。world 自身の `use` で取り込んだリソースは宣言されず、
+  それを使う world の関数は拒否されます。`async func` のエクスポートで使える型は `bool`、整数、`f64`、`string` だけで、
   `--no-gc` では拒否されます。同じラベルのエクスポート 2 つ（world の関数とインタフェースの
   関数、または 2 つのインタフェースの関数）は、それぞれのクラスの 2 つのメソッドです。
 - エクスポートが捕まえなかった例外は、JDK が書く行（`Exception in thread "main"
