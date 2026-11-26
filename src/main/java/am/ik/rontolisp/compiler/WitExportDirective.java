@@ -480,7 +480,7 @@ public final class WitExportDirective {
 			requireCarried(type, exportName, what, witPath, locations, item, resolver, scope);
 			canonical[0] = true;
 		}
-		return WitImportDirective.shapeOf(type, resolver, scope, new ArrayList<>());
+		return WitShapes.of(type, resolver, scope);
 	}
 
 	/**
@@ -807,7 +807,7 @@ public final class WitExportDirective {
 		// directive says the function answers it (:envelope t). Only a WASM backend
 		// compiles the export.
 		if (!flat && backend != Backend.OTHER && result != null && !directive.envelope()
-				&& resolveAliases(result, resolver, scope).type() instanceof WitType.ResultOf) {
+				&& WitShapes.resolveAliases(result, resolver, scope).type() instanceof WitType.ResultOf) {
 			exported = defunName + "%wit-export";
 			forms.add(envelopeDefun(exported, defunName, lambdaList, defuns.lambdaList(WIT_RUNTIME_DEFUN) != null));
 		}
@@ -919,27 +919,12 @@ public final class WitExportDirective {
 		return new WitItem.InterfaceDef(am.ik.wit.WitMeta.none(), name, inline.items());
 	}
 
-	// A type and the scope it is written in.
-	private record Scoped(WitItem.InterfaceDef scope, WitType type) {
-	}
-
-	// Follows a `type` alias chain (across interfaces) to the type it bottoms out at.
-	private static Scoped resolveAliases(WitType type, WitResolver resolver, WitItem.InterfaceDef scope) {
-		if (type instanceof WitType.Named named) {
-			WitResolver.Owned owned = resolver.resolveOwned(scope, named.name());
-			if (owned != null && owned.item() instanceof WitItem.TypeAlias alias) {
-				return resolveAliases(alias.target(), resolver, owned.owner());
-			}
-		}
-		return new Scoped(scope, type);
-	}
-
 	// The wasm-export type designator of a WIT type the flat boundary carries: the whole
 	// fixed-width integer family, f64, bool and string, through any alias; null for
 	// every other type, which crosses through the canonical ABI or not at all.
 	private static @Nullable BoundaryType flatDesignator(WitType type, WitResolver resolver,
 			WitItem.InterfaceDef scope) {
-		return resolveAliases(type, resolver, scope).type() instanceof WitType.Prim prim
+		return WitShapes.resolveAliases(type, resolver, scope).type() instanceof WitType.Prim prim
 				? BoundaryType.forWitName(prim.name()) : null;
 	}
 

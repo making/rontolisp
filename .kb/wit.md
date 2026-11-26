@@ -394,7 +394,10 @@ the Lisp side only.
   `:as "label"`.
 - **`describe`** (`WitImportDirective.describe`, `WitExportDirective.describe`): the members / exports
   each typed as a `WitTypeMapper.Shape` with its line, after the same checks as `lower` but before
-  any program exists, so a front end binds its names first. An export says whether it is
+  any program exists, so a front end binds its names first. Both describe through `WitShapes`,
+  which also holds the one alias follower: either directive naming the other for it is a class
+  cycle (`PackageCycleTest`), the import one already naming `WitExportDirective.Backend`. An
+  export says whether it is
   `canonical` (a type outside the flat set), by the test `lower` chooses the form with; the
   Clojure boundary refuses such a one until its tier converts (`.todo/m81`). A shape is the whole type, aliases
   followed and nested types resolved in the interface that writes them (`use` crossed). A NESTED

@@ -16,6 +16,7 @@ import am.ik.rontolisp.LispString;
 import am.ik.rontolisp.LispSymbol;
 import am.ik.rontolisp.LispVal;
 import am.ik.rontolisp.PackageRegistry;
+import am.ik.rontolisp.compiler.WitShapes.Scoped;
 import am.ik.wit.WitDocument;
 import am.ik.wit.WitItem;
 import am.ik.wit.WitLocations;
@@ -696,7 +697,7 @@ public final class WitImportDirective {
 			if (!(item instanceof WitItem.TypeAlias alias)) {
 				continue;
 			}
-			Scoped target = resolveAliases(alias.target(), resolver, iface);
+			Scoped target = WitShapes.resolveAliases(alias.target(), resolver, iface);
 			boolean stream = target.type() instanceof WitType.StreamOf;
 			if (!stream && !(target.type() instanceof WitType.FutureOf)) {
 				// A non-stream/future alias binds ONE derived member instead:
@@ -818,7 +819,7 @@ public final class WitImportDirective {
 	// The representation of a type as designatorOf judges it, an undefined name counted
 	// as flat so the lowering names it.
 	private static WitTypeMapper.Rep flatRep(WitType type, WitResolver resolver, WitItem.InterfaceDef iface) {
-		Scoped scoped = resolveAliases(type, resolver, iface);
+		Scoped scoped = WitShapes.resolveAliases(type, resolver, iface);
 		if (scoped.type() instanceof WitType.Named named) {
 			WitResolver.Owned owned = resolver.resolveOwned(scoped.iface(), named.name());
 			return owned == null ? WitTypeMapper.Rep.UNSUPPORTED : WitTypeMapper.repOfDefinition(owned.item());
@@ -855,7 +856,7 @@ public final class WitImportDirective {
 	// Whether a stream or a future occurs anywhere in a type, definitions followed once.
 	private static boolean mentionsStreamOrFuture(WitType type, WitResolver resolver, WitItem.InterfaceDef iface,
 			java.util.IdentityHashMap<WitItem, Boolean> seen) {
-		Scoped scoped = resolveAliases(type, resolver, iface);
+		Scoped scoped = WitShapes.resolveAliases(type, resolver, iface);
 		WitItem.InterfaceDef in = scoped.iface();
 		return switch (scoped.type()) {
 			case WitType.StreamOf ignored -> true;
@@ -1116,7 +1117,7 @@ public final class WitImportDirective {
 			if (!(item instanceof WitItem.TypeAlias alias)) {
 				continue;
 			}
-			Scoped target = resolveAliases(alias.target(), resolver, iface);
+			Scoped target = WitShapes.resolveAliases(alias.target(), resolver, iface);
 			boolean stream = target.type() instanceof WitType.StreamOf;
 			boolean async = stream || target.type() instanceof WitType.FutureOf;
 			// lower() checks an alias's target only where it binds the alias's members
@@ -1157,142 +1158,12 @@ public final class WitImportDirective {
 	// is the member's error, as lower() makes it.
 	private static WitTypeMapper.Shape shapeOf(WitType type, WitResolver resolver, WitItem.InterfaceDef iface,
 			String witPath, WitLocations locations, WitItem anchor, String member, String what) {
-		Scoped scoped = resolveAliases(type, resolver, iface);
+		Scoped scoped = WitShapes.resolveAliases(type, resolver, iface);
 		if (scoped.type() instanceof WitType.Named named
 				&& resolver.resolveOwned(scoped.iface(), named.name()) == null) {
 			throw undefinedType(witPath, locations, anchor, member, what, named);
 		}
-		return shapeOf(type, resolver, iface, new ArrayList<>());
-	}
-
-	// The whole shape, every nested type described in the scope THAT type is written in
-	// (an option's element, a result's arms, a list's element, a record's fields, a
-	// variant's payloads, a tuple's elements). A nested type naming no definition, or a
-	// definition containing itself, has no representation: lower() reaches neither on the
-	// interpreter and the JVM, so the member is the front end's to refuse where a program
-	// calls it, never the whole interface's. `path` holds the definitions being
-	// described.
-	static WitTypeMapper.Shape shapeOf(WitType type, WitResolver resolver, WitItem.InterfaceDef iface,
-			List<WitItem> path) {
-		Scoped scoped = resolveAliases(type, resolver, iface);
-		WitType t = scoped.type();
-		WitItem.InterfaceDef in = scoped.iface();
-		String wit = am.ik.wit.WitPrinter.type(type);
-		switch (t) {
-			case WitType.Named named -> {
-				WitResolver.Owned owned = resolver.resolveOwned(in, named.name());
-				if (owned == null || path.stream().anyMatch(seen -> seen == owned.item())) {
-					return new WitTypeMapper.Shape(WitTypeMapper.Rep.UNSUPPORTED, null, wit);
-				}
-				path.add(owned.item());
-				try {
-					List<WitTypeMapper.Part> parts = new ArrayList<>();
-					switch (owned.item()) {
-						case WitItem.RecordDef record -> {
-							for (WitItem.Field field : record.fields()) {
-								parts.add(new WitTypeMapper.Part(field.name(),
-										shapeOf(field.type(), resolver, owned.owner(), path)));
-							}
-						}
-						case WitItem.VariantDef variant -> {
-							for (WitItem.Case c : variant.cases()) {
-								parts.add(new WitTypeMapper.Part(c.name(), c.payload() == null ? null
-										: shapeOf(c.payload(), resolver, owned.owner(), path)));
-							}
-						}
-						case WitItem.EnumDef enumDef -> {
-							for (WitItem.Case c : enumDef.cases()) {
-								parts.add(new WitTypeMapper.Part(c.name(), null));
-							}
-						}
-						case WitItem.FlagsDef flags -> {
-							for (WitItem.Case c : flags.cases()) {
-								parts.add(new WitTypeMapper.Part(c.name(), null));
-							}
-						}
-						default -> {
-							// a resource: an opaque handle
-						}
-					}
-					return new WitTypeMapper.Shape(WitTypeMapper.repOfDefinition(owned.item()), null, wit, null,
-							List.copyOf(parts), definedName(owned.item()), false);
-				}
-				finally {
-					path.removeLast();
-				}
-			}
-			case WitType.BorrowOf borrow -> {
-				return new WitTypeMapper.Shape(WitTypeMapper.Rep.HANDLE, null, wit, null, List.of(),
-						resourceName(borrow.resource(), resolver, in), true);
-			}
-			case WitType.OwnOf own -> {
-				return new WitTypeMapper.Shape(WitTypeMapper.Rep.HANDLE, null, wit, null, List.of(),
-						resourceName(own.resource(), resolver, in), false);
-			}
-			case WitType.OptionOf option -> {
-				return new WitTypeMapper.Shape(WitTypeMapper.Rep.NIL_OR_VALUE,
-						shapeOf(option.element(), resolver, in, path), wit);
-			}
-			case WitType.ResultOf result -> {
-				return new WitTypeMapper.Shape(WitTypeMapper.Rep.RESULT,
-						result.ok() == null ? null : shapeOf(result.ok(), resolver, in, path), wit,
-						result.err() == null ? null : shapeOf(result.err(), resolver, in, path), List.of());
-			}
-			case WitType.ListOf list -> {
-				// a list of bytes is a byte string whatever alias names its element, as
-				// the canonical ABI lifts it (WasmComponentImportCompiler's isU8)
-				if (isU8(list.element(), resolver, in)) {
-					return new WitTypeMapper.Shape(WitTypeMapper.Rep.BYTE_STRING, null, wit);
-				}
-				return new WitTypeMapper.Shape(WitTypeMapper.Rep.LIST, shapeOf(list.element(), resolver, in, path),
-						wit);
-			}
-			case WitType.TupleOf tuple -> {
-				List<WitTypeMapper.Part> parts = new ArrayList<>();
-				for (WitType element : tuple.elements()) {
-					parts.add(new WitTypeMapper.Part(Integer.toString(parts.size()),
-							shapeOf(element, resolver, in, path)));
-				}
-				return new WitTypeMapper.Shape(WitTypeMapper.Rep.TUPLE_LIST, null, wit, null, List.copyOf(parts));
-			}
-			case WitType.StreamOf stream -> {
-				return new WitTypeMapper.Shape(WitTypeMapper.Rep.STREAM_HANDLE,
-						stream.element() == null ? null : shapeOf(stream.element(), resolver, in, path), wit);
-			}
-			case WitType.FutureOf future -> {
-				return new WitTypeMapper.Shape(WitTypeMapper.Rep.FUTURE_HANDLE,
-						future.element() == null ? null : shapeOf(future.element(), resolver, in, path), wit);
-			}
-			default -> {
-				return new WitTypeMapper.Shape(WitTypeMapper.rep(t), null, wit, null, List.of(),
-						t instanceof WitType.Prim prim ? prim.name() : null, false);
-			}
-		}
-	}
-
-	// The name a type definition introduces: what a front end naming its types after the
-	// WIT's finds its own by.
-	private static @Nullable String definedName(WitItem item) {
-		return switch (item) {
-			case WitItem.RecordDef def -> def.name();
-			case WitItem.VariantDef def -> def.name();
-			case WitItem.EnumDef def -> def.name();
-			case WitItem.FlagsDef def -> def.name();
-			case WitItem.ResourceDef def -> def.name();
-			default -> null;
-		};
-	}
-
-	// The resource an own<R> or a borrow<R> names, aliases followed (R may be one).
-	private static String resourceName(String name, WitResolver resolver, WitItem.InterfaceDef in) {
-		Scoped scoped = resolveAliases(new WitType.Named(name), resolver, in);
-		if (scoped.type() instanceof WitType.Named named) {
-			WitResolver.Owned owned = resolver.resolveOwned(scoped.iface(), named.name());
-			if (owned != null && owned.item() instanceof WitItem.ResourceDef resource) {
-				return resource.name();
-			}
-		}
-		return name;
+		return WitShapes.of(type, resolver, iface);
 	}
 
 	private static final String NO_GC_COMPONENT_RESOURCE_REASON = " (a resource handle has no scalar component"
@@ -1324,7 +1195,7 @@ public final class WitImportDirective {
 
 	private static void requireScalarWitType(WitType type, String what, WitResolver.Func func, String witPath,
 			WitLocations locations, WitResolver resolver, WitItem.InterfaceDef iface, String member) {
-		WitType resolved = resolveAliases(type, resolver, iface).type();
+		WitType resolved = WitShapes.resolveAliases(type, resolver, iface).type();
 		if (resolved instanceof WitType.Prim prim && BoundaryType.forWitName(prim.name()) != null) {
 			return;
 		}
@@ -1651,33 +1522,7 @@ public final class WitImportDirective {
 		if (result == null) {
 			return false;
 		}
-		return resolveAliases(result, resolver, iface).type() instanceof WitType.ResultOf;
-	}
-
-	/**
-	 * A WIT type together with the interface scope its named references resolve in. The
-	 * scope CHANGES as a walk descends: follow a {@code use} clause into another
-	 * interface and you are looking at THAT interface's types, whose own internal
-	 * references the starting scope never imported ({@code wasi:http/outgoing-handler}
-	 * uses {@code error-code} from {@code wasi:http/types}, and {@code error-code}'s
-	 * {@code DNS-error} case carries a {@code DNS-error-payload} it has never heard of).
-	 *
-	 * @param iface the interface the type is written in
-	 * @param type the type
-	 */
-	private record Scoped(WitItem.InterfaceDef iface, WitType type) {
-	}
-
-	// Follows a `type` alias chain (across interfaces) to the type it bottoms out at, and
-	// reports the scope THAT type is written in.
-	private static Scoped resolveAliases(WitType type, WitResolver resolver, WitItem.InterfaceDef iface) {
-		if (type instanceof WitType.Named named) {
-			WitResolver.Owned owned = resolver.resolveOwned(iface, named.name());
-			if (owned != null && owned.item() instanceof WitItem.TypeAlias alias) {
-				return resolveAliases(alias.target(), resolver, owned.owner());
-			}
-		}
-		return new Scoped(iface, type);
+		return WitShapes.resolveAliases(result, resolver, iface).type() instanceof WitType.ResultOf;
 	}
 
 	// What the canonical-ABI wrapper codegen supports today: results lift recursively
@@ -1698,7 +1543,7 @@ public final class WitImportDirective {
 	private static void validateComponentParam(WitType type, String witPath, WitLocations locations,
 			WitResolver resolver, WitItem.InterfaceDef iface, WitItem anchor, String member, String what,
 			boolean optionAllowed) {
-		Scoped scoped = resolveAliases(type, resolver, iface);
+		Scoped scoped = WitShapes.resolveAliases(type, resolver, iface);
 		// From here on the type's names resolve in the interface that WROTE it, which is
 		// not necessarily the one this walk started in.
 		WitItem.InterfaceDef in = scoped.iface();
@@ -1790,13 +1635,14 @@ public final class WitImportDirective {
 	}
 
 	private static boolean isU8(WitType type, WitResolver resolver, WitItem.InterfaceDef iface) {
-		return resolveAliases(type, resolver, iface).type() instanceof WitType.Prim prim && "u8".equals(prim.name());
+		return WitShapes.resolveAliases(type, resolver, iface).type() instanceof WitType.Prim prim
+				&& "u8".equals(prim.name());
 	}
 
 	// Whether the type is (an own of, or a bare reference to) a resource -- the element
 	// shape of a handle stream like wasi:sockets' stream<tcp-socket>.
 	private static boolean isResourceHandle(WitType type, WitResolver resolver, WitItem.InterfaceDef iface) {
-		Scoped scoped = resolveAliases(type, resolver, iface);
+		Scoped scoped = WitShapes.resolveAliases(type, resolver, iface);
 		if (scoped.type() instanceof WitType.OwnOf) {
 			return true;
 		}
@@ -1844,7 +1690,7 @@ public final class WitImportDirective {
 
 	private static void validateComponentResult(WitType type, String witPath, WitLocations locations,
 			WitResolver resolver, WitItem.InterfaceDef iface, WitItem anchor, String member, String what) {
-		Scoped scoped = resolveAliases(type, resolver, iface);
+		Scoped scoped = WitShapes.resolveAliases(type, resolver, iface);
 		WitItem.InterfaceDef in = scoped.iface();
 		WitType t = scoped.type();
 		switch (t) {
@@ -1990,7 +1836,7 @@ public final class WitImportDirective {
 			types.add(func.def().func().result());
 		}
 		for (WitType type : types) {
-			Scoped scoped = resolveAliases(type, resolver, iface);
+			Scoped scoped = WitShapes.resolveAliases(type, resolver, iface);
 			if (scoped.type() instanceof WitType.ListOf list && isU8(list.element(), resolver, scoped.iface())) {
 				throw new UnsupportedOperationException(WitSource.at(witPath, locations, func.def()) + ": '" + member
 						+ "': :octets t crosses a list<u8> as a byte vector, which --no-gc has none of (the scalar "
@@ -2016,7 +1862,7 @@ public final class WitImportDirective {
 		// import and an s64 export of one world must not disagree about which backend
 		// can bind them.
 		if (noGc) {
-			WitType resolved = resolveAliases(type, resolver, iface).type();
+			WitType resolved = WitShapes.resolveAliases(type, resolver, iface).type();
 			if (resolved instanceof WitType.Prim prim) {
 				BoundaryType boundary = BoundaryType.forWitName(prim.name());
 				if (boundary != null) {
@@ -2074,7 +1920,7 @@ public final class WitImportDirective {
 		// an alias whose target is itself a name (`type headers = fields`, which every
 		// real
 		// wasi:http interface writes) -- only the resolver can.
-		Scoped scoped = resolveAliases(type, resolver, iface);
+		Scoped scoped = WitShapes.resolveAliases(type, resolver, iface);
 		WitType t = scoped.type();
 		if (t instanceof WitType.Named named) {
 			WitResolver.Owned owned = resolver.resolveOwned(scoped.iface(), named.name());
@@ -2191,7 +2037,7 @@ public final class WitImportDirective {
 		if (type == null) {
 			return null;
 		}
-		Scoped scoped = resolveAliases(type, resolver, iface);
+		Scoped scoped = WitShapes.resolveAliases(type, resolver, iface);
 		WitItem.InterfaceDef in = scoped.iface();
 		return switch (scoped.type()) {
 			case WitType.ListOf list -> isU8(list.element(), resolver, in) ? null
