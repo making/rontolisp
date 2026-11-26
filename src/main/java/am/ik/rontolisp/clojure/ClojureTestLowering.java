@@ -116,9 +116,9 @@ final class ClojureTestLowering {
 		ctx.currentNs = NAMESPACE;
 		try {
 			List<LispVal> forms = new ArrayList<>();
-			forms.addAll(ClojureDispatchLowering.defmultiForms(ctx,
+			forms.addAll(ClojureDispatchLowering.defmultiForms(ctx, null,
 					List.of(new LispSymbol("defmulti"), new LispSymbol("report"), reportDispatchFn())));
-			forms.addAll(ClojureDispatchLowering.defmultiForms(ctx,
+			forms.addAll(ClojureDispatchLowering.defmultiForms(ctx, null,
 					List.of(new LispSymbol("defmulti"), new LispSymbol("assert-expr"), assertDispatchFn())));
 			for (String type : List.of("pass", "fail", "error", "summary", "default")) {
 				forms.add(reportMethod(ctx, type));

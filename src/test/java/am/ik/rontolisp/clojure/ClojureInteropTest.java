@@ -1406,12 +1406,12 @@ class ClojureInteropTest {
 	}
 
 	@Test
-	void classOfAnExceptionIsItsClassKeywordWithOrWithoutInterop() throws Exception {
-		// an ex-info condition is no host object: the same keyword whether the program
-		// uses interop (the host arm behind the exception arm) or not (no java: at all)
+	void classOfAnExceptionIsItsClassWithOrWithoutInterop() throws Exception {
+		// an ex-info condition is no host object: its class prints the same whether the
+		// program uses interop (the stub class) or not (the designator, no java: at all)
 		String plain = "(println (try (class (ex-info \"a\" {})) (catch Exception e (ex-message e))))";
-		assertBothEqual(plain, ":clojure.lang.ExceptionInfo\n");
-		assertBothEqual("(println (.getName String)) " + plain, "java.lang.String\n:clojure.lang.ExceptionInfo\n");
+		assertBothEqual(plain, "clojure.lang.ExceptionInfo\n");
+		assertBothEqual("(println (.getName String)) " + plain, "java.lang.String\nclojure.lang.ExceptionInfo\n");
 	}
 
 	@Test
@@ -2802,7 +2802,7 @@ class ClojureInteropTest {
 				"35\nStream closed\n");
 		// class of a file reader names its host class like the printer does
 		assertBothEqual(prelude + "(with-open [r (jio/reader " + path + ")] (println (class r)))",
-				":java.io.BufferedReader\n");
+				"java.io.BufferedReader\n");
 		// the line-seq path form keeps answering strictly
 		assertBothEqual(prelude + "(println (line-seq " + path + "))", "(apple Banana fig cherry DATE kiwi )\n");
 	}

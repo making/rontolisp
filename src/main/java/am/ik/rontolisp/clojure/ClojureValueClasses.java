@@ -415,16 +415,15 @@ final class ClojureValueClasses {
 	}
 
 	/**
-	 * A class name in value position to the keyword {@code class} answers for its values,
-	 * or null when it names none here: a {@code clojure.lang} class the host does not
-	 * load but a kind's values implement ({@code clojure.lang.IFn}, spelled dotted or
-	 * imported), or any other class of the oracle's jar ({@link ClojureLangJar}), whose
-	 * keyword no value answers. A typo keeps the unknown-name refusal.
-	 * {@code (= clojure.lang.IFn (class (fn []))} stays false: the spelling is the
-	 * interface's keyword, never the function's kind.
+	 * A class name in value position to its class value, or null when it names none here:
+	 * a {@code clojure.lang} class the host does not load but a kind's values implement
+	 * ({@code clojure.lang.IFn}, spelled dotted or imported), or any other class of the
+	 * oracle's jar ({@link ClojureLangJar}). A typo keeps the unknown-name refusal. The
+	 * class of a {@code clojure.core} function's value is the class {@code class} answers
+	 * for every function here.
 	 * @param ctx the lowering
 	 * @param name the spelling, as written
-	 * @return the keyword form, or null
+	 * @return the class value's form, or null
 	 */
 	static @Nullable LispVal classKeyword(ClojureLowering ctx, String name) {
 		if (!ClojureNamespaceLowering.isClasslike(ctx, name)) {
@@ -434,14 +433,19 @@ final class ClojureValueClasses {
 		if (isCoreFunctionClass(fqn)) {
 			// the class of a core function's value: what class answers for every
 			// function here (datascript's :tag clojure.core$long)
-			return ClojureCollectionLowering.keywordForm("function");
+			ctx.classObjects = true;
+			return ClojureInteropLowering.classValueForm(FUNCTION_CLASS);
 		}
 		if (fqn.indexOf('.') < 0 || ClojureHostClasses.exists(fqn)
 				|| kindsOf(fqn).isEmpty() && !ClojureLangJar.holds(fqn)) {
 			return null;
 		}
-		return ClojureCollectionLowering.keywordForm(fqn);
+		ctx.classObjects = true;
+		return ClojureInteropLowering.classValueForm(fqn);
 	}
+
+	/** The class {@code class} answers for a function. */
+	private static final String FUNCTION_CLASS = "clojure.lang.AFunction";
 
 	/** The package of the classes of the {@code clojure.core} functions. */
 	private static final String CORE_FUNCTION_PREFIX = "clojure.core$";

@@ -381,7 +381,7 @@ final class ClojureHierarchyLowering {
 		LispSymbol raw = new LispSymbol("raw");
 		LispSymbol spelled = new LispSymbol("spelled");
 		LispVal canon = hfn("IF", hfn("NULL", raw), ClojureCollectionLowering.nilMarkerForm(),
-				hfn("OR", hfn(ClojureDispatchLowering.DESIGNATOR_KIND, raw), raw));
+				hfn(ClojureDispatchLowering.DISPATCH_KIND, raw));
 		runtime.add(
 				hdefun(HIERARCHY_GET_METHOD, List.of(name, methods, prefers, hier, def, object, raw),
 						hlet(List.of(hmiss(miss), ClojureLowerUtil.list(dv, canon),
@@ -546,7 +546,8 @@ final class ClojureHierarchyLowering {
 		LispVal parentsBody = hfn("C%H-NOT-EMPTY", parents);
 		LispVal ancestorsBody = hfn("C%H-NOT-EMPTY", ancestors);
 		if (objects && !host) {
-			// where no host is, a designator of a row class reads as its keyword
+			// where the walk is not the host's, a class value of a row class reads as its
+			// keyword
 			LispVal key = ClojureLowerUtil.list(child, hfn(DESIGNATOR_KEY, child, new LispSymbol(CLASS_OBJECTS)));
 			parentsBody = hlet(List.of(key), parentsBody);
 			ancestorsBody = hlet(List.of(key), ancestorsBody);
@@ -566,9 +567,11 @@ final class ClojureHierarchyLowering {
 	 */
 	static List<LispVal> classChainRuntime(ClojureLowering ctx) {
 		boolean host = ctx.hostClassWalk;
-		// a class value answers the host's object where the walk is the host's, a
-		// designator where no host is
-		boolean objects = ctx.classObjects && (host || !ctx.hostTarget);
+		// a class value answers the class value its name reads as (the host's object
+		// where the walk is the host's), which a walk that is not the host's reads as
+		// the class keyword: a designator, and on the interpreter a host class object of
+		// a program naming no java: operator
+		boolean objects = ctx.classObjects;
 		List<LispVal> runtime = new ArrayList<>();
 		runtime.add(isaDefun(true, host, objects && !host));
 		runtime.addAll(readerDefuns(true, host, ctx.readsDescendants || ctx.open, objects));
@@ -609,11 +612,8 @@ final class ClojureHierarchyLowering {
 
 	/**
 	 * {@code (setq c%h-class-objects '(name ...))}: the classes of every row emitted so
-	 * far, its own and its bases, that would read as a class object
-	 * ({@link #CLASS_OBJECTS}), sorted. A row's class is one of the tables, so the list
-	 * asks no host: a class this lowering's classes lack reads as one unless it is a
-	 * {@code clojure.lang} class, which reads as its keyword ({@code jakarta.servlet} is
-	 * the JVM's own where the tests run, and is no class of the jar), and a record's or
+	 * far, its own and its bases, that read as a class value ({@link #CLASS_OBJECTS}),
+	 * sorted. A row's class is one of the tables, so the list asks no host; a record's or
 	 * deftype's class keeps its designator.
 	 */
 	static LispVal classObjectsForm(ClojureLowering ctx) {
@@ -628,8 +628,7 @@ final class ClojureHierarchyLowering {
 		ctx.types.values().forEach(type -> types.add(type.className()));
 		List<LispVal> names = new ArrayList<>();
 		for (String name : classes) {
-			if (name.indexOf('.') >= 0 && !types.contains(name) && !ClojureClassBases.NUMBER_SUPERS.containsKey(name)
-					&& (ClojureHostClasses.exists(name) || !name.startsWith("clojure.lang."))) {
+			if (name.indexOf('.') >= 0 && !types.contains(name)) {
 				names.add(LispString.literal(name));
 			}
 		}

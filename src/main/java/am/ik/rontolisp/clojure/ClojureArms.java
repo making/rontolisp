@@ -1000,20 +1000,25 @@ public final class ClojureArms {
 		/**
 		 * A class designator {@code (:C%CLASS name)}: a record's or deftype's class (its
 		 * dispatch tag, which its name evaluates to and {@code class} answers), what
-		 * {@code type} answers for a core value whose kind collides with a schema
-		 * registry entry, and a class literal where no host is. The printer, {@code str},
-		 * {@code class}, {@code instance?} of {@code Class}, the hashes,
-		 * {@code identical?}, {@code cast}, {@code class?}, the class chains, the
+		 * {@code class} answers where the program does not reach the host, and a class
+		 * literal where no host is. The printer, {@code str}, {@code class},
+		 * {@code instance?} of {@code Class}, the hashes, {@code identical?},
+		 * {@code cast}, {@code class?}, the class chains, the
 		 * {@code .getName}/{@code .getSimpleName} arms and a {@code java:} member's
-		 * argument read one: only a construction spelling the {@code :C%CLASS} tag,
-		 * {@code type}'s run-time designator and a protocol interface's class value
+		 * argument read one, and the dispatcher reads a dispatch value that is one as its
+		 * kind ({@link ClojureDispatchLowering#DISPATCH_KIND}, a view): only a
+		 * construction spelling the {@code :C%CLASS} tag, {@code class}'s run-time
+		 * answer, a class value of a name ({@link ClojureInteropLowering#CLASS_VALUE})
+		 * and a protocol interface's class value
 		 * ({@link ClojureProtocolLowering#INTERFACE_CLASS}) make one. The alias is
 		 * {@code class?}'s call {@code (is-class value "java.lang.Class")}, which stands
 		 * for the host test it made before designators answered it.
 		 */
-		CLASS_DESIGNATOR("class-designator", Set.of(ClojurePredicateLowering.CLASS_DESIGNATOR_P), Set.of(),
+		CLASS_DESIGNATOR("class-designator", Set.of(ClojurePredicateLowering.CLASS_DESIGNATOR_P),
+				Set.of(ClojureDispatchLowering.DISPATCH_KIND),
 				Map.of(ClojurePredicateLowering.IS_CLASS, "RONTOLISP::%CLOJURE-HOST-INSTANCE-P"),
-				Set.of(":C%CLASS", ClojureDispatchLowering.TYPE_DESIGNATOR, ClojureProtocolLowering.INTERFACE_CLASS),
+				Set.of(":C%CLASS", ClojureDispatchLowering.CLASS_OF, ClojureInteropLowering.CLASS_VALUE,
+						ClojureProtocolLowering.INTERFACE_CLASS),
 				Set.of()),
 
 		/**
@@ -1027,6 +1032,16 @@ public final class ClojureArms {
 						"RONTOLISP::%CLOJURE-LOADED-LIBS", "RONTOLISP::%CLOJURE-INTERN", "RONTOLISP::%CLOJURE-VAR-SET",
 						"RONTOLISP::%CLOJURE-WITH-REDEFS-FN", "RONTOLISP::%CLOJURE-VAR-NS"),
 				Set.of()),
+
+		/**
+		 * The class a method table's key stands for, noted beside a class-spelled
+		 * {@code defmethod}'s row ({@link ClojureDispatchLowering#NOTE_CLASS_ROW}): only
+		 * {@code methods} reads it, keying such a row by the class value; a program
+		 * calling no {@code methods} sheds the notes.
+		 */
+		METHOD_CLASS_ROW("method-class-row", Set.of(), Set.of(), Map.of(),
+				Set.of(ClojureDispatchLowering.MULTI_METHODS), Set.of(), false, Set.of(), Set.of(), Set.of(), Map.of(),
+				Map.of(), Set.of(ClojureDispatchLowering.NOTE_CLASS_ROW), null, null, Set.of()),
 
 		/**
 		 * A fn's class name, the oracle's {@code ns$name} for a var's function: only

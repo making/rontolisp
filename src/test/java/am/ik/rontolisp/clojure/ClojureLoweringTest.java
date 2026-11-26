@@ -1452,7 +1452,7 @@ class ClojureLoweringTest {
 		String host = lowered("(derive :a :b) (println (java.util.ArrayList.))");
 		assertThat(host).contains("(RONTOLISP::%CLOJURE-HOST-CLASS-ISA ")
 			.contains("(RONTOLISP::%CLOJURE-HOST-CLASS-ANCESTORS ")
-			.contains("(SETQ C%H-KINDS '((\"Atom\" . \"atom\")")
+			.contains("(SETQ C%H-KINDS '((\"AFunction\" . \"function\") (\"Atom\" . \"atom\")")
 			.doesNotContain("DESCENDANTS-REFUSAL");
 		assertThat(lowered("(derive :a :b) (descendants (class (java.util.ArrayList.)))"))
 			.contains("(RONTOLISP::%CLOJURE-HOST-NAMES-CLASS-P ");
@@ -2219,11 +2219,12 @@ class ClojureLoweringTest {
 
 	@Test
 	void aMacroExpansionHoldingAClassValueLowersAsAConstant() {
-		// a class value has no readable form, but both kinds that reach an expansion
-		// are constants: a (:C%CLASS name) designator (what type answers at macro time)
-		// travels as the construction it is, the same value on every backend
+		// a class value has no readable form, but both kinds that reach an expansion --
+		// a host class, a designator (a native image's) -- lower as the class's source
+		// spelling would, the same form on the binary as on the JVM
 		assertThat(macroLowered("(defmacro mcv-t [v] `'~(mapv type v)) (mcv-t [a 1])"))
-			.contains("(LIST :C%CLASS \"clojure.lang.Symbol\")");
+			.contains("(VECTOR (RONTOLISP::%CLOJURE-CLASS-VALUE \"clojure.lang.Symbol\")"
+					+ " (RONTOLISP::%CLOJURE-CLASS-VALUE \"java.lang.Long\"))");
 		// a host java.lang.Class (a class literal a macro body evaluates) as the class
 		// literal's own spelling, the forName object where the host is; in :tag
 		// metadata it is ignored by the backends and visible in (meta #'x), like the
@@ -2864,41 +2865,29 @@ class ClojureLoweringTest {
 	}
 
 	@Test
-	void typeAnswersTheDesignatorWhereARegistryCouldCollide() {
-		// type reads the designator of the host class where the oracle answers
-		// one no schema registry may collide with, else class's kind keyword: a
-		// registry lookup falls through to (type x) on a miss, so a kind keyword
-		// hit the :function/:keyword/... entry -- an unregistered function looped
-		// until the stack overflowed instead of refusing with
-		// :malli.core/invalid-schema (f96). class itself is untouched, and a
-		// dispatch value reads back as its kind.
-		String designator = "RONTOLISP::%CLOJURE-TYPE-DESIGNATOR";
-		assertThat(lowered("(println (type (fn [x] x)))")).contains(designator);
-		assertThat(lowered("(println (type nil))")).contains(designator);
-		assertThat(wasmLowered("(println (type \"s\"))")).contains(designator).doesNotContain("JAVA:");
-		assertThat(lowered("(println (class (fn [x] x)))")).contains(":C%KEYWORD").doesNotContain(designator);
-		assertThat(lowered("(println (type 1))")).contains(designator);
-		String multi = lowered("(defmulti m type) (defmethod m String [s] s)");
-		assertThat(multi).contains("RONTOLISP::%CLOJURE-DESIGNATOR-KIND");
-	}
-
-	@Test
-	void typeOfAPatternIsThePatternClass() {
-		// type of a pattern is what the oracle answers: the host Pattern class
-		// where a host is, its (:C%CLASS name) designator where none is -- the
-		// same split a bare class literal lowers to. Only the oracle's answer
-		// hits the registry's class-schemas entry, so (m/schema #"a") builds
-		// the regex schema (f98); class keeps the :pattern keyword.
+	void typeAndClassAnswerClassValuesAKindDispatchesBy() {
+		// type and class answer the class value of the oracle's class (a registry lookup
+		// falling through to (type x) on a miss then misses like the oracle's, f96/f98):
+		// class's tag mapped to its class, a pattern's the Pattern class; inside a
+		// defmulti dispatch function the tag itself, and a dispatch value that is a
+		// class value reads back as its kind
+		String classOf = ClojureDispatchLowering.CLASS_OF;
+		assertThat(lowered("(println (type (fn [x] x)))")).contains(classOf);
+		assertThat(lowered("(println (type nil))")).contains(classOf);
+		assertThat(wasmLowered("(println (type \"s\"))")).contains(classOf).doesNotContain("JAVA:");
+		assertThat(lowered("(println (class (fn [x] x)))")).contains(classOf);
 		assertThat(lowered("(println (type #\"a\"))")).contains("RONTOLISP::%CLOJURE-RE-PATTERN-P")
-			.contains("JAVA:STATIC")
-			.contains("forName")
-			.contains("java.util.regex.Pattern");
-		assertThat(wasmLowered("(println (type #\"a\"))")).contains("RONTOLISP::%CLOJURE-RE-PATTERN-P")
-			.contains(":C%CLASS")
-			.contains("java.util.regex.Pattern")
+			.contains(classOf)
 			.doesNotContain("JAVA:");
-		assertThat(lowered("(println (class #\"a\"))")).contains(":C%KEYWORD")
-			.doesNotContain("RONTOLISP::%CLOJURE-TYPE-DESIGNATOR");
+		// a program making no class value folds the dispatcher's read of one
+		List<LispVal> keywordDispatch = Clojure.read("(defmulti m :k) (defmethod m :a [s] s)", null);
+		assertThat(ClojureArms.scan(keywordDispatch, ClojureArms.Family.CLASS_DESIGNATOR).builds()).isFalse();
+		assertThat(ClojureArms.strip(keywordDispatch, ClojureArms.Family.CLASS_DESIGNATOR))
+			.noneMatch(form -> form.print().contains(ClojureDispatchLowering.DISPATCH_KIND));
+		assertThat(ClojureArms
+			.scan(Clojure.read("(defmulti m identity) (defmethod m String [s] s) (m (class \"s\"))", null),
+					ClojureArms.Family.CLASS_DESIGNATOR)
+			.builds()).isTrue();
 	}
 
 	@Test

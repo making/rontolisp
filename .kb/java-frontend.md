@@ -1810,7 +1810,11 @@ first error is all that is reported.
 
 One `JavaTypes.Inference` per candidate: what each type parameter IS (`exact`), is ABOVE
 (`lower`: an argument's type) and is UNDER (`upper`: the target); resolved exact, else the
-lub of the lowers, else an upper, else OPEN.
+lub of the lowers, else the one upper under every other and under the declared bounds that
+name no variable of the call (JLS 18.1.3, 18.4: `Object a = f(null)` for
+`<V extends Number> V f(Class<V>)` makes `V` a `Number`, not an `Object` out of its bound;
+java-spec `a-type-argument-is-found-from-the-arguments-the-target-and-the-lambdas`), else an
+upper, else OPEN.
 
 - **Order** (`resolve`): the arguments that are no lambda, each lowered ONCE with no target;
   the phases; the most specific; then the lambdas and method references, once the types

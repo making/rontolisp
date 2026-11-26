@@ -1191,6 +1191,9 @@ public final class PackageRegistry {
 		// by its call sites.
 		rontolispSymbols.add(LispNames.CONS_CAS_CAR_INTERNAL);
 		rontolispSymbols.add(LispNames.CONS_CAS_CDR_INTERNAL);
+		// Internal: a member-less host class defined at run time, spelled rontolisp::%...
+		// by the Clojure library's class values.
+		rontolispSymbols.add(LispNames.HOST_STUB_CLASS_INTERNAL);
 		// Internal: a float's spelling, spelled rontolisp::%... by coalton's rewrite.
 		rontolispSymbols.add(LispNames.DOUBLE_SPELLED_INTERNAL);
 		rontolispSymbols.add(LispNames.DOUBLE_SPELLED_P_INTERNAL);

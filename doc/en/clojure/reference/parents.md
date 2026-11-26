@@ -4,8 +4,8 @@
 `(parents h tag)`
 
 Answers the set of the immediate parents of `tag` in the hierarchy -- the global one, or `h` in
-the two-argument form, nil when there are none. A class spelling is the keyword `class`
-answers for it (see `isa?`), and a class adds its Java bases: the superclass and the
+the two-argument form, nil when there are none. A class spelling is the tag `class`
+answers for it in a dispatch function (see `isa?`), and a class adds its Java bases: the superclass and the
 interfaces it implements. A kind keyword (`:string`, `:function`, ...) adds the supers of
 the values it stands for. A host class object (interpreter and JVM) adds them as class objects,
 like the oracle.

@@ -100,7 +100,7 @@
 - long の範囲内の整数は、何が作ったものでも通常の整数です。`N` リテラル（`2N`）、`bigint`、
  `biginteger`、`BigInt` の和や積（`(+ 1N 2)`）、整数になる比の演算結果（`(* 1/2 2)`、
  `(rationalize 1.0)`）はオラクルの `N` なしで印字され（`3N` ではなく `3`）、`int?` は `true`、
- `class` は `:java.lang.Long` を返し、オラクルが `BigInt` を拒否するビット演算も受け付けます。
+ `class` は `java.lang.Long` を返し、オラクルが `BigInt` を拒否するビット演算も受け付けます。
  long の範囲を超える整数はオラクルの `BigInt` で、`pr` と `print` では `N` 付きで印字されます
  （`str` はオラクルの toString と同じく付けません）。範囲を超える `biginteger` も `N` 付きで
  印字されます（オラクルの `BigInteger` は付けません）。整数は `BigInteger` の `.negate` と
@@ -182,8 +182,8 @@
   （`java.net.URISyntaxException`）はホストオブジェクトのままです。インタプリタと JVM では、
   Java のメンバが投げた例外と throw されたホストオブジェクトはオラクルと同じくホスト自身の
   ものです。catch はそのクラスで捕捉し、そのオブジェクト自体を束縛します。
-  プログラムが作った例外の `class` はクラス名をキーワードで返し（`:java.lang.Exception`。オラクルはホストの
-  クラスを返します）、クラスを示さないエラーには `:java.lang.RuntimeException` を返します。`.printStackTrace` は `toString` の行を `*err*` に書き（オラクルはそれとフレーム
+  プログラムが作った例外の `class` はそのクラスを返します（クラスを示さないエラーには
+  `java.lang.RuntimeException`）。`.printStackTrace` は `toString` の行を `*err*` に書き（オラクルはそれとフレーム
   ごとの行を、`*err*` の束縛に関わらずプロセスの標準エラーに書きます）、`.getStackTrace` は
   空のベクターを返します（そのため `Throwable->map` の `:trace` は `[]` で、`:via` の
   マップに `:at` はありません）。`.getClass` は `class` と同じ値を返します。インタプリタと JVM では、
@@ -215,13 +215,13 @@
   拒否します：ここにはクラスローダが存在しません。
 - multimethod のディスパッチ値はマップのキーと同じく（ベクターも含めて `=` で）比較されます。
  階層経由のディスパッチは厳密に最も具体的なメソッドを優先し、その後
- `prefer-method` の選択に従います。ホストクラス上の `defmethod` は `class` が答える
- キーワードの下に格納されます。真の nil は `(:C%NIL)` マーカーへ写されるので、
+ `prefer-method` の選択に従います。クラス上の `defmethod` は、ディスパッチ関数の中で
+ `class` が答えるタグ（コアのクラスでは種類のキーワード）の下に格納されます。真の nil は `(:C%NIL)` マーカーへ写されるので、
  どの表も nil をキーにしません。一方リテラルに `:nil` な値はキーワード行のままです
  （オラクル通り。ディスパッチ関数の中の `class` 呼び出しは nil 引数に nil 自身を答えるので、
   null 判定でそこでもマーカーへ写ります。素のものでも他の関数で包んだものでも、記録した定義から再降低される名前付き `defn`・`def` 済み関数経由でも、インラインなディスパッチ datum の中でそれらを呼び出す場合（呼び出し位置で同じ降低をインライン化）でも同様です）。
  `Object` メソッドは検索の後・デフォルトの先に捕まえます。throwable、ストリーム、数値のクラスは
- その名前のキーワード（`class` が答えるもの。`:java.lang.Long`・`:java.lang.Double`・
+ その名前のキーワード（`:java.lang.Long`・`:java.lang.Double`・
  `:clojure.lang.Ratio`・`:clojure.lang.BigInt`・`:java.math.BigDecimal`・`:java.lang.Number`）の下に格納され、検索はオラクルの継承と同じく
  Java のスーパータイプをたどります。インタフェース（`java.io.Serializable`、
  `java.io.Closeable`）と `Object` も含みます。`isa?`・`derive`・`underive`・`parents`・
@@ -230,20 +230,16 @@
  Java のスーパータイプを加えます。クラス値（クラスリテラルか `Class/forName`）を書くプログラムでは、
  `parents`・`ancestors`・`descendants` はそのスーパータイプを、名前が値の位置で読まれる値で答えます。そのため
  `(contains? (ancestors Long) Number)` は `true` で、集合は `java.lang.Number` と印字します。
- それ以外のプログラムではキーワード（`:java.lang.Number`）です。throwable やストリームの
- `class` はキーワードのままなので、そうした集合の要素にはなりません。コアの種類（`:string`、`:map` など）はそれが表す値の
+ それ以外のプログラムではキーワード（`:java.lang.Number`）です。コアの種類（`:string`、`:map` など）はそれが表す値の
  スーパータイプを加えます。関数は `clojure.lang.IFn` に `isa?` で、その `ancestors` は
- それを持ちます。インタフェースと `Object` を含め、オラクルの継承通りです。値の位置の
- クラス名はそのキーワードとして読みます（`(= clojure.lang.IFn (class (fn [])))` は
- `false` のままです）。オラクルの `clojure.lang` のほかのクラスも同じで、どの値も答えない
- キーワードになります（`clojure.lang.PersistentVector$ChunkedSeq` の `defmethod` は一致しません）。
- 数値のクラスも同じで、`(= Long (class 1))` は `true`、`Long` は
- `:java.lang.Long` と印字します。record や deftype は
+ それを持ちます。インタフェースと `Object` を含め、オラクルの継承通りです。ここでどの値も持たない
+ `clojure.lang` のクラス（`clojure.lang.PersistentVector$ChunkedSeq`）の `defmethod` は一致しません。
+ record や deftype は
  ここでは 1 つの値にならないホストクラス群を表します。`Object` と、本体で実装する各プロトコルの
  インタフェース（`user.P`。そのためインタフェースのメソッドはオラクルと同じくそれに届きます）に
  `isa?` で、`ancestors` は `Object` を加えますが、ホストクラスのそれ以外のスーパータイプは
- モデル化しません。ここではキーワードがクラス
- そのものなので、`:java.lang.Exception` と綴ったキーワードもそのクラスです。ホストの
+ モデル化しません。ここではクラスのタグがキーワードなので、`:java.lang.Exception` と綴った
+ キーワードもそのクラスとしてディスパッチします。ホストの
  クラスオブジェクト（ホストオブジェクトの `class`、インタプリタと JVM）はその名前の
  キーワードと、単純名を通じてコアの種類のキーワードと同じクラスなので、
  `(isa? (class (java.util.ArrayList.)) java.util.List)` は `true` です。同じく `:list` と
@@ -256,8 +252,8 @@
 - `(methods mt)` と `get-method`・`remove-method`・`prefer-method` は multimethod の名前
   （`defmulti` の var。alias や refer 経由も可）を降低時に読むため、`defmulti` が作っていない
   名前はそこで拒否します。それ以外の引数（ローカル、var の deref）は値と同じく下の実行時
-  レジストリを読みます。`methods` が返すマップはホストクラスの行を `class` が
-  答えるキーワードで引き、オラクルは `Class` 自身で引きます。`prefers` は各ディスパッチ値と
+  レジストリを読みます。`methods` が返すマップは、クラスを書いて格納した行をオラクルと同じく
+  そのクラスで引きます。`prefers` は各ディスパッチ値と
   優先される値の集合の対応を答え、`remove-all-methods` はメソッドと優先指定を消して
   multimethod を返します。どちらも名前の取り方は同じです。値としては（`methods`・
   `get-method`・`remove-method`・`prefer-method`・`prefers`・`remove-all-methods`）
@@ -268,7 +264,7 @@
   multimethod を返します。登録されていない関数値は従来どおり拒否されます。
   `get-method` と multimethod の `.getMethod`・`.dispatchFn` はオラクルの `MultiFn` と同じ
   答えを返しますが、multimethod の `Object` メソッドはキーワードのディスパッチ値にも答えます
-  （ここでの `class` は値のクラスをキーワードで答えます）。
+  （ここではクラスのタグがキーワードです）。
 - `satisfies?` はプロトコル名と値を、`extend` は型名の後にプロトコルとメソッドマップを
   任意の回数取ります。プロトコルや型を束縛したローカルは降低時に拒否されます。
   `extends?` は2つの名前なら降低時に表を読み、計算されたプロトコルや型（`(class x)`
@@ -449,12 +445,14 @@
   lazy-or-strict 動詞が strict に実現した seq の `bounded-count` は全部数えます（oracle は lazy のまま
   上限で止まります）。レコードやキューの `print-dup` は `pr` と同じ書き方になります（oracle は
   `toString`）。
-- `class` は種類名のキーワードで答えます（`:string`・`:keyword`・`:map` 等）。オラクルは
-  ホストクラスを返しますが、wasm バックエンドにはありません。数値はそのクラス名の
-  キーワードで答えます（`:java.lang.Long`・`:java.lang.Double`・`:clojure.lang.Ratio`、long を
-  超える整数は `:clojure.lang.BigInt`、10 進数は `:java.math.BigDecimal`）。`1N` はふつうの整数として
-  読むため、ここでは `Long` です。record/deftype はそのクラスで答え、オラクルと同じく
-  印字されます（`user.R`）。ホストオブジェクト（インタプリタと JVM）はホストクラスで答えます。
+- `class` はオラクルのクラスを答えますが、ここでの1つの値がオラクルの複数のクラスを
+  表すところは異なります（[class](reference/class.md)）。関数はすべて `clojure.lang.AFunction`、
+  遅延シーケンスでないシーケンスはすべて `clojure.lang.PersistentList`、2要素のベクタと型付き配列は
+  `PersistentVector`、`1N`（ふつうの整数として読みます）は `Long` です。インタプリタと、Java 相互運用を
+  使う JVM プログラムではクラスは `java.lang.Class` で、`clojure.lang` のクラスはオラクルと同じ名前・
+  修飾子・スーパータイプで定義したもの、そのメンバはこのフロントエンドが答える静的メンバです
+  （`.getMethods` はそれだけを返します）。それ以外では、印字・比較・ハッシュが同じクラス値で、
+  その Java メソッドはホスト呼び出しです（wasm バックエンドでは拒否されます）。
 - [バイト配列](reference/byte-array.md)は、オラクルの `#object["[B" ...]` から識別ハッシュを
   除いた形で印字し、`str` は `[B` を返します（オラクルは `[B@1b6d3586`）。`aset` は -128 から
   127 の整数ならどれでも格納し、オラクルのリフレクションは `Byte` しか受け取りません
@@ -471,7 +469,7 @@
   （`(.put bb (byte-array [7]))` はどちらでも `[7 0]` になります）。候補が1つしかない
   `short`・`int`・`long` メンバーは、オラクルが数を変換するのと同様に fixnum 引数を変換します
   （どちらも、引数の個数に合う候補が1つだけなら、その候補が引数をどう変換しても受け取ります）。`instance?` の `Byte`・`Short`・`Integer` はキャスト結果に偽で
-  （`Long` には真）、`class` は `:java.lang.Long` を答え、`.compareTo` はキャスト結果を `Long`
+  （`Long` には真）、`class` は `java.lang.Long` を答え、`.compareTo` はキャスト結果を `Long`
   として読みます（オラクルは `Long` を `Byte.compareTo` に渡すと例外を投げます）。
   キャストをボックス化すると、その1系統のオーバーロードのために全バックエンドの値モデル
   全体（`+`・`=`・印字・すべての `unmarshal`）が動くため、キャストは普通の整数のままです。
@@ -487,7 +485,7 @@
   計算で求めた `Class` オブジェクトは `Class` でないとして拒否されます。
 - `java.nio.charset.StandardCharsets` のフィールドと、文字列リテラルの `Charset/forName`
   （[文字セット](reference/byte-array.md)）は、オラクルの `#object` から識別ハッシュを除いた形で
-  印字し、`class` はそのクラスのキーワードで答えます。符号化と復号ができるのは UTF-8、
+  印字します。符号化と復号ができるのは UTF-8、
   ISO-8859-1、US-ASCII だけで、それ以外（たとえば UTF-16）を `.getBytes` や `String.` に渡すと、
   その名前のオラクルの `java.io.UnsupportedEncodingException` になります。リテラル以外の
   `Charset/forName` と、Java のメンバが返した `Charset` はホストオブジェクトのままで（インタプリタと
@@ -646,11 +644,11 @@
   それらについても `Cons` と `ArraySeq` は `false` です（オラクルは `true`）。プロトコル
   自身の名前（var である `P`）は未知の名前になります（オラクルは `ClassCastException`）。
   プロトコルのインタフェース（`user.P`）はオラクルと同じに答えます。
-  `class` が返したクラスの値は `class` が区別するものだけを区別するので、
-  `(instance? (class 1) 1.5)` と `(instance? (class {}) (sorted-map))` は `true` です。サブクラスを
-  たどるのは例外と実行時エラーだけなので、`java.sql.Timestamp` の `ts` について
-  `(instance? (class #inst "2020") ts)` は `false` です。キーワードは `class` が返すクラスの
-  キーワードとして扱うので、var 経由の `(instance? :a x)` は `false` になります（オラクルは
+  `class` がある種類の値に返したクラス値は、その種類のすべての値を受け付けます。
+  `(instance? (class {}) (sorted-map))` は `true` です。ホストのないところ（wasm バックエンド）で
+  サブクラスをたどるのは例外と実行時エラーだけなので、そこでは `java.sql.Timestamp` の `ts` について
+  `(instance? (class #inst "2020") ts)` は `false` です。キーワードはそれが名指すクラスの
+  タグとして扱うので、var 経由の `(instance? :a x)` は `false` になります（オラクルは
   `ClassCastException`）。その例外のメッセージにモジュールの末尾は付きません。
 - `clojure.core$long`（コア関数を munge した任意の `clojure.core$` 名）は、ここで `class` が
   すべての関数について返すクラスなので、`(class inc)` とも等しくなります。同じキーを2度持つ
@@ -1053,9 +1051,7 @@
   `rontolisp test` は `clj` のコマンドではなく、cognitect test-runner の既定（`test` 以下の、
   名前が `-test` で終わる名前空間）に従います。
 - リーダ条件は `:rontolisp` も選びます。フォームが `:clj` より先に挙げていればそちらが先です。
-  `{:read-cond :preserve}` で読んだリーダ条件やタグ付きリテラルの `class` は、ここでのほかの
-  クラスと同じくキーワード（`:clojure.lang.ReaderConditional`・`:clojure.lang.TaggedLiteral`）
-  を返します。`(reader-conditional nil false)` は `#?()` から読んだものと同じく `#?()` と
+  `(reader-conditional nil false)` は `#?()` から読んだものと同じく `#?()` と
   印字されます。選ばれない分岐の中では、
   未知のエイリアスの `::alias/kw` も読めます（オラクルは拒否します）。実行時のリーダは
   `#?@(:clj nil)` を何も展開しないものとして読み（オラクルは拒否します）、`:features` は

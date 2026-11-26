@@ -1474,6 +1474,13 @@ final class ClojureInteropLowering {
 			// (Class/forName "[D") extends the class it names (the oracle's Class)
 			return ClojureCoreLowering.classDesignator(name.value());
 		}
+		if (ctx.hostTarget && cls.equals("java.lang.Class") && member.equals("forName")
+				&& (args.size() == 1 || args.size() == 3)) {
+			// a clojure.lang class, which the host lacks, is the class value class
+			// answers for its values (its stub), whatever loader the call names; any
+			// other name the host's answer. The arguments run once, in order.
+			return langClassForName(ctx, args);
+		}
 		if (!ctx.hostTarget && cls.equals("java.lang.String") && member.equals("valueOf") && args.size() == 1) {
 			// where no host is, the value's toString (camel-snake-kebab's
 			// (String/valueOf ch)); nil the oracle's reflector failure. The host's own
@@ -1945,21 +1952,24 @@ final class ClojureInteropLowering {
 	 * A bare class name in value position ({@code String}, an imported class, a dotted
 	 * name): the class object, the same {@code Class.forName} answer the oracle's class
 	 * literal prints and compares by; a number's class ({@code Long}, {@code Double}) the
-	 * keyword {@code class} answers for its values. Null when the name is no loadable
-	 * class (a typo keeps the unknown-name refusal at compile time) or names a record or
-	 * deftype.
+	 * class value {@code class} answers for its values ({@link #classValueForm}). Null
+	 * when the name is no loadable class (a typo keeps the unknown-name refusal at
+	 * compile time) or names a record or deftype.
 	 */
 	static @Nullable LispVal classValue(ClojureLowering ctx, String name) {
 		if (name.indexOf('/') >= 0 || !ClojureNamespaceLowering.isClasslike(ctx, name) || ctx.typeKeyOf(name) != null) {
 			return null;
 		}
 		String cls = ClojureNamespaceLowering.resolveClass(ctx, name);
-		if (!readsAsClassObject(cls)) {
-			// a number's class is the keyword class answers for its values, on every
-			// backend, so (= Long (class 1)) holds like the oracle's
-			return ClojureHostClasses.exists(cls) ? ClojureCollectionLowering.keywordForm(cls) : null;
+		if (!ClojureHostClasses.exists(cls)) {
+			return null;
 		}
 		ctx.classObjects = true;
+		if (!readsAsClassObject(cls)) {
+			// a number's class is the class value class answers for its values, on
+			// every backend, so (= Long (class 1)) holds like the oracle's
+			return classValueForm(cls);
+		}
 		if (!ctx.hostTarget) {
 			// where no host is, a class literal is its (:C%CLASS name)
 			// designator, so a class-keyed map (malli's class-schemas, read at
@@ -1975,14 +1985,55 @@ final class ClojureInteropLowering {
 	}
 
 	/**
-	 * Whether the binary name in value position reads as a class object
-	 * ({@link #classValue}): a class the program's classes have but a number's class,
-	 * which reads as its keyword. A {@code clojure.lang} class is no host class here and
-	 * reads as its keyword too.
+	 * Whether the binary name in value position reads as the host's class object where a
+	 * host is ({@link #classValue}): a class the program's classes have but a number's
+	 * class, which reads as the class value {@code class} answers for its numbers. A
+	 * {@code clojure.lang} class is no host class here and reads as that class value too.
 	 */
 	static boolean readsAsClassObject(String cls) {
 		return ClojureHostClasses.exists(cls) && !ClojureClassBases.NUMBER_SUPERS.containsKey(cls);
 	}
+
+	/**
+	 * The class value of the class {@code cls}, as {@code class} answers it
+	 * ({@code rontolisp::%clojure-class-value}): the host's class where the program
+	 * reaches the host, its designator elsewhere.
+	 * @param cls the binary name
+	 * @return the form
+	 */
+	static LispVal classValueForm(String cls) {
+		return ClojureLowerUtil.list(new LispSymbol(CLASS_VALUE), LispString.literal(cls));
+	}
+
+	/**
+	 * {@code Class/forName} of one or three arguments where a host is: the class value of
+	 * a {@code clojure.lang} class the host makes a stub of, the host's call otherwise.
+	 */
+	private static LispVal langClassForName(ClojureLowering ctx, List<LispVal> args) {
+		List<LispVal> bindings = new ArrayList<>();
+		List<LispVal> call = new ArrayList<>(
+				List.of(LispString.literal("java.lang.Class"), LispString.literal("forName")));
+		for (LispVal arg : args) {
+			LispSymbol temp = ctx.freshTemp();
+			bindings.add(ClojureLowerUtil.list(temp, arg));
+			call.add(temp);
+		}
+		LispVal name = call.get(2);
+		return ClojureLowerUtil.list(ClojureLowerUtil.sym("let*"), ClojureLowerUtil.list(bindings),
+				ClojureLowerUtil.list(ClojureLowerUtil.sym("if"),
+						ClojureLowerUtil.list(new LispSymbol(LANG_CLASS_NAME_P), name),
+						ClojureLowerUtil.list(new LispSymbol(CLASS_VALUE), name),
+						ClojureLowerUtil.cons(JAVA_STATIC, call)));
+	}
+
+	/** The class value of a class name ({@code clojure.lisp}). */
+	static final String CLASS_VALUE = "RONTOLISP::%CLOJURE-CLASS-VALUE";
+
+	/**
+	 * Whether a value is the name of a {@code clojure.lang} class the host makes a stub
+	 * of ({@code clojure.lisp}).
+	 */
+	static final String LANG_CLASS_NAME_P = "RONTOLISP::%CLOJURE-LANG-CLASS-NAME-P";
 
 	/**
 	 * The member-as-value lambda: one {@code &rest} parameter dispatched per known fixed

@@ -2820,20 +2820,20 @@
 ;; A class keyword is a keyword here, so a keyword naming no class answers false
 ;; where the oracle refuses it.
 (defun rontolisp::%clojure-class-instance-p (c x k)
-  "instance? of the class value C over X, whose class (what class answers) is
-   K: a class keyword takes a value of that class, a condition whose class
-   chain holds it (a subclass) and a host object of it; a host class object
-   asks the host. A type designator reads as its kind, so instance? of a type
-   answer takes what the keyword did. A pattern is an instance of the Pattern
-   class type answers for it: the host class object where a host is (which the
-   host's own isInstance would misread, since a pattern here is a wrapper, not
-   a host object), its (:C%CLASS name) designator where none is -- an instance
-   when X's class is that very class, exact, never a subclass, since without a
-   host no hierarchy answers one. nil is the oracle's NullPointerException,
-   any other value its ClassCastException."
-  (cond ((rontolisp::%clojure-designator-kind c)
+  "instance? of the class value C over X, whose class tag (what class answers
+   inside a dispatch function) is K. A class keyword, and the class value of a
+   class no kind is (its keyword), takes a value of that class, a condition whose
+   class chain holds it (a subclass) and a host object of it; the class value of
+   a kind's class reads as the kind. A host class object takes a condition by
+   its chain, another Lisp value when the host's class of it (class's answer,
+   %clojure-class-of) is assignable to C, and a host object by the host's
+   isInstance. A record's or deftype's class takes its own values. A pattern is
+   an instance of the Pattern class (the host's isInstance would misread it,
+   since a pattern here is a wrapper, not a host object). nil is the oracle's
+   NullPointerException, any other value its ClassCastException."
+  (cond ((rontolisp::%clojure-kind-of-class c)
          (rontolisp::%clojure-class-instance-p
-          (rontolisp::%clojure-designator-kind c) x k))
+          (rontolisp::%clojure-kind-of-class c) x k))
         ((and (rontolisp::%clojure-re-pattern-p x)
               (equal (rontolisp::%clojure-host-class-name c)
                      "java.util.regex.Pattern"))
@@ -2843,8 +2843,11 @@
         ((rontolisp::%clojure-protocol-interface-instance-p c x) t)
         ((and (consp c) (eq (car c) :C%CLASS) (consp (cdr c))
               (stringp (car (cdr c))))
-         (and (not (null x))
-              (equal (rontolisp::%clojure-class-name-of x) (car (cdr c)))))
+         (if (gethash c rontolisp::%clojure-protocol-type-tags)
+             (and (not (null x))
+                  (equal (rontolisp::%clojure-class-name-of x) (car (cdr c))))
+             (rontolisp::%clojure-class-instance-p
+              (list :c%keyword (car (cdr c))) x k)))
         ((rontolisp::%clojure-keyword-p c)
          (cond ((null x) nil)
                ((equal k c) t)
@@ -2853,11 +2856,28 @@
                  (rontolisp::%clojure-condition-chain x) (car (cdr c))))
                (t (rontolisp::%clojure-host-instance-p x (car (cdr c))))))
         ((rontolisp::%clojure-host-class-name c)
-         (rontolisp::%clojure-host-class-instance-p c x))
+         (cond ((null x) nil)
+               ((rontolisp::%clojure-exception-p x)
+                (rontolisp::%clojure-chain-has
+                 (rontolisp::%clojure-condition-chain x)
+                 (rontolisp::%clojure-host-class-name c)))
+               ((rontolisp::%clojure-lisp-value-p x)
+                (let ((cx (rontolisp::%clojure-class-of k x)))
+                  (if (rontolisp::%clojure-host-class-name cx)
+                      (rontolisp::%clojure-host-class-assignable-p c cx)
+                      (rontolisp::%clojure-host-class-instance-p c x))))
+               (t (rontolisp::%clojure-host-class-instance-p c x))))
         ((null c)
          (rontolisp::%clojure-null-pointer-exception
           "Cannot invoke \"java.lang.Class.isInstance(Object)\" because \"c\" is null"))
         (t (rontolisp::%clojure-host-cast-failure c "java.lang.Class"))))
+
+(defun rontolisp::%clojure-host-class-assignable-p (c d)
+  "Whether the host class object D is the host class object C or a subclass or
+   implementation of it: the host's isAssignableFrom. A host arm like
+   %clojure-host-class: a program with no java: operator gets a body answering
+   NIL."
+  (java:call c "isAssignableFrom" d))
 
 (defun rontolisp::%clojure-host-class-instance-p (c x)
   "Whether X is an instance of the host class object C: the host's
@@ -3097,33 +3117,33 @@
       (car (cdr x))))
 
 (defun rontolisp::%clojure-class-host-values (members objects)
-  "MEMBERS with each class keyword OBJECTS names as the host's class object,
-   the keyword where the host has no such class."
+  "MEMBERS with each class keyword OBJECTS names as its class value, where the
+   walk is the host's."
+  (rontolisp::%clojure-class-designator-values members objects))
+
+(defun rontolisp::%clojure-class-designator-values (members objects)
+  "MEMBERS with each class keyword OBJECTS names as its class value
+   (%clojure-class-value)."
   (let ((out nil))
     (dolist (m members)
       (let ((name (rontolisp::%clojure-class-object-name m objects)))
         (setq out
-              (cons (if name
-                        (handler-case (java:static "java.lang.Class" "forName"
-                                                   name)
-                          (error () m))
-                        m) out))))
-    out))
-
-(defun rontolisp::%clojure-class-designator-values (members objects)
-  "MEMBERS with each class keyword OBJECTS names as its class designator."
-  (let ((out nil))
-    (dolist (m members)
-      (let ((name (rontolisp::%clojure-class-object-name m objects)))
-        (setq out (cons (if name (list :C%CLASS name) m) out))))
+              (cons (if name (rontolisp::%clojure-class-value name) m) out))))
     out))
 
 (defun rontolisp::%clojure-class-designator-key (x objects)
-  "X as a hierarchy key where no host is: a designator of a class OBJECTS
-   names its class keyword, anything else X."
-  (if (rontolisp::%clojure-designator-p x)
-      (if (c%h-mem? (car (cdr x)) objects) (list :c%keyword (car (cdr x))) x)
-      x))
+  "X as a hierarchy key where the walk is not the host's: a class value of a
+   kind's class its kind keyword, of a class OBJECTS names its class keyword --
+   a designator, and on the interpreter a host class object of a program naming
+   no java: operator -- anything else X."
+  (let ((name
+         (if (rontolisp::%clojure-designator-p x)
+             (car (cdr x))
+             (rontolisp::%clojure-host-class-name x))))
+    (if name
+        (or (rontolisp::%clojure-kind-of-class x)
+            (if (c%h-mem? name objects) (list :c%keyword name) x))
+        x)))
 
 ;;;; Equality: the = family over every value shape.
 
@@ -4562,19 +4582,38 @@
         (list :C%SET table)
         (rontolisp::%clojure-rd-set-of members))))
 
+(defvar rontolisp::%clojure-class-rows
+  (make-hash-table :test 'eq)
+  "Each method table to the (key . class-name) notes of its class-spelled
+   rows.")
+
+(defun rontolisp::%clojure-note-class-row (table key name)
+  "Notes that the row KEY of the method table TABLE was stored for the class
+   NAME, which methods keys it by."
+  (setf (gethash table rontolisp::%clojure-class-rows)
+        (cons (cons key name) (gethash table rontolisp::%clojure-class-rows)))
+  nil)
+
 (defun rontolisp::%clojure-methods (table)
   "The map (methods f) answers for the method table TABLE: a copy, its nil
-   marker row keyed by nil like a map's nil key."
+   marker row keyed by nil like a map's nil key, and a class-spelled row
+   (%clojure-note-class-row) by its class value, like the oracle's."
   (let ((out (rontolisp::%clojure-plist-table table nil))
         (marker (list :C%NIL))
         (miss (list nil)))
     (let ((row (gethash marker out miss)))
-      (if (eq row miss)
-          out
+      (if (not (eq row miss))
           (progn
             (remhash marker out)
-            (setf (gethash nil out) row)
-            out)))))
+            (setf (gethash nil out) row))))
+    (dolist (note (gethash table rontolisp::%clojure-class-rows))
+      (let ((row (gethash (car note) out miss)))
+        (if (not (eq row miss))
+            (progn
+              (remhash (car note) out)
+              (setf (gethash (rontolisp::%clojure-class-value (cdr note)) out)
+                    row)))))
+    out))
 
 (defun rontolisp::%clojure-vector-assoc (v plist)
   "(assoc V k v ...) for a vector V: a fresh vector with PLIST's alternating
@@ -8334,7 +8373,11 @@
     ("IPersistentSet" . "set") ("List" . "list") ("Seq" . "list")
     ("Sequential" . "list") ("Collection" . "list") ("IPersistentList" . "list")
     ("IPersistentCollection" . "list") ("Fn" . "function") ("IFn" . "function")
-    ("Function" . "function") ("Atom" . "atom"))
+    ("Function" . "function") ("Atom" . "atom") ("PersistentVector" . "vector")
+    ("PersistentArrayMap" . "map") ("PersistentHashMap" . "map")
+    ("PersistentTreeMap" . "map") ("PersistentHashSet" . "set")
+    ("PersistentTreeSet" . "set") ("PersistentList" . "list")
+    ("LazySeq" . "list") ("AFunction" . "function"))
   "Simple class names to the kind keyword spelling dispatch stores.")
 
 (defun rontolisp::%clojure-dispatch-name (dv)
@@ -8503,7 +8546,11 @@
     ("IPersistentSet" . "set") ("List" . "list") ("Seq" . "list")
     ("Sequential" . "list") ("Collection" . "list") ("IPersistentList" . "list")
     ("IPersistentCollection" . "list") ("Fn" . "function") ("IFn" . "function")
-    ("Function" . "function") ("Atom" . "atom"))
+    ("Function" . "function") ("Atom" . "atom") ("PersistentVector" . "vector")
+    ("PersistentArrayMap" . "map") ("PersistentHashMap" . "map")
+    ("PersistentTreeMap" . "map") ("PersistentHashSet" . "set")
+    ("PersistentTreeSet" . "set") ("PersistentList" . "list")
+    ("LazySeq" . "list") ("AFunction" . "function"))
   "Simple class names to the kind keyword spelling an extend target
    stores under.")
 
@@ -8547,7 +8594,15 @@
     ("IPersistentVector" . "clojure.lang.IPersistentVector")
     ("Keyword" . "clojure.lang.Keyword")
     ("Sequential" . "clojure.lang.Sequential")
-    ("Symbol" . "clojure.lang.Symbol"))
+    ("Symbol" . "clojure.lang.Symbol") ("AFunction" . "clojure.lang.AFunction")
+    ("LazySeq" . "clojure.lang.LazySeq")
+    ("PersistentArrayMap" . "clojure.lang.PersistentArrayMap")
+    ("PersistentHashMap" . "clojure.lang.PersistentHashMap")
+    ("PersistentHashSet" . "clojure.lang.PersistentHashSet")
+    ("PersistentList" . "clojure.lang.PersistentList")
+    ("PersistentTreeMap" . "clojure.lang.PersistentTreeMap")
+    ("PersistentTreeSet" . "clojure.lang.PersistentTreeSet")
+    ("PersistentVector" . "clojure.lang.PersistentVector"))
   "Dotless class names to their clojure.lang class.")
 
 (defun rontolisp::%clojure-extends-class-name (x)
@@ -8609,12 +8664,11 @@
           (assoc spelling rontolisp::%clojure-extends-time-names :test #'equal)
           (member spelling rontolisp::%clojure-extends-io-names :test #'equal))
          x)
-        ;; a class value's keyword reads back as its kind, like the type
-        ;; designator does for the dispatcher's method table
-        ((cdr
-          (assoc spelling rontolisp::%clojure-type-class-names :test #'equal))
+        ;; a class value's keyword reads back as its kind, like a class value
+        ;; does for the dispatcher's method table
+        ((cdr (assoc spelling rontolisp::%clojure-class-kinds :test #'equal))
          (list :c%keyword (cdr
-                           (assoc spelling rontolisp::%clojure-type-class-names
+                           (assoc spelling rontolisp::%clojure-class-kinds
                                   :test #'equal))))
         ((position #\. spelling) (rontolisp::%clojure-extends-named spelling))
         (t (rontolisp::%clojure-host-cast-failure x "java.lang.Class"))))
@@ -13596,8 +13650,8 @@
   (and (consp x) (eq (car x) :C%CLASS) (consp (cdr x)) (stringp (car (cdr x)))))
 
 (defun rontolisp::%clojure-designator-class ()
-  "class of a class designator: the designator of java.lang.Class."
-  (list :C%CLASS "java.lang.Class"))
+  "class of a class designator: java.lang.Class's class value."
+  (rontolisp::%clojure-class-value "java.lang.Class"))
 
 (defun rontolisp::%clojure-designator-simple-name (x)
   ".getSimpleName of the class designator X: its name past the package and
@@ -13676,81 +13730,375 @@
         t
         nil)))
 
-;;;; Type designators: what type answers where the oracle answers a host class.
+;;;; Class values: what class, type and a class literal answer.
 ;;
-;; A schema registry lookup falls through to (type x) on a miss, and the oracle
-;; answers a host class there: every entry but Pattern's misses, so an
-;; unregistered value refuses with :malli.core/invalid-schema. A kind keyword
-;; here hits the :function/:keyword/:string/:symbol/:boolean/:nil/:map/:set
-;; entry instead: a function or set loops until the stack overflows, anything
-;; else mistypes (child-error, invalid-entry). So type answers the host class
-;; designator (:C%CLASS name) for exactly those kinds -- the names
-;; %clojure-class-name-of answers, so a value reads as its class -- and nil for
-;; nil, like the oracle. A pattern answers the host Pattern class object where
-;; a host is, its (:C%CLASS name) designator where none is (typeForm splits the
-;; way a bare class literal does): only the oracle's answer hits the registry's
-;; class-schemas entry, so (m/schema #"a") builds the regex schema. class keeps
-;; the kind keyword; the multimethod dispatcher and instance? read a designator
-;; back as its kind, so dispatch answers what the keyword did. A kind no entry
-;; collides with (numbers, vectors, records, ...) keeps its keyword: its miss
-;; already refuses right.
+;; The value of a class is the host's java.lang.Class where the program reaches
+;; the host -- the interpreter, a JVM program naming a java: operator -- and the
+;; (:C%CLASS name) designator anywhere else (wasm, a JVM program that never
+;; touches the host), where no Java API can tell the two apart: a designator
+;; prints, compares, hashes and answers class? like the Class. A JDK class is the
+;; host's own; a clojure.lang class, which no host here has, is a stub class
+;; (rontolisp::%host-stub-class) with the oracle's name, modifiers, superclass and
+;; interfaces, so isAssignableFrom, supers and the reflection a library asks of a
+;; class are the host's. A class the host cannot make (a native image defines
+;; none at run time) is its designator there too. The kind keywords stay the
+;; dispatch tags: class maps a value's tag to its class value
+;; (%clojure-class-of), and the dispatcher, instance? and the class chains map a
+;; class value back to the tag (%clojure-kind-of-class).
 
-(defvar rontolisp::%clojure-type-class-names
-  '(("clojure.lang.AFunction" . "function") ("clojure.lang.Keyword" . "keyword")
-    ("java.lang.String" . "string") ("clojure.lang.Symbol" . "symbol")
+(defvar rontolisp::%clojure-kind-class-names
+  '(("string" . "java.lang.String") ("keyword" . "clojure.lang.Keyword")
+    ("symbol" . "clojure.lang.Symbol") ("char" . "java.lang.Character")
+    ("boolean" . "java.lang.Boolean")
+    ("vector" . "clojure.lang.PersistentVector")
+    ("function" . "clojure.lang.AFunction") ("atom" . "clojure.lang.Atom")
+    ("pattern" . "java.util.regex.Pattern")
+    ("matcher" . "java.util.regex.Matcher"))
+  "The spelling of each kind keyword whose values have one class to that class's
+   name (a map, a set and a list name theirs by the value).")
+
+(defvar rontolisp::%clojure-class-kinds
+  '(("java.lang.String" . "string") ("clojure.lang.Keyword" . "keyword")
+    ("clojure.lang.Symbol" . "symbol") ("java.lang.Character" . "char")
     ("java.lang.Boolean" . "boolean")
+    ("clojure.lang.PersistentVector" . "vector")
+    ("clojure.lang.AFunction" . "function") ("clojure.lang.Atom" . "atom")
+    ("java.util.regex.Pattern" . "pattern")
+    ("java.util.regex.Matcher" . "matcher")
     ("clojure.lang.PersistentArrayMap" . "map")
     ("clojure.lang.PersistentHashMap" . "map")
     ("clojure.lang.PersistentTreeMap" . "map")
     ("clojure.lang.PersistentHashSet" . "set")
-    ("clojure.lang.PersistentTreeSet" . "set"))
-  "Host class names type answers by designator, each to the spelling of the
-   kind keyword class answers for its values.")
+    ("clojure.lang.PersistentTreeSet" . "set")
+    ("clojure.lang.PersistentList" . "list") ("clojure.lang.LazySeq" . "list"))
+  "The name of each class class answers for the values of a kind to the
+   spelling of that kind's keyword.")
 
-(defun rontolisp::%clojure-type-designator (k x)
-  "type's answer for the kind keyword K class answers for X: the (:C%CLASS
-   name) designator of X's host class when K collides with a schema registry
-   entry, nil for nil, else K itself. A map names its size's class, like the
-   oracle (an empty map PersistentArrayMap, nine entries up PersistentHashMap);
-   a sorted map or set its tree class (the (:C%SORTED setp cmp items) wrapper
-   %clojure-sorted-p names). K is never a designator here: type is the only
-   caller, over class's answer."
-  (if (rontolisp::%clojure-keyword-p k)
+(defun rontolisp::%clojure-class-of (k x)
+  "class's answer for X, whose dispatch tag is K: the class value of the class
+   a kind keyword's values have -- a map's by its size (an empty map
+   PersistentArrayMap, nine entries up PersistentHashMap, like the oracle's), a
+   sorted map's or set's its tree class, a lazy seq LazySeq, any other seq
+   PersistentList -- or of the class a class keyword names; nil for nil; a
+   record's or deftype's designator and a host class object as they are."
+  (if (and (consp k) (eq (car k) :C%KEYWORD))
       (let ((spelling (car (cdr k))))
-        (cond
-         ((equal spelling "function") (list :c%class "clojure.lang.AFunction"))
-         ((equal spelling "keyword") (list :c%class "clojure.lang.Keyword"))
-         ((equal spelling "string") (list :c%class "java.lang.String"))
-         ((equal spelling "symbol") (list :c%class "clojure.lang.Symbol"))
-         ((equal spelling "boolean") (list :c%class "java.lang.Boolean"))
-         ((equal spelling "nil") nil)
-         ((equal spelling "map")
-          (list :c%class (if (and (consp x) (eq (car x) :C%SORTED))
-                             "clojure.lang.PersistentTreeMap"
-                             (if (> (hash-table-count x) 8)
-                                 "clojure.lang.PersistentHashMap"
-                                 "clojure.lang.PersistentArrayMap"))))
-         ((equal spelling "set")
-          (list :c%class (if (and (consp x) (eq (car x) :C%SORTED))
-                             "clojure.lang.PersistentTreeSet"
-                             "clojure.lang.PersistentHashSet")))
-         (t k)))
+        (cond ((equal spelling "nil") nil)
+              ((equal spelling "map")
+               (rontolisp::%clojure-class-value
+                (if (and (consp x) (eq (car x) :C%SORTED))
+                    "clojure.lang.PersistentTreeMap"
+                    (if (> (hash-table-count x) 8)
+                        "clojure.lang.PersistentHashMap"
+                        "clojure.lang.PersistentArrayMap"))))
+              ((equal spelling "set")
+               (rontolisp::%clojure-class-value
+                (if (and (consp x) (eq (car x) :C%SORTED))
+                    "clojure.lang.PersistentTreeSet"
+                    "clojure.lang.PersistentHashSet")))
+              ((equal spelling "list")
+               (rontolisp::%clojure-class-value
+                (if (and (consp x) (eq (car x) :C%LAZY))
+                    "clojure.lang.LazySeq"
+                    "clojure.lang.PersistentList")))
+              (t (rontolisp::%clojure-class-value
+                  (or (cdr
+                       (assoc spelling rontolisp::%clojure-kind-class-names
+                              :test #'equal)) spelling)))))
       k))
 
-(defun rontolisp::%clojure-designator-kind (v)
-  "The kind keyword class answers for the values of V's host class, when V is
-   a (:C%CLASS name) designator of one of %clojure-type-class-names, else NIL.
-   The multimethod dispatcher and instance? read a type answer through this,
-   so a designator finds the kind method a defmethod stores, like the keyword
-   did; a designator of any other class stays one, as before."
-  (if (and (consp v) (eq (car v) :C%CLASS) (consp (cdr v))
-           (stringp (car (cdr v))))
-      (let ((spelling
-             (cdr
-              (assoc (car (cdr v)) rontolisp::%clojure-type-class-names
-                     :test #'equal))))
-        (if spelling (list :c%keyword spelling) nil))
-      nil))
+(defun rontolisp::%clojure-class-value (name)
+  "The class value of the class NAME: the host's Class where the program reaches
+   the host and the host has or makes the class (%clojure-host-class-named), else
+   the (:C%CLASS name) designator."
+  (or (rontolisp::%clojure-host-class-named name) (list :C%CLASS name)))
+
+(defvar rontolisp::%clojure-host-classes-named
+  (make-hash-table :test 'equal)
+  "Each class name the host was asked for to its Class, or :none.")
+
+(defvar rontolisp::%clojure-host-classes
+  :unknown
+  "Whether the host makes class values (%clojure-host-classes-p), once asked.")
+
+(defun rontolisp::%clojure-host-classes-p ()
+  "Whether the host makes class values: whether it defines a stub class, which a
+   native image does not (nor does it answer the reflection a class value's
+   readers ask), so every class value there is a designator -- one
+   representation for every class of a program."
+  (if (eq rontolisp::%clojure-host-classes :unknown)
+      (setq rontolisp::%clojure-host-classes
+            (if (rontolisp::%clojure-stub-class
+                 (assoc "clojure.lang.IFn" rontolisp::%clojure-lang-classes
+                        :test #'equal))
+                t
+                nil)))
+  rontolisp::%clojure-host-classes)
+
+(defun rontolisp::%clojure-host-class-named (name)
+  "The host's Class named NAME, nil where it has and makes none: a clojure.lang
+   class's stub (%clojure-stub-class), any other the host's Class/forName answer;
+   nil for every name where the host makes no class value
+   (%clojure-host-classes-p). A host arm like %clojure-host-class: a program with
+   no java: operator gets a body answering nil, so its class values are
+   designators."
+  (let ((known
+         (if (rontolisp::%clojure-host-classes-p)
+             (gethash name rontolisp::%clojure-host-classes-named)
+             :none)))
+    (cond ((eq known :none) nil)
+          (known known)
+          (t
+           (let* ((row
+                   (assoc name rontolisp::%clojure-lang-classes :test #'equal))
+                  (c
+                   (if row
+                       (rontolisp::%clojure-lang-stub row)
+                       (handler-case (java:static "java.lang.Class" "forName"
+                                                  name)
+                         (error () nil)))))
+             (setf (gethash name rontolisp::%clojure-host-classes-named)
+                   (or c :none))
+             c)))))
+
+(defvar rontolisp::%clojure-lang-stubbed
+  nil
+  "Whether every row of %clojure-lang-classes has its stub.")
+
+(defun rontolisp::%clojure-lang-stub (row)
+  "The stub class of ROW, a row of %clojure-lang-classes, every row stubbed
+   first (once), so the types a stub's member signatures name resolve when
+   reflection reads them; nil where the host defines none."
+  (if (not rontolisp::%clojure-lang-stubbed)
+      (progn
+        (setq rontolisp::%clojure-lang-stubbed t)
+        (dolist (each rontolisp::%clojure-lang-classes)
+          (rontolisp::%clojure-stub-class each))))
+  (rontolisp::%clojure-stub-class row))
+
+(defun rontolisp::%clojure-stub-class (row)
+  "The stub class of ROW, a row of %clojure-lang-classes, its clojure.lang
+   supertypes stubbed first; nil where the host defines none."
+  (let ((names (car (cdr (cdr (cdr row))))) (start 0))
+    (dolist (super
+             (cons (car (cdr (cdr row)))
+                   (let ((out nil))
+                     (dotimes (i (+ (length names) 1))
+                       (if (or (= i (length names))
+                               (char= (char names i) #\Space))
+                           (progn
+                             (if (> i start)
+                                 (setq out (cons (subseq names start i) out)))
+                             (setq start (+ i 1)))))
+                     out)))
+      (let ((above
+             (assoc super rontolisp::%clojure-lang-classes :test #'equal)))
+        (if above (rontolisp::%clojure-stub-class above)))))
+  (rontolisp::%host-stub-class (car row) (car (cdr row)) (car (cdr (cdr row)))
+                               (car (cdr (cdr (cdr row))))
+                               (or (car (cdr (cdr (cdr (cdr row))))) "")))
+
+(defvar rontolisp::%clojure-lang-classes
+  '(("clojure.asm.Opcodes" 1537 "java.lang.Object" "")
+    ("clojure.lang.AFn" 1025 "java.lang.Object" "clojure.lang.IFn"
+     "s:applyToHelper:(Lclojure/lang/IFn;Lclojure/lang/ISeq;)Ljava/lang/Object;")
+    ("clojure.lang.AFunction" 1025 "clojure.lang.AFn"
+     "clojure.lang.IObj java.util.Comparator clojure.lang.Fn java.io.Serializable")
+    ("clojure.lang.AMapEntry" 1025 "clojure.lang.APersistentVector"
+     "clojure.lang.IMapEntry")
+    ("clojure.lang.APersistentMap" 1025 "clojure.lang.AFn"
+     "clojure.lang.IPersistentMap java.util.Map java.lang.Iterable java.io.Serializable clojure.lang.MapEquivalence clojure.lang.IHashEq"
+     "s:mapEquals:(Lclojure/lang/IPersistentMap;Ljava/lang/Object;)Z s:mapHash:(Lclojure/lang/IPersistentMap;)I s:mapHasheq:(Lclojure/lang/IPersistentMap;)I")
+    ("clojure.lang.APersistentSet" 1025 "clojure.lang.AFn"
+     "clojure.lang.IPersistentSet java.util.Collection java.util.Set java.io.Serializable clojure.lang.IHashEq")
+    ("clojure.lang.APersistentVector" 1025 "clojure.lang.AFn"
+     "clojure.lang.IPersistentVector java.lang.Iterable java.util.List java.util.RandomAccess java.lang.Comparable java.io.Serializable clojure.lang.IHashEq")
+    ("clojure.lang.ARef" 1025 "clojure.lang.AReference" "clojure.lang.IRef")
+    ("clojure.lang.AReference" 1 "java.lang.Object" "clojure.lang.IReference")
+    ("clojure.lang.ASeq" 1025 "clojure.lang.Obj"
+     "clojure.lang.ISeq clojure.lang.Sequential java.util.List java.io.Serializable clojure.lang.IHashEq")
+    ("clojure.lang.ATransientMap" 1025 "clojure.lang.AFn"
+     "clojure.lang.ITransientMap clojure.lang.ITransientAssociative2")
+    ("clojure.lang.ATransientSet" 1025 "clojure.lang.AFn"
+     "clojure.lang.ITransientSet")
+    ("clojure.lang.Agent" 1 "clojure.lang.ARef" "")
+    ("clojure.lang.ArityException" 1 "java.lang.IllegalArgumentException" "")
+    ("clojure.lang.Associative" 1537 "java.lang.Object"
+     "clojure.lang.IPersistentCollection clojure.lang.ILookup")
+    ("clojure.lang.Atom" 17 "clojure.lang.ARef" "clojure.lang.IAtom2")
+    ("clojure.lang.BigInt" 17 "java.lang.Number" "clojure.lang.IHashEq"
+     "s:fromBigInteger:(Ljava/math/BigInteger;)Lclojure/lang/BigInt;")
+    ("clojure.lang.Box" 1 "java.lang.Object" "")
+    ("clojure.lang.Compiler" 1 "java.lang.Object" "clojure.asm.Opcodes"
+     "s:munge:(Ljava/lang/String;)Ljava/lang/String; s:demunge:(Ljava/lang/String;)Ljava/lang/String;")
+    ("clojure.lang.Compiler$CompilerException" 1 "java.lang.RuntimeException"
+     "clojure.lang.IExceptionInfo")
+    ("clojure.lang.Cons" 17 "clojure.lang.ASeq" "java.io.Serializable")
+    ("clojure.lang.Counted" 1537 "java.lang.Object" "")
+    ("clojure.lang.Delay" 1 "java.lang.Object"
+     "clojure.lang.IDeref clojure.lang.IPending")
+    ("clojure.lang.EdnReader$ReaderException" 1 "java.lang.RuntimeException" "")
+    ("clojure.lang.ExceptionInfo" 1 "java.lang.RuntimeException"
+     "clojure.lang.IExceptionInfo")
+    ("clojure.lang.Fn" 1537 "java.lang.Object" "")
+    ("clojure.lang.IAtom" 1537 "java.lang.Object" "")
+    ("clojure.lang.IAtom2" 1537 "java.lang.Object" "clojure.lang.IAtom")
+    ("clojure.lang.IBlockingDeref" 1537 "java.lang.Object" "")
+    ("clojure.lang.IChunk" 1537 "java.lang.Object" "clojure.lang.Indexed")
+    ("clojure.lang.IChunkedSeq" 1537 "java.lang.Object"
+     "clojure.lang.ISeq clojure.lang.Sequential")
+    ("clojure.lang.IDeref" 1537 "java.lang.Object"
+     "java.util.function.Supplier java.util.function.BooleanSupplier java.util.function.IntSupplier java.util.function.LongSupplier java.util.function.DoubleSupplier")
+    ("clojure.lang.IDrop" 1537 "java.lang.Object" "")
+    ("clojure.lang.IEditableCollection" 1537 "java.lang.Object" "")
+    ("clojure.lang.IExceptionInfo" 1537 "java.lang.Object" "")
+    ("clojure.lang.IFn" 1537 "java.lang.Object"
+     "java.util.concurrent.Callable java.lang.Runnable")
+    ("clojure.lang.IHashEq" 1537 "java.lang.Object" "")
+    ("clojure.lang.IKVReduce" 1537 "java.lang.Object" "")
+    ("clojure.lang.IKeywordLookup" 1537 "java.lang.Object" "")
+    ("clojure.lang.ILookup" 1537 "java.lang.Object" "")
+    ("clojure.lang.IMapEntry" 1537 "java.lang.Object" "java.util.Map$Entry")
+    ("clojure.lang.IMapIterable" 1537 "java.lang.Object" "")
+    ("clojure.lang.IMeta" 1537 "java.lang.Object" "")
+    ("clojure.lang.IObj" 1537 "java.lang.Object" "clojure.lang.IMeta")
+    ("clojure.lang.IPending" 1537 "java.lang.Object" "")
+    ("clojure.lang.IPersistentCollection" 1537 "java.lang.Object"
+     "clojure.lang.Seqable")
+    ("clojure.lang.IPersistentList" 1537 "java.lang.Object"
+     "clojure.lang.Sequential clojure.lang.IPersistentStack")
+    ("clojure.lang.IPersistentMap" 1537 "java.lang.Object"
+     "java.lang.Iterable clojure.lang.Associative clojure.lang.Counted")
+    ("clojure.lang.IPersistentSet" 1537 "java.lang.Object"
+     "clojure.lang.IPersistentCollection clojure.lang.Counted")
+    ("clojure.lang.IPersistentStack" 1537 "java.lang.Object"
+     "clojure.lang.IPersistentCollection")
+    ("clojure.lang.IPersistentVector" 1537 "java.lang.Object"
+     "clojure.lang.Associative clojure.lang.Sequential clojure.lang.IPersistentStack clojure.lang.Reversible clojure.lang.Indexed")
+    ("clojure.lang.IProxy" 1537 "java.lang.Object" "")
+    ("clojure.lang.IRecord" 1537 "java.lang.Object" "")
+    ("clojure.lang.IReduce" 1537 "java.lang.Object" "clojure.lang.IReduceInit")
+    ("clojure.lang.IReduceInit" 1537 "java.lang.Object" "")
+    ("clojure.lang.IRef" 1537 "java.lang.Object" "clojure.lang.IDeref")
+    ("clojure.lang.IReference" 1537 "java.lang.Object" "clojure.lang.IMeta")
+    ("clojure.lang.ISeq" 1537 "java.lang.Object"
+     "clojure.lang.IPersistentCollection")
+    ("clojure.lang.ITransientAssociative" 1537 "java.lang.Object"
+     "clojure.lang.ITransientCollection clojure.lang.ILookup")
+    ("clojure.lang.ITransientAssociative2" 1537 "java.lang.Object"
+     "clojure.lang.ITransientAssociative")
+    ("clojure.lang.ITransientCollection" 1537 "java.lang.Object" "")
+    ("clojure.lang.ITransientMap" 1537 "java.lang.Object"
+     "clojure.lang.ITransientAssociative clojure.lang.Counted")
+    ("clojure.lang.ITransientSet" 1537 "java.lang.Object"
+     "clojure.lang.ITransientCollection clojure.lang.Counted")
+    ("clojure.lang.ITransientVector" 1537 "java.lang.Object"
+     "clojure.lang.ITransientAssociative clojure.lang.Indexed")
+    ("clojure.lang.IType" 1537 "java.lang.Object" "")
+    ("clojure.lang.Indexed" 1537 "java.lang.Object" "clojure.lang.Counted")
+    ("clojure.lang.Keyword" 1 "java.lang.Object"
+     "clojure.lang.IFn java.lang.Comparable clojure.lang.Named java.io.Serializable clojure.lang.IHashEq")
+    ("clojure.lang.LazilyPersistentVector" 1 "java.lang.Object" ""
+     "s:createOwning:([Ljava/lang/Object;)Lclojure/lang/IPersistentVector;")
+    ("clojure.lang.LazySeq" 17 "clojure.lang.Obj"
+     "clojure.lang.ISeq clojure.lang.Sequential java.util.List clojure.lang.IPending clojure.lang.IHashEq")
+    ("clojure.lang.LineNumberingPushbackReader" 1 "java.io.PushbackReader" "")
+    ("clojure.lang.LispReader$ReaderException" 1 "java.lang.RuntimeException"
+     "clojure.lang.IExceptionInfo")
+    ("clojure.lang.MapEntry" 1 "clojure.lang.AMapEntry" ""
+     "s:create:(Ljava/lang/Object;Ljava/lang/Object;)Lclojure/lang/MapEntry;")
+    ("clojure.lang.MapEquivalence" 1537 "java.lang.Object" "")
+    ("clojure.lang.MultiFn" 1 "clojure.lang.AFn" "")
+    ("clojure.lang.Named" 1537 "java.lang.Object" "")
+    ("clojure.lang.Namespace" 1 "clojure.lang.AReference"
+     "java.io.Serializable")
+    ("clojure.lang.Numbers" 1 "java.lang.Object" ""
+     "s:reduceBigInt:(Lclojure/lang/BigInt;)Ljava/lang/Number; s:compare:(Ljava/lang/Number;Ljava/lang/Number;)I")
+    ("clojure.lang.Obj" 1025 "java.lang.Object"
+     "clojure.lang.IObj java.io.Serializable")
+    ("clojure.lang.PersistentArrayMap" 1 "clojure.lang.APersistentMap"
+     "clojure.lang.IObj clojure.lang.IEditableCollection clojure.lang.IMapIterable clojure.lang.IKVReduce clojure.lang.IDrop"
+     "s:createWithCheck:([Ljava/lang/Object;)Lclojure/lang/PersistentArrayMap; s:createAsIfByAssoc:([Ljava/lang/Object;)Lclojure/lang/PersistentArrayMap; f:EMPTY:Lclojure/lang/PersistentArrayMap;")
+    ("clojure.lang.PersistentArrayMap$TransientArrayMap" 16
+     "clojure.lang.ATransientMap" "")
+    ("clojure.lang.PersistentHashMap" 1 "clojure.lang.APersistentMap"
+     "clojure.lang.IEditableCollection clojure.lang.IObj clojure.lang.IMapIterable clojure.lang.IKVReduce")
+    ("clojure.lang.PersistentHashMap$TransientHashMap" 16
+     "clojure.lang.ATransientMap" "")
+    ("clojure.lang.PersistentHashSet" 1 "clojure.lang.APersistentSet"
+     "clojure.lang.IObj clojure.lang.IEditableCollection"
+     "s:createWithCheck:(Lclojure/lang/ISeq;)Lclojure/lang/PersistentHashSet; s:createWithCheck:(Ljava/util/List;)Lclojure/lang/PersistentHashSet; s:createWithCheck:([Ljava/lang/Object;)Lclojure/lang/PersistentHashSet;")
+    ("clojure.lang.PersistentHashSet$TransientHashSet" 16
+     "clojure.lang.ATransientSet" "")
+    ("clojure.lang.PersistentList" 1 "clojure.lang.ASeq"
+     "clojure.lang.IPersistentList clojure.lang.IReduce java.util.List clojure.lang.Counted"
+     "s:create:(Ljava/util/List;)Lclojure/lang/IPersistentList;")
+    ("clojure.lang.PersistentTreeMap" 1 "clojure.lang.APersistentMap"
+     "clojure.lang.IObj clojure.lang.Reversible clojure.lang.Sorted clojure.lang.IKVReduce")
+    ("clojure.lang.PersistentTreeSet" 1 "clojure.lang.APersistentSet"
+     "clojure.lang.IObj clojure.lang.Reversible clojure.lang.Sorted")
+    ("clojure.lang.PersistentVector" 1 "clojure.lang.APersistentVector"
+     "clojure.lang.IObj clojure.lang.IEditableCollection clojure.lang.IReduce clojure.lang.IKVReduce clojure.lang.IDrop")
+    ("clojure.lang.PersistentVector$TransientVector" 16 "clojure.lang.AFn"
+     "clojure.lang.ITransientVector clojure.lang.ITransientAssociative2 clojure.lang.Counted")
+    ("clojure.lang.RT" 1 "java.lang.Object" ""
+     "s:map:([Ljava/lang/Object;)Lclojure/lang/IPersistentMap; s:iter:(Ljava/lang/Object;)Ljava/util/Iterator; s:nextID:()I s:assoc:(Ljava/lang/Object;Ljava/lang/Object;Ljava/lang/Object;)Lclojure/lang/Associative; s:aget:([ZI)Z s:aget:([II)I s:aget:([BI)B s:aget:([JI)J s:aget:([SI)S s:aget:([CI)C s:aget:([Ljava/lang/Object;I)Ljava/lang/Object; s:aget:([DI)D s:aget:([FI)F s:alength:([B)I s:alength:([Z)I s:alength:([S)I s:alength:([Ljava/lang/Object;)I s:alength:([I)I s:alength:([D)I s:alength:([F)I s:alength:([J)I s:alength:([C)I s:aset:([SIS)S s:aset:([JIJ)J s:aset:([FIF)F s:aset:([BIB)B s:aset:([CIC)C s:aset:([DID)D s:aset:([III)I s:aset:([Ljava/lang/Object;ILjava/lang/Object;)Ljava/lang/Object; s:aset:([ZIZ)Z v:checkSpecAsserts:Z")
+    ("clojure.lang.Ratio" 1 "java.lang.Number" "java.lang.Comparable")
+    ("clojure.lang.ReaderConditional" 1 "java.lang.Object"
+     "clojure.lang.ILookup")
+    ("clojure.lang.Reduced" 17 "java.lang.Object" "clojure.lang.IDeref")
+    ("clojure.lang.Ref" 1 "clojure.lang.ARef"
+     "clojure.lang.IFn java.lang.Comparable clojure.lang.IRef")
+    ("clojure.lang.Reversible" 1537 "java.lang.Object" "")
+    ("clojure.lang.SeqIterator" 1 "java.lang.Object" "java.util.Iterator")
+    ("clojure.lang.Seqable" 1537 "java.lang.Object" "")
+    ("clojure.lang.Sequential" 1537 "java.lang.Object" "")
+    ("clojure.lang.Settable" 1537 "java.lang.Object" "")
+    ("clojure.lang.Sorted" 1537 "java.lang.Object" "")
+    ("clojure.lang.Symbol" 1 "clojure.lang.AFn"
+     "clojure.lang.IObj java.lang.Comparable clojure.lang.Named java.io.Serializable clojure.lang.IHashEq")
+    ("clojure.lang.TaggedLiteral" 1 "java.lang.Object" "clojure.lang.ILookup")
+    ("clojure.lang.Util" 1 "java.lang.Object" ""
+     "s:hasheq:(Ljava/lang/Object;)I s:equiv:(Ljava/lang/Object;Z)Z s:equiv:(ZZ)Z s:equiv:(DLjava/lang/Object;)Z s:equiv:(Ljava/lang/Object;D)Z s:equiv:(DD)Z s:equiv:(JLjava/lang/Object;)Z s:equiv:(Ljava/lang/Object;J)Z s:equiv:(CC)Z s:equiv:(Ljava/lang/Object;Ljava/lang/Object;)Z s:equiv:(JJ)Z s:equiv:(ZLjava/lang/Object;)Z s:hashCombine:(II)I")
+    ("clojure.lang.Var" 17 "clojure.lang.ARef"
+     "clojure.lang.IFn clojure.lang.IRef clojure.lang.Settable java.io.Serializable")
+    ("clojure.lang.Var$Unbound" 1 "clojure.lang.AFn" "")
+    ("clojure.lang.Volatile" 17 "java.lang.Object" "clojure.lang.IDeref"))
+  "The clojure.lang classes a value here has, the ones whose statics this front
+   end answers (clojure/ClojureLangClasses) and their supertypes, read off clj
+   1.12.6 on JDK 25 by reflection (2026-11-26): (name modifiers superclass
+   interfaces [members]), the modifiers Class#getModifiers' public, final,
+   interface and abstract bits, the interfaces' names in getInterfaces' order
+   separated by spaces, the members the statics this front end answers, each
+   kind:name:descriptor (%host-stub-class).")
+
+(defun rontolisp::%clojure-lang-class-name-p (x)
+  "Whether X names a clojure.lang class of %clojure-lang-classes: what
+   Class/forName answers the stub of where a host is."
+  (and (stringp x) (assoc x rontolisp::%clojure-lang-classes :test #'equal) t))
+
+(defun rontolisp::%clojure-dispatch-kind (v)
+  "The run-time dispatch value V as the method tables key it: a class value of
+   a kind's class its kind keyword (%clojure-kind-of-class), anything else V. A
+   view of the class-designator family: a program making no class value folds
+   it to V."
+  (or (rontolisp::%clojure-kind-of-class v) v))
+
+(defun rontolisp::%clojure-kind-of-class (c)
+  "The kind keyword class answers for the values of the class value C's class,
+   when C (a host Class or a designator) names one of %clojure-class-kinds, else
+   NIL. The multimethod dispatcher, instance? and the class chains read a class
+   value through this, so it finds the kind's rows."
+  (let* ((name
+          (if (and (consp c) (eq (car c) :C%CLASS) (consp (cdr c))
+                   (stringp (car (cdr c))))
+              (car (cdr c))
+              (rontolisp::%clojure-host-class-name c)))
+         (spelling
+          (if name
+              (cdr (assoc name rontolisp::%clojure-class-kinds :test #'equal))
+              nil)))
+    (if spelling (list :c%keyword spelling) nil)))
 
 ;;;; Monitors: the lock locking holds on the interpreter and the JVM, and the
 ;;;; one alter-var-root, alter-meta! and reset-meta! hold.

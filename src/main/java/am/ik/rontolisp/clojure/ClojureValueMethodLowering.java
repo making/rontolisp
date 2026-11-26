@@ -492,10 +492,12 @@ final class ClojureValueMethodLowering {
 		// name, as Class#isArray answers
 		row("isArray", 0, arm(List.of("keyword?"), core("=", core("name", R), LispString.literal("[B"))),
 				new Arm(List.of(CLASS_DESIGNATOR), ctx -> part(ctx, "RONTOLISP::%CLOJURE-DESIGNATOR-ARRAY-P")));
-		// .isInstance of a class keyword or designator (what .getClass answers, a
+		// .isInstance of a class keyword or a class value (what .getClass answers, a
 		// record's or deftype's class among them) is instance? of it, like the
-		// oracle's Class#isInstance (core.logic's (.. this getClass (isInstance o)))
-		row("isInstance", 1, arm(List.of("keyword?", CLASS_DESIGNATOR), core("instance?", R, A)));
+		// oracle's Class#isInstance (core.logic's (.. this getClass (isInstance o))):
+		// the host's own would take a value here for its Java face (a fixnum its
+		// narrowest box)
+		row("isInstance", 1, arm(List.of("keyword?", "class?"), core("instance?", R, A)));
 		// IHashEq: a collection's, a keyword's or a symbol's hasheq is its hash
 		row("hasheq", 0, arm(List.of("coll?", "ident?"), core("hash", R)));
 		row("deref", 0, arm(List.of(ATOM), core("deref", R)));
@@ -663,6 +665,14 @@ final class ClojureValueMethodLowering {
 			// the name exists for the host call to take
 			dispatch = ClojureLowerUtil.list(ClojureLowerUtil.sym("if"),
 					ClojureLowerUtil.list(ClojureLowerUtil.sym("integerp"), recv), bigIntegerCall, dispatch);
+		}
+		if (ctx.hostTarget && method.equals("isInstance") && args.size() == 1) {
+			// a host class's isInstance is instance? of it, as a class value's is: the
+			// host's own would take a value here for its Java face (a fixnum its
+			// narrowest box)
+			dispatch = ClojureLowerUtil.list(ClojureLowerUtil.sym("if"),
+					ClojureLowerUtil.list(new LispSymbol("RONTOLISP::%CLOJURE-HOST-CLASS-NAME"), recv),
+					ClojureDispatchLowering.classValueInstance(ctx, recv, args.get(0)), dispatch);
 		}
 		if (!ctx.hostTarget && method.equals("compareTo") && args.size() == 1) {
 			// where no host is, a number's Comparable order is compare's (datascript's
