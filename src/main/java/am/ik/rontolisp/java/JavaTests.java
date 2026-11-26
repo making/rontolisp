@@ -79,8 +79,8 @@ final class JavaTests {
 			Map.entry(PROVIDER + "CsvSource",
 					Set.of("value", "textBlock", "quoteCharacter", "delimiter", "delimiterString", "emptyValue",
 							"nullValues", "ignoreLeadingAndTrailingWhitespace")),
-			Map.entry(PROVIDER + "MethodSource", Set.of("value")),
-			Map.entry(PROVIDER + "EnumSource", Set.of("value", "names", "mode")),
+			Map.entry(PROVIDER + "MethodSource", Set.of("value")), Map.entry(PROVIDER + "FieldSource", Set.of("value")),
+			Map.entry(PROVIDER + "EnumSource", Set.of("value", "names", "mode", "from", "to")),
 			Map.entry(PROVIDER + "NullSource", Set.of()), Map.entry(PROVIDER + "EmptySource", Set.of()),
 			Map.entry(PROVIDER + "NullAndEmptySource", Set.of()));
 
@@ -1251,6 +1251,17 @@ final class JavaTests {
 			throw JavaClasses.error(unit.source(), declaration.pos(), "the @ParameterizedTest method " + method.name
 					+ " names no source of arguments the experimental Java subset has");
 		}
+		boolean texts = test.is(PROVIDER + "CsvSource");
+		for (Annotation written : test.annotations().getOrDefault(PROVIDER + "ValueSource", List.of())) {
+			texts |= !texts(written, "strings", unit).isEmpty();
+		}
+		for (int p = 0; p < method.parameters.size() && texts; p++) {
+			if (method.parameters.get(p) instanceof ClassType parameter
+					&& parameter.declaration().name.equals("java.lang.Class")) {
+				throw JavaClasses.unsupported(unit.source(), declaration.parameters().get(p).pos(),
+						"the conversion of a text to a java.lang.Class");
+			}
+		}
 		String rows = "rows$" + (this.methods++);
 		this.members.append("    private static void ")
 			.append(rows)
@@ -1431,7 +1442,13 @@ final class JavaTests {
 		return body.append("        if (thrown != null) {\n            throw thrown;\n        }\n").toString();
 	}
 
-	/** An argument of a row as the type of the parameter it is given to. */
+	/**
+	 * An argument of a row as the type of the parameter it is given to, converted as
+	 * JUnit converts it (measured, JUnit Jupiter 6.0.3): a primitive type or its box, a
+	 * text, or an instance of a class type -- else, from a text, by the conversion JUnit
+	 * has for a type of the JDK's ({@link #CONVERSIONS}), by an enum's constant of that
+	 * name, or by the type's own factory method or constructor ({@link #factory}).
+	 */
 	private static String argument(JavaType type, int index) {
 		String at = "(row, " + index + ")";
 		if (type instanceof Primitive primitive) {
@@ -1447,31 +1464,115 @@ final class JavaTests {
 			} + at;
 		}
 		String text = JavaAnnotations.typeText(type);
+		if (!(type instanceof ClassType) && !(type instanceof ArrayType)) {
+			return "(" + text + ") " + SOURCES + ".object" + at;
+		}
+		String erased = JavaAnnotations.erasedText(type);
 		if (type instanceof ClassType named) {
 			JavaClass declaration = named.declaration();
-			String unboxed = switch (declaration.name) {
-				case "java.lang.Boolean" -> "Boolean";
-				case "java.lang.Byte" -> "Byte";
-				case "java.lang.Short" -> "Short";
-				case "java.lang.Character" -> "Char";
-				case "java.lang.Integer" -> "Int";
-				case "java.lang.Long" -> "Long";
-				case "java.lang.Float" -> "Float";
-				case "java.lang.Double" -> "Double";
+			String box = switch (declaration.name) {
+				case "java.lang.Boolean" -> "boolean";
+				case "java.lang.Byte" -> "byte";
+				case "java.lang.Short" -> "short";
+				case "java.lang.Character" -> "char";
+				case "java.lang.Integer" -> "int";
+				case "java.lang.Long" -> "long";
+				case "java.lang.Float" -> "float";
+				case "java.lang.Double" -> "double";
 				default -> null;
 			};
-			if (unboxed != null) {
-				return "(" + SOURCES + ".isNull" + at + " ? null : (" + text + ") " + SOURCES + ".to" + unboxed + at
-						+ ")";
+			if (box != null) {
+				return SOURCES + "." + box + "Box" + at;
 			}
 			if (declaration.name.equals("java.lang.String")) {
 				return SOURCES + ".string" + at;
 			}
-			if (declaration.isEnum) {
-				return SOURCES + ".constant(row, " + index + ", " + declaration.name + ".values())";
+			if (declaration.name.equals("java.lang.Object")) {
+				return SOURCES + ".object" + at;
 			}
 		}
-		return "(" + text + ") " + SOURCES + ".object" + at;
+		String conversion = null;
+		if (type instanceof ClassType named) {
+			JavaClass declaration = named.declaration();
+			String made = CONVERSIONS.get(declaration.name);
+			conversion = made != null ? made
+					: declaration.isEnum ? declaration.name + ".valueOf(text)" : factory(declaration);
+		}
+		return "((" + text + ") " + SOURCES + ".converted(row, " + index + ", " + SOURCES + ".object" + at
+				+ " instanceof " + erased + ", " + literal(typeName(type)) + ", "
+				+ (conversion == null ? "null" : "text -> " + conversion) + "))";
+	}
+
+	/**
+	 * The conversions JUnit has of a text to a type of the JDK's, each an expression of
+	 * {@code text} (measured, JUnit Jupiter 6.0.3: a number's underscores dropped, a
+	 * locale an IETF language tag). {@code java.lang.Class} has none here: it is refused
+	 * where a source gives a text to it.
+	 */
+	private static final Map<String, String> CONVERSIONS = Map.ofEntries(
+			Map.entry("java.io.File", "new java.io.File(text)"),
+			Map.entry("java.math.BigDecimal", "new java.math.BigDecimal(text.replace(\"_\", \"\"))"),
+			Map.entry("java.math.BigInteger", "new java.math.BigInteger(text.replace(\"_\", \"\"))"),
+			Map.entry("java.net.URI", "java.net.URI.create(text)"),
+			Map.entry("java.net.URL", "java.net.URI.create(text).toURL()"),
+			Map.entry("java.nio.charset.Charset", "java.nio.charset.Charset.forName(text)"),
+			Map.entry("java.nio.file.Path", "java.nio.file.Path.of(text)"),
+			Map.entry("java.time.Duration", "java.time.Duration.parse(text)"),
+			Map.entry("java.time.Instant", "java.time.Instant.parse(text)"),
+			Map.entry("java.time.LocalDate", "java.time.LocalDate.parse(text)"),
+			Map.entry("java.time.LocalDateTime", "java.time.LocalDateTime.parse(text)"),
+			Map.entry("java.time.LocalTime", "java.time.LocalTime.parse(text)"),
+			Map.entry("java.time.MonthDay", "java.time.MonthDay.parse(text)"),
+			Map.entry("java.time.OffsetDateTime", "java.time.OffsetDateTime.parse(text)"),
+			Map.entry("java.time.OffsetTime", "java.time.OffsetTime.parse(text)"),
+			Map.entry("java.time.Period", "java.time.Period.parse(text)"),
+			Map.entry("java.time.Year", "java.time.Year.parse(text)"),
+			Map.entry("java.time.YearMonth", "java.time.YearMonth.parse(text)"),
+			Map.entry("java.time.ZonedDateTime", "java.time.ZonedDateTime.parse(text)"),
+			Map.entry("java.time.ZoneId", "java.time.ZoneId.of(text)"),
+			Map.entry("java.time.ZoneOffset", "java.time.ZoneOffset.of(text)"),
+			Map.entry("java.util.Currency", "java.util.Currency.getInstance(text)"),
+			Map.entry("java.util.Locale", "java.util.Locale.forLanguageTag(text)"),
+			Map.entry("java.util.UUID", "java.util.UUID.fromString(text)"));
+
+	/**
+	 * A type's own conversion of a text, as JUnit finds one (measured, JUnit Jupiter
+	 * 6.0.3): its one static method that is not private, takes a {@code String} and
+	 * returns the type, inherited or not; else its constructor taking a {@code String};
+	 * else the same of a {@code CharSequence}. A constructor only of a class that is
+	 * neither abstract nor inner. {@code null} for none.
+	 */
+	private static @Nullable String factory(JavaClass type) {
+		for (String parameter : List.of("java.lang.String", "java.lang.CharSequence")) {
+			Method found = null;
+			int factories = 0;
+			Method constructor = null;
+			for (Method method : type.methods) {
+				if (method.isPrivate || method.parameters.size() != 1
+						|| !(method.parameters.get(0) instanceof ClassType taken)
+						|| !taken.declaration().name.equals(parameter)) {
+					continue;
+				}
+				if (method.name.equals("<init>")) {
+					if (method.owner == type && !type.isAbstract && !type.isInterface && !type.hasOuterInstance()
+							&& !type.isLocal) {
+						constructor = method;
+					}
+				}
+				else if (method.isStatic && method.returnType instanceof ClassType returned
+						&& returned.declaration() == type) {
+					found = method;
+					factories++;
+				}
+			}
+			if (factories == 1) {
+				return java.util.Objects.requireNonNull(found).owner.name + "." + found.name + "(text)";
+			}
+			if (constructor != null) {
+				return "new " + type.name + (type.typeParameters.isEmpty() ? "" : "<>") + "(text)";
+			}
+		}
+		return null;
 	}
 
 	/**
@@ -1539,9 +1640,49 @@ final class JavaTests {
 							"@EnumSource names no enum, and the first parameter of " + method.name + " is none");
 				}
 				List<String> modes = texts(written, "mode", unit);
+				List<String> from = texts(written, "from", unit);
+				List<String> to = texts(written, "to", unit);
+				JavaClass enumeration;
+				try {
+					enumeration = this.classes.find(constants, method.owner, unit, written.pos());
+				}
+				catch (LispReadException | JavaClass.Absent ex) {
+					enumeration = null;
+				}
+				String canonical = literal(enumeration == null ? constants : enumeration.name);
 				return indent + SOURCES + ".constants(rows, " + constants + ".values(), new String[] {"
 						+ String.join(", ", texts(written, "names", unit)) + "}, "
-						+ (modes.isEmpty() ? PROVIDER + "EnumSource.Mode.INCLUDE" : "(" + modes.get(0) + ")") + ");\n";
+						+ (modes.isEmpty() ? PROVIDER + "EnumSource.Mode.INCLUDE" : "(" + modes.get(0) + ")") + ", "
+						+ (from.isEmpty() ? "\"\"" : "(" + from.get(0) + ")") + ", "
+						+ (to.isEmpty() ? "\"\"" : "(" + to.get(0) + ")") + ", "
+						+ (named.isEmpty() ? literal(PROVIDER + "NullEnum") : canonical) + ", " + canonical + ");\n";
+			}
+			case "FieldSource": {
+				List<String> names = new ArrayList<>();
+				for (String text : texts(written, "value", unit)) {
+					String name = text.length() >= 2 && text.startsWith("\"") && text.endsWith("\"")
+							? text.substring(1, text.length() - 1) : null;
+					if (name == null || name.isBlank() || !name.chars().allMatch(Character::isJavaIdentifierPart)) {
+						throw JavaClasses.unsupported(unit.source(), written.pos(),
+								"a @FieldSource that does not name a field of the test's class by a string literal");
+					}
+					names.add(name);
+				}
+				if (names.isEmpty()) {
+					names.add(method.name);
+				}
+				StringBuilder reads = new StringBuilder();
+				for (String name : names) {
+					reads.append(indent)
+						.append(SOURCES + ".field(rows, ")
+						.append(field(suite, name, unit, written))
+						.append(", ")
+						.append(literal(name))
+						.append(", ")
+						.append(literal(suite.type.binaryName))
+						.append(");\n");
+				}
+				return reads.toString();
 			}
 			default:
 				return "";
@@ -1571,6 +1712,34 @@ final class JavaTests {
 			}
 		}
 		return suite.type.name;
+	}
+
+	/**
+	 * A {@code @FieldSource} field of a test's class, as JUnit finds it (measured): of
+	 * the class or a class above, not of the class around a {@code @Nested} one; a static
+	 * one read on its class, one that is not on the instance the tests share, which JUnit
+	 * reads only where the class is of {@code @TestInstance(PER_CLASS)}.
+	 * @return the expression reading it
+	 */
+	private String field(Suite suite, String name, Unit unit, Annotation written) {
+		for (JavaClass level : levels(suite.type).reversed()) {
+			for (JavaClass.Field field : level.fields) {
+				if (field.owner != level || !field.name.equals(name)) {
+					continue;
+				}
+				if (!field.isStatic) {
+					if (!suite.perClass) {
+						throw JavaClasses.unsupported(unit.source(), written.pos(),
+								"a @FieldSource field that is not static, of a class that is not of "
+										+ "@TestInstance(PER_CLASS)");
+					}
+					return "shared$" + suite.depth() + "." + name;
+				}
+				return level.name + "." + name;
+			}
+		}
+		throw JavaClasses.error(unit.source(), written.pos(),
+				"Could not find field named [" + name + "] in class [" + suite.type.binaryName + "]");
 	}
 
 	/**

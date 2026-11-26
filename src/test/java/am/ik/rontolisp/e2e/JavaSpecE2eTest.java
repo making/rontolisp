@@ -285,8 +285,13 @@ class JavaSpecE2eTest {
 			return further;
 		}
 
+		/**
+		 * What names the case's directories, modules and JVM class: its name, which no
+		 * other case has, as an identifier -- not its file's, which two cases share
+		 * ({@code app/Main.java}).
+		 */
 		String stem() {
-			return "Standalone" + this.file.replaceFirst("\\.[^./]*$", "").replace('/', '_');
+			return "Standalone_" + this.name.replace('-', '_');
 		}
 
 		/** Whether the program is a Common Lisp one, which no JDK runs. */
@@ -506,7 +511,11 @@ class JavaSpecE2eTest {
 	Stream<DynamicNode> standalone() throws Exception {
 		List<DynamicNode> legs = new ArrayList<>();
 		List<Standalone> cases = loadSpec().standalone();
-		for (Standalone s : cases == null ? List.<Standalone>of() : cases) {
+		cases = cases == null ? List.of() : cases;
+		// the legs run at once, each in the directories its stem names
+		assertThat(cases.stream().map(Standalone::stem)).as("the stems of the standalone cases")
+			.doesNotHaveDuplicates();
+		for (Standalone s : cases) {
 			if (!s.isLisp()) {
 				legs.add(dynamicTest(s.name() + " JDK", () -> {
 					Path written = s.write(s.stem() + "-JDK");
@@ -657,7 +666,7 @@ class JavaSpecE2eTest {
 	 * an orderer of tests other than JUnit's by order, name or display name; a
 	 * RepetitionInfo given around a test that is not repeated; a parameter of a
 	 * parameterized test that JUnit would make of its own, or whose TestInfo would name
-	 * its arguments.
+	 * its arguments; a text a parameterized test's source gives to a class parameter.
 	 */
 	@TestFactory
 	Stream<DynamicNode> whatARunOfTestsDoesNotRunIsRefusedByName() {
@@ -681,6 +690,9 @@ class JavaSpecE2eTest {
 				{ "import org.junit.jupiter.params.ParameterizedTest; import org.junit.jupiter.params.provider.ValueSource; "
 						+ "class T { @ParameterizedTest @ValueSource(classes = String.class) void t(Class<?> c) { } }",
 						"@ValueSource", "the element classes of @ValueSource" },
+				{ "import org.junit.jupiter.params.ParameterizedTest; import org.junit.jupiter.params.provider.ValueSource; "
+						+ "class T { @ParameterizedTest @ValueSource(strings = \"java.lang.String\") void t(Class<?> c) { } }",
+						"c)", "the conversion of a text to a java.lang.Class" },
 				{ "import org.junit.jupiter.api.Test; @Test @interface Fast { } class T { @Fast void t() { } }",
 						"@Test", "the annotation org.junit.jupiter.api.Test on an annotation type" },
 				{ "import org.junit.jupiter.params.ParameterizedTest; import org.junit.jupiter.params.aggregator."

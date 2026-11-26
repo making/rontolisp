@@ -3812,11 +3812,9 @@ public final class JvmLispCompiler implements LispCompiler {
 		// After every program body, because Pass 2 is what registers the sites; before
 		// class assembly, because the bodies mint constant-pool entries. A fused body
 		// compiles no Lisp expression, so the pending list cannot grow under this walk.
-		List<Ctx> fusedCtxs = new ArrayList<>();
+		List<JvmIntFusionCompiler.Emitted> fusedMethods = new ArrayList<>();
 		for (JvmIntFusionCompiler.Pending pendingFused : fusedState.pending) {
-			Ctx fusedCtx = ctxBuilder.build();
-			JvmIntFusionCompiler.emitMethodBody(pendingFused, fusedCtx, this.className);
-			fusedCtxs.add(fusedCtx);
+			fusedMethods.addAll(JvmIntFusionCompiler.emitMethods(pendingFused, ctxBuilder::build, this.className));
 		}
 
 		// The tail groups, laid out now that every program body is compiled: a member
@@ -3837,7 +3835,9 @@ public final class JvmLispCompiler implements LispCompiler {
 				callers.add(outlined.ctx());
 			}
 			// a fused method's fallback calls a name with a cell by its entry
-			callers.addAll(fusedCtxs);
+			for (JvmIntFusionCompiler.Emitted fused : fusedMethods) {
+				callers.add(fused.ctx());
+			}
 			for (Ctx caller : callers) {
 				caller.body.forEachEntry(entry -> calledEntries.add(entry.index()));
 			}
@@ -6128,11 +6128,10 @@ public final class JvmLispCompiler implements LispCompiler {
 		// The outlined fused-site methods (.kb/jvm-int-fusion.md) and their
 		// two shared helpers, present only when Pass 2 registered a site / a
 		// raw local -- a program without one is byte-identical to before.
-		for (int i = 0; i < fusedCtxs.size(); i++) {
-			JvmIntFusionCompiler.Pending pendingFused = fusedState.pending.get(i);
-			fusedCtxs.get(i)
-				.addTo(definition, AccessFlag.ACC_PRIVATE | AccessFlag.ACC_STATIC, pendingFused.nameUtf8(),
-						pendingFused.descUtf8());
+		for (JvmIntFusionCompiler.Emitted emitted : fusedMethods) {
+			emitted.ctx()
+				.addTo(definition, AccessFlag.ACC_PRIVATE | AccessFlag.ACC_STATIC, emitted.nameUtf8(),
+						emitted.descUtf8());
 		}
 		// The outlined tail continuations of a body that would have compiled
 		// past HotSpot's HugeMethodLimit (JvmBodyOutliner); empty for every

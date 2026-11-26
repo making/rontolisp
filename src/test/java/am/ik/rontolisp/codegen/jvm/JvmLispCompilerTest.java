@@ -17694,6 +17694,41 @@ class JvmLispCompilerTest {
 			(defun fused-dif (x) (- x x))
 			(let ((flim 1000000.0)) (print (fused-dif (random flim))))
 			(let ((ilim 1000000)) (print (fused-dif (random ilim))))
+			(defun wide (a b c d e)
+			  (+ (* a b) (* c d) (* e a) (* b c) (* d e) (- a b) (- c d) (- e a)))
+			(print (list (wide 1 2 3 4 5) (wide 3037000500 3037000500 3 4 5) (wide 1.5 2 3 4 5) (wide 1.5 2.5 3.5 4.5 5.5)))
+			(print (handler-case (wide nil 2 3 4 5) (type-error () 'wide-nil)))
+			(defun wide< (a b c d e)
+			  (if (< (+ (* a b) (* c d) (* e a) (* b c)) (- (* d e) (* a c) (* b d) (* c e))) 'lt 'ge))
+			(print (list (wide< 1 2 3 4 5) (wide< -3037000500 3037000500 3 4 5) (wide< 1.5 2 3 4 5)))
+			(defun wide-raw (a b v)
+			  (declare (type (signed-byte 64) a b))
+			  (let ((y (%mask-signed-field 64 (+ (* a b) (aref v 0) (aref v 1) (aref v 2) (aref v 3) (* a 3) (* b 5)))))
+			    (declare (type (signed-byte 64) y))
+			    (list y (ash y -1) (logand y 255) (< y a))))
+			(print (list (wide-raw 6 7 (vector 1 2 3 4)) (wide-raw 6 7 (vector 1 2 3 4 "s"))
+			             (handler-case (wide-raw 6 7 (vector 1 2 3 4.5)) (type-error () 'wide-raw-float))))
+			(defun wide-store (w i a b)
+			  (declare (type (simple-array (signed-byte 64) (*)) w) (type (signed-byte 32) i) (type (signed-byte 64) a b))
+			  (setf (aref w i) (%mask-signed-field 64 (+ (* a 3) (* b 5) (logxor a b) (logand a b) (logior a b) (- a b) (* a b) a)))
+			  (list (setf (aref w (+ i 1)) (%mask-signed-field 64 (+ (* a 5) (* b 3) (logxor a b) (logand a b) (logior a b) (- b a) (* a b) a)))
+			        w))
+			(print (let ((w (make-array 4 :initial-element 0)))
+			         (list (first (wide-store w 0 6 7)) (first (wide-store w 2 -9223372036854775808 0))
+			               (first (wide-store w 0 1 2)) w)))
+			(let ((big 3037000500) (lim 1) (flim 1.0))
+			  (print (list (+ (* big big) (* big 3) (* big 5) (- big 7) (* 2 big) (- big 1) (* big 9) (random 1))
+			               (+ (* big big) (* big 3) (* big 5) (- big 7) (* 2 big) (- big 1) (* big 9) (random lim))
+			               (floatp (+ (* big 2) (* big 3) (* big 5) (- big 7) (* 2 big) (- big 1) (* big 9) (random flim))))))
+			(defun sq+ (x y) (+ (* x x) (* y y)))
+			(defun wide-calls (a b c d e)
+			  (flet ((dif (x) (- x x)))
+			    (+ (dif (sq+ a b)) (sq+ c d) (* a b) (* c d) (* e a) (* b c) (* d e))))
+			(print (list (wide-calls 1 2 3 4 5) (wide-calls 3037000500 3037000500 3 4 5) (wide-calls 1.5 2 3 4 5)
+			             (flet ((dif (x) (- x x))) (dif (sq+ 1.5 2)))))
+			(let ((acc 1))
+			  (dotimes (i 30) (setq acc (+ (* acc 7) (* i 5) (* i i) (- acc i) (* 2 acc) (- i 1) (* acc 3) 1)))
+			  (print acc))
 			""";
 
 	private static final String INT_FUSION_EXPECTED = """
@@ -17742,7 +17777,15 @@ class JvmLispCompilerTest {
 			9223372036854775808
 			50
 			0.0
-			0""";
+			0
+			(47 9223372058259253536 50.5 63.25)
+			WIDE-NIL
+			(GE LT GE)
+			((105 52 105 NIL) (105 52 105 NIL) WIDE-RAW-FLOAT)
+			(114 -9223372036854775808 21 #(21 21 -9223372036854775808 -9223372036854775808))
+			(9223372100777260492 9223372100777260492 T)
+			(70 9223372061296254057 73.5 0.0)
+			2732194531167361584841292640026043""";
 
 	private static final String RAW_GLOBAL_PROGRAM = """
 			(defparameter s 0)
@@ -17922,6 +17965,25 @@ class JvmLispCompilerTest {
 				+ ownCallsIn(celled, "MIX32", "_n$MOD32+"))
 			.isZero();
 		assertThat(ownCallsIn(celled, "MIX32", "_nt$MOD32+")).isOne();
+		// .kb/jvm-int-fusion.md, "The fallback is a method of its own": wide's fused
+		// method calls the method holding its fifteen generic operations and none of
+		// them itself, under the handler its checked operations need; wide-store's
+		// stores of wrapped operations have the call too, and a handler only where the
+		// subscript is a checked sum; mod32+'s two operations stay in its fused method.
+		assertThat(fusedMethodsOf(fast, "WIDE")).singleElement().satisfies(wide -> {
+			assertThat(wide.calls()).filteredOn(name -> name.startsWith("_fxb$")).hasSize(1);
+			assertThat(wide.calls()).noneMatch(name -> name.startsWith("_add") || name.startsWith("_mul"));
+			assertThat(wide.handlers()).isOne();
+		});
+		assertThat(fusedMethodsOf(fast, "WIDE-STORE")).hasSize(2)
+			.allSatisfy(store -> assertThat(store.calls()).filteredOn(name -> name.startsWith("_fxb$")).hasSize(1))
+			.extracting(FusedMethod::handlers)
+			.containsExactly(0, 1);
+		assertThat(fusedMethodsOf(fast, "MOD32+")).singleElement().satisfies(mod -> {
+			assertThat(mod.calls()).noneMatch(name -> name.startsWith("_fxb$"));
+			assertThat(mod.calls()).anyMatch(name -> name.startsWith("_add"));
+			assertThat(mod.handlers()).isZero();
+		});
 		assertThat(runClass(fast)).isEqualTo(INT_FUSION_EXPECTED);
 		assertThat(runClass(small)).isEqualTo(INT_FUSION_EXPECTED);
 		assertThat(runClass(celled)).isEqualTo(INT_FUSION_EXPECTED);
@@ -18038,6 +18100,35 @@ class JvmLispCompilerTest {
 		assertThat(schedCalls).hasSize(4).allMatch(call -> call.startsWith("_fx$") && !call.endsWith("Object;"));
 		assertThat(runClass(fast)).isEqualTo(expected);
 		assertThat(runClass(small)).isEqualTo(expected);
+	}
+
+	/** A fused method: the names it calls and how many handlers it holds. */
+	private record FusedMethod(List<String> calls, int handlers) {
+	}
+
+	/** The fused methods {@code method} calls, in the order it first calls them. */
+	private static List<FusedMethod> fusedMethodsOf(byte[] classBytes, String method) {
+		Map<String, FusedMethod> declared = new java.util.HashMap<>();
+		for (java.lang.classfile.MethodModel model : java.lang.classfile.ClassFile.of().parse(classBytes).methods()) {
+			java.lang.classfile.CodeModel code = model.code().orElse(null);
+			if (code == null) {
+				continue;
+			}
+			List<String> calls = new java.util.ArrayList<>();
+			for (java.lang.classfile.CodeElement element : code) {
+				if (element instanceof java.lang.classfile.instruction.InvokeInstruction invoke) {
+					calls.add(invoke.name().stringValue());
+				}
+			}
+			declared.put(model.methodName().stringValue(), new FusedMethod(calls, code.exceptionHandlers().size()));
+		}
+		return Objects.requireNonNull(declared.get(method))
+			.calls()
+			.stream()
+			.filter(name -> name.startsWith("_fx$"))
+			.distinct()
+			.map(name -> Objects.requireNonNull(declared.get(name)))
+			.toList();
 	}
 
 	private static List<String> fusedMethodsUsing(byte[] classBytes, java.lang.classfile.Opcode opcode) {

@@ -16,4 +16,4 @@ refused by name today:
 
 Each failure message is asked of AssertJ 3.27 running under a JDK (the corpus case's JDK
 leg is the oracle); `KeyValueSessionStoreTest` uses the recursive comparison and
-`asInstanceOf` (`.todo/m61`).
+`asInstanceOf` (`.todo/m78`).
