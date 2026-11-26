@@ -238,7 +238,7 @@ class WitExportDirectiveTest {
 				""";
 		Map<String, List<String>> program = Map.of("count-vowels", List.of("s"), "longest", List.of("ws"), "size",
 				List.of("s"));
-		List<LispVal> forms = WitExportDirective.lower(new Directive(WIT, null, null, false, true), wit, WIT,
+		List<LispVal> forms = WitExportDirective.lower(new Directive(WIT, null, null, false, true, false), wit, WIT,
 				defuns(program), Backend.WASM_COMPONENT);
 		assertThat(forms.stream().map(form -> form.print().replaceAll(":WIT \"[^\"]*\"", ":WIT \"...\"")))
 			.containsExactly(
@@ -261,6 +261,13 @@ class WitExportDirectiveTest {
 				"(DEFUN |longest%wit-export| (P0) (HANDLER-CASE (CONS :OK (|longest| P0)) (RONTOLISP:WIT-ERROR (E)"
 						+ " (CONS :ERROR (RONTOLISP:WIT-ERROR-PAYLOAD E)))))");
 		assertThat(printed(lower(wit, Backend.OTHER, program))).doesNotContain("DEFUN");
+		// Under :envelope t the function answers the envelope itself (a front end's
+		// wrapper makes it), so the export names the function.
+		Directive envelope = WitExportDirective.parse(form("(rontolisp:wit-export \"world.wit\" :envelope t)"));
+		assertThat(envelope.envelope()).isTrue();
+		assertThat(printed(WitExportDirective.lower(envelope, wit, WIT, defuns(signalling), Backend.WASM_COMPONENT)))
+			.doesNotContain("DEFUN")
+			.contains("(RONTOLISP:WASM-EXPORT '|longest| :AS \"longest\"");
 		// The scalar backend has no value a list could be, and says so at the line.
 		assertThatThrownBy(() -> lower(wit, Backend.WASM_NO_GC_COMPONENT, program))
 			.isInstanceOf(UnsupportedOperationException.class)

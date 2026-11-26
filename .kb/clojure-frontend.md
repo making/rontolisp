@@ -1572,6 +1572,24 @@ Clojure cannot name a CL function and a directive must be a top-level form. User
   thrown error key as `rontolisp:wit-error`. The language boundary IS the CL tier: each side
   converts to and from it, and what the WIT does not carry (other `ex-data` keys) does not
   cross.
+- **A world's compound export** crosses in the import tier's spelling, the other direction
+  (`exportConversion`): the wrapper reads each parameter IN and the answer OUT through the same
+  walker. **Its descriptors are QUOTED in the wrapper, never the import's globals**: a host
+  `--invoke`ing an export of a command component runs no top level, where a global is set
+  (`.kb/wasm-export-no-wasi.md`, "`wit-export :reactor t`"). A top-level `result` is the envelope
+  the wrapper makes: `(handler-case (cons :ok ...) ((and error (satisfies %clojure-wit-arm-p))
+  ...))`, the arm's value by `%clojure-wit-arm-value`; any other exception traps. The directive
+  always carries `:octets t` and `:envelope t` (`.kb/wit.md`), which a flat world's bytes ignore.
+  What no export carries is `describe`'s refusal at the WIT line, before a var is read; a core
+  module and `--no-gc` refuse in the compiler. Sizes (2026-11-26, `--component`, raw / gzip):
+  a `u32` export throwing an `ex-info` 191,530 / 62,415; the same as `result<u32, string>`
+  211,050 / 68,341, as `list<u32>` 206,692 / 66,775 (the walker's whole `out`); a lone
+  `flip: func(point) -> point` 104,711 / 35,734. Byte-identical before and after: the old
+  greeter (P1, component), host-boundary, page-hits, macros, text, `examples/wit` shapes, app and
+  counter, the Java counter.
+- Trap, measured: an export of a command component calling `Integer/parseInt` traps under
+  `wasmtime --invoke` (no top level ran) while the same program's `run` answers; `wit/export`
+  takes no `:reactor` yet (`.todo/m85`).
 - WIT paths resolve against the naming file (`ClojureFiles`); the entry file's directive keeps
   the path as written, so the CL inliner, resolving against the entry's directory, reads the
   same file; a dependency jar's namespace names `<jar>!/<entry>` (`WitFiles.read`).
@@ -1582,6 +1600,8 @@ Clojure cannot name a CL function and a directive must be a top-level form. User
   `eachLanguageSeesItsOwnSpellingOfOneInterface`,
   `aPreview1ModuleRefusesARichMemberOnlyWhereTheProgramCallsIt`), `WitNamingHookTest`,
   `ClojureHostBoundaryTest`, `WitImportInlinerTest.aNamesTableBindsOnPreview1TheMembersTheProgramNames`;
+  `ClojureWitBoundaryTest.aWorldIsImplementedAsAComponent` (every compound kind, the error arm,
+  the greeter example invoked),
   `ExamplesE2eTest` over `examples/clojure/host-boundary/`, `examples/clojure/greeter/`,
   `examples/wit/keyvalue/page-hits.clj` (a record answer, an error arm).
 

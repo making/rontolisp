@@ -140,6 +140,9 @@ class ClojureHostBoundaryTest {
 				world greeter {
 				  export greet: func(name: string) -> string;
 				  export short: func(name: string) -> bool;
+				  export spread: func(p: point) -> result<list<point>, string>;
+
+				  record point { x: s32, y: s32 }
 				}
 				""";
 		ClojureBoundary.WitWorld described = ClojureHostBoundary.INSTANCE.exportWorld(file(wit), "greeter.wit",
@@ -147,6 +150,17 @@ class ClojureHostBoundaryTest {
 		assertThat(described.name()).isEqualTo("greeter");
 		assertThat(Objects.requireNonNull(described.exports().get(1).result()).rep())
 			.isEqualTo(ClojureBoundary.Rep.BOOLEAN);
+		// a compound type arrives whole, as an import's does
+		ClojureBoundary.Function spread = described.exports().get(2);
+		assertThat(spread.params()
+			.get(0)
+			.type()
+			.parts()
+			.stream()
+			.map(part -> part.label() + ":" + type(part.type()).rep())).containsExactly("x:INT", "y:INT");
+		ClojureBoundary.Type result = type(spread.result());
+		assertThat(result.rep() + " " + type(result.element()).rep() + " " + type(result.error()).rep())
+			.isEqualTo("RESULT LIST STRING");
 		assertThatThrownBy(
 				() -> ClojureHostBoundary.INSTANCE.exportWorld(file(wit), "greeter.wit", "greeter.wit", "other"))
 			.isInstanceOf(LispReadException.class)

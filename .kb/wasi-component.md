@@ -208,7 +208,9 @@ transpiles but cannot run it, via **TWO DISTINCT upstream gaps -- do not collaps
 EXPORT-LIFT, jco assumes callback-style async and misreads the flat result; (b) IMPORT-SIDE,
 jco references `FutureReadableEnd`/`FutureEnd`/`FutureWritableEnd` and defines none, so any
 `future<T>`-typed WASI import dies with `ReferenceError`. (b) fires FIRST, through
-`wasi:cli/stdout.write-via-stream`, for anything that prints.
+`wasi:cli/stdout.write-via-stream`, for anything that prints. jco 1.42.0 (2026-11-26): (a) no
+longer reproduces -- a flat async export of a Lisp `--component` and of a Java `--component
+--no-wasi` component answers under node; (b) not re-measured.
 
 Preview 1 / `--no-wasi` ignore `:async`; `--no-gc --component` rejects it
 (`NoGcWasmCompiler.validateComponentExport`). Pinned by `componentAsyncExport*` +

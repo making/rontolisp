@@ -1,8 +1,10 @@
 package am.ik.rontolisp.compiler;
 
+import java.util.ArrayList;
 import java.util.List;
 
 import am.ik.wit.WitItem;
+import am.ik.wit.WitResolver;
 import am.ik.wit.WitType;
 
 import org.jspecify.annotations.Nullable;
@@ -275,6 +277,160 @@ public final class WitTypeMapper {
 			case WitItem.TypeAlias alias -> rep(alias.target());
 			default -> throw new IllegalArgumentException("Not a WIT type definition: " + definition);
 		};
+	}
+
+	/**
+	 * The whole shape of a WIT type use: aliases followed (across interfaces), a named
+	 * type classified by its definition, every nested type described in the scope THAT
+	 * type is written in -- what a front end converts its own values by, an import
+	 * member's ({@link WitImportDirective#describe}) and an export's
+	 * ({@link WitExportDirective#describe}) alike. A nested type naming no definition, or
+	 * a definition containing itself, is {@link Rep#UNSUPPORTED}: an import's member is
+	 * the front end's to refuse where a program calls it, an export's is refused first.
+	 * @param type the type use
+	 * @param resolver the resolver over the document
+	 * @param scope the scope the type is written in
+	 * @return the shape
+	 */
+	public static Shape shape(WitType type, WitResolver resolver, WitItem.InterfaceDef scope) {
+		return shapeOf(type, resolver, scope, new ArrayList<>());
+	}
+
+	// The whole shape, every nested type described in the scope THAT type is written in
+	// (an option's element, a result's arms, a list's element, a record's fields, a
+	// variant's payloads, a tuple's elements). `path` holds the definitions being
+	// described.
+	private static Shape shapeOf(WitType type, WitResolver resolver, WitItem.InterfaceDef iface, List<WitItem> path) {
+		Scoped scoped = followAliases(type, resolver, iface);
+		WitType t = scoped.type();
+		WitItem.InterfaceDef in = scoped.iface();
+		String wit = am.ik.wit.WitPrinter.type(type);
+		switch (t) {
+			case WitType.Named named -> {
+				WitResolver.Owned owned = resolver.resolveOwned(in, named.name());
+				if (owned == null || path.stream().anyMatch(seen -> seen == owned.item())) {
+					return new Shape(Rep.UNSUPPORTED, null, wit);
+				}
+				path.add(owned.item());
+				try {
+					List<Part> parts = new ArrayList<>();
+					switch (owned.item()) {
+						case WitItem.RecordDef record -> {
+							for (WitItem.Field field : record.fields()) {
+								parts.add(new Part(field.name(), shapeOf(field.type(), resolver, owned.owner(), path)));
+							}
+						}
+						case WitItem.VariantDef variant -> {
+							for (WitItem.Case c : variant.cases()) {
+								parts.add(new Part(c.name(), c.payload() == null ? null
+										: shapeOf(c.payload(), resolver, owned.owner(), path)));
+							}
+						}
+						case WitItem.EnumDef enumDef -> {
+							for (WitItem.Case c : enumDef.cases()) {
+								parts.add(new Part(c.name(), null));
+							}
+						}
+						case WitItem.FlagsDef flags -> {
+							for (WitItem.Case c : flags.cases()) {
+								parts.add(new Part(c.name(), null));
+							}
+						}
+						default -> {
+							// a resource: an opaque handle
+						}
+					}
+					return new Shape(repOfDefinition(owned.item()), null, wit, null, List.copyOf(parts),
+							definedName(owned.item()), false);
+				}
+				finally {
+					path.removeLast();
+				}
+			}
+			case WitType.BorrowOf borrow -> {
+				return new Shape(Rep.HANDLE, null, wit, null, List.of(), resourceName(borrow.resource(), resolver, in),
+						true);
+			}
+			case WitType.OwnOf own -> {
+				return new Shape(Rep.HANDLE, null, wit, null, List.of(), resourceName(own.resource(), resolver, in),
+						false);
+			}
+			case WitType.OptionOf option -> {
+				return new Shape(Rep.NIL_OR_VALUE, shapeOf(option.element(), resolver, in, path), wit);
+			}
+			case WitType.ResultOf result -> {
+				return new Shape(Rep.RESULT, result.ok() == null ? null : shapeOf(result.ok(), resolver, in, path), wit,
+						result.err() == null ? null : shapeOf(result.err(), resolver, in, path), List.of());
+			}
+			case WitType.ListOf list -> {
+				// a list of bytes is a byte string whatever alias names its element, as
+				// the canonical ABI lifts it (WasmComponentImportCompiler's isU8)
+				if (followAliases(list.element(), resolver, in).type() instanceof WitType.Prim prim
+						&& "u8".equals(prim.name())) {
+					return new Shape(Rep.BYTE_STRING, null, wit);
+				}
+				return new Shape(Rep.LIST, shapeOf(list.element(), resolver, in, path), wit);
+			}
+			case WitType.TupleOf tuple -> {
+				List<Part> parts = new ArrayList<>();
+				for (WitType element : tuple.elements()) {
+					parts.add(new Part(Integer.toString(parts.size()), shapeOf(element, resolver, in, path)));
+				}
+				return new Shape(Rep.TUPLE_LIST, null, wit, null, List.copyOf(parts));
+			}
+			case WitType.StreamOf stream -> {
+				return new Shape(Rep.STREAM_HANDLE,
+						stream.element() == null ? null : shapeOf(stream.element(), resolver, in, path), wit);
+			}
+			case WitType.FutureOf future -> {
+				return new Shape(Rep.FUTURE_HANDLE,
+						future.element() == null ? null : shapeOf(future.element(), resolver, in, path), wit);
+			}
+			default -> {
+				return new Shape(rep(t), null, wit, null, List.of(),
+						t instanceof WitType.Prim prim ? prim.name() : null, false);
+			}
+		}
+	}
+
+	// The name a type definition introduces: what a front end naming its types after the
+	// WIT's finds its own by.
+	private static @Nullable String definedName(WitItem item) {
+		return switch (item) {
+			case WitItem.RecordDef def -> def.name();
+			case WitItem.VariantDef def -> def.name();
+			case WitItem.EnumDef def -> def.name();
+			case WitItem.FlagsDef def -> def.name();
+			case WitItem.ResourceDef def -> def.name();
+			default -> null;
+		};
+	}
+
+	// The resource an own<R> or a borrow<R> names, aliases followed (R may be one).
+	private static String resourceName(String name, WitResolver resolver, WitItem.InterfaceDef in) {
+		Scoped scoped = followAliases(new WitType.Named(name), resolver, in);
+		if (scoped.type() instanceof WitType.Named named) {
+			WitResolver.Owned owned = resolver.resolveOwned(scoped.iface(), named.name());
+			if (owned != null && owned.item() instanceof WitItem.ResourceDef resource) {
+				return resource.name();
+			}
+		}
+		return name;
+	}
+
+	// A type and the scope it is written in.
+	private record Scoped(WitItem.InterfaceDef iface, WitType type) {
+	}
+
+	// Follows a `type` alias chain (across interfaces) to the type it bottoms out at.
+	private static Scoped followAliases(WitType type, WitResolver resolver, WitItem.InterfaceDef iface) {
+		if (type instanceof WitType.Named named) {
+			WitResolver.Owned owned = resolver.resolveOwned(iface, named.name());
+			if (owned != null && owned.item() instanceof WitItem.TypeAlias alias) {
+				return followAliases(alias.target(), resolver, owned.owner());
+			}
+		}
+		return new Scoped(iface, type);
 	}
 
 }
