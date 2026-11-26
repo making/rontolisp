@@ -82,14 +82,22 @@ there is one and over a socket elsewhere. A component is compiled with this driv
   host could not open is `08001` with the host's words.
 - **`SpinPostgresDataSource`**: a `javax.sql.DataSource` with the bean properties `url`,
   `user`, `password` and `sslRootCert`. It keeps no connection: the host keeps the pool.
+- **A fetch size** (`setFetchSize(n)`, `n > 0`, on a statement whose result sets move
+  forward only): the rows are read through the host's `query-async`, at most `n` a read, as
+  the host reads them from the server, so the program holds one piece of a result; without
+  one a result is handed over whole (`query`). A statement the server refuses while its
+  rows are read throws where they run out, and a result set closed early, or cut by
+  `setMaxRows`, leaves the rest to the host. Spin 4.3.0 hands a row a read over whatever
+  `n` asks, so a piece costs a round trip: the first row comes sooner, the last later
+  (`.kb/jdbc-spin-postgres.md` has the numbers).
 
 ## What the interface does not carry
 
 Each is refused where it is asked for (`SQLFeatureNotSupportedException`, `0A000`) rather
 than ignored.
 
-- **A `timestamptz` column**: the host fails the whole query, and the refusal names the
-  type. Cast it in the statement: `ts AT TIME ZONE 'UTC'` reads as a `timestamp` whose
+- **A `timestamptz` column**: the host fails the whole query (read in pieces, the end of
+  its rows), and the refusal names the type. Cast it in the statement: `ts AT TIME ZONE 'UTC'` reads as a `timestamp` whose
   fields are UTC's, `ts::text` as a text that `getTimestamp` and
   `getObject(i, OffsetDateTime.class)` read as the instant.
 - **A value the host cannot convert**: a numeric `NaN`, an infinite date or timestamp (the
@@ -105,8 +113,6 @@ than ignored.
 - **An array the host has no case for** (`bool[]`, `float8[]`, ...) is refused by
   `getArray` (`::text[]` in the statement reads its elements' texts), and an array of more
   than one dimension fails the query.
-- **A result read in pieces**: the host hands a result over whole (its streaming call,
-  `query-async`, is an `async func`, which `@WitImport` does not carry yet).
 - `Statement.cancel()`, a statement of several commands (the server refuses the second),
   `CallableStatement`, COPY, LISTEN / NOTIFY, large objects, `SQLXML`, updatable result
   sets, `getMoreResults` past the one result, `PreparedStatement.getMetaData()` of a

@@ -133,6 +133,17 @@ host that has never heard of the program. The output is identical all three ways
   `--no-wasi` module even where every function bound crosses the flat set, so its
   import names and values are a component's whichever functions the program calls
   (the Java front end's bindings ask for it there). Ignored on the other backends.
+- `:blocking` — `t` binds every `async func` as a function that waits for the
+  call to return and answers its value, as a `func` is bound, instead of a
+  future: a component lowers it synchronously, a Preview 1 module imports it
+  without `:async t`, and the interpreter and the JVM call the provider
+  directly. The Java front end's bindings ask for it.
+- `:aliases` — `(("name" "type") ...)`: type aliases the directive adds to the
+  interface, each as if the WIT declared `type name = type;` there. A stream or a
+  future is read through the built-ins of an alias of its type
+  ([Streams and futures](#streams-and-futures)), and a WIT as its host publishes
+  it writes `stream<row>` where it is used; an alias of the directive's names it
+  without editing that file.
 
 ## What gets bound
 
@@ -336,10 +347,49 @@ neither direction). Anything unsupported is a compile error naming the WIT file 
 | `variant` | a keyword, or `(keyword . payload)` | no | yes |
 | `flags` | a list of keywords | no | no |
 | `resource`, `borrow<R>`, `own<R>` | an opaque integer handle | `:int` | yes |
-| `stream`, `future` | — | no | no |
+| `stream<T>`, `future<T>` | an opaque integer handle, read through an alias's built-ins | no | yes |
 
-`stream` and `future` have no rontolisp value on any backend (they need
-language-level async), so they are rejected everywhere.
+A `stream` or a `future` needs the component model's async canonical ABI, so it
+crosses `--component` alone; the other backends refuse it.
+
+## Streams and futures
+
+A `type` alias of a stream or a future type — the WIT's own, or one
+[`:aliases`](#arguments) adds — binds the canonical built-ins of that type,
+named after the alias, when the program names them:
+
+| Built-in | Call | Answers |
+| --- | --- | --- |
+| `<alias>-read` of a `stream<u8>` | `(body-read h)` | an `(unsigned-byte 8)` vector of what the writer sent, `nil` at the end |
+| `<alias>-read` of a stream of resource handles | `(accepted-read h)` | one handle, `nil` at the end |
+| `<alias>-read` of a stream of any other type | `(rows-read h 100)` | a list of at most that many values, each as a function's result is lifted; `nil` at the end |
+| `<alias>-read` of a `future<T>` | `(done-read h)` | the value; a `future<result<...>>` the `(:ok . V)` / `(:error . E)` envelope; `nil` when the writer went without writing |
+| `<alias>-drop-readable` | `(rows-drop-readable h)` | `nil`; the readable end goes back to the host |
+| `<alias>-cancel-read` (a stream's) | `(body-cancel-read h)` | withdraws a read still in flight |
+
+A read of a stream of values waits where it is until the writer has sent one or
+has gone, in a served component too, and everything the host lowered for it is
+popped once the values are lifted: what a reader keeps in linear memory is one
+read's values, whatever the stream holds. Such a stream is read-only for the
+guest (no `-new` or `-write` binds). A stream that ended is answered `nil` again
+without asking the host.
+
+```console
+;;; spin:postgres's query-async answers the columns, a stream<row> and a
+;;; future<result<_, error>> that ends it. Its WIT is Spin's, unedited.
+(rontolisp:wit-import "postgres.wit" :interface "spin:postgres/postgres@4.2.0" :package pg
+                      :blocking t
+                      :aliases (("rows" "stream<row>") ("done" "future<result<_, error>>")))
+
+(destructuring-bind (columns rows done)
+    (pg:connection-query-async conn "select id, title from note" nil)
+  (loop for chunk = (pg:rows-read rows 100)
+        while chunk
+        do (dolist (row chunk) (print row)))
+  (pg:done-read done)                      ; (:ok) or (:error . error)
+  (pg:rows-drop-readable rows)
+  (pg:done-drop-readable done))
+```
 
 ### Rich values as arguments
 

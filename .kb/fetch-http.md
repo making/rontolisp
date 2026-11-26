@@ -437,8 +437,8 @@ Pinned by `httpHandlerReadsATopLevelGlobalUnderWasmtimeServe`; serve+tcp by
 
 `adapter-http-server-p1.wat` is the preview1 bridge (instantiated BEFORE the core) over the 0.3
 interfaces: `random`, time, `print` work in a handler; `environ_*` empty, `fd_read` EOF, `path_open`
-errno 76. The canonical-ABI allocator (`mem-http-client.wat`, cell `CABI_HP_CELL_ADDR` = 0x10000) is
-reset at the top of `handle` for hosts that reuse an instance (Spin exercises it).
+errno 76. The canonical-ABI allocator is `mem.wat`'s, as a non-serve component's
+(`.kb/wasi-component.md`, "Shared-memory map"): nothing is reset per request.
 
 On Preview 1 the directive is a CALL-time error stub (the clack shim's `run` carries it as dead
 code), as are `stream-read`/`stream-close`/`streamp` without a stream type; an uncaught error is a

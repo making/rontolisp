@@ -168,6 +168,14 @@ class JavaWitImportTest {
 						        catch (WitException e) {
 						            System.out.println(e.getMessage());
 						        }
+						        // an async func is a call that waits: a socket bound, never listening
+						        Sockets.TcpSocket caller = types.tcpSocketCreate(Sockets.IpAddressFamily.IPV4);
+						        try {
+						            caller.connect(socket.getLocalAddress());
+						        }
+						        catch (WitException e) {
+						            System.out.println(e.getMessage());
+						        }
 						    }
 						}
 						""");
@@ -175,6 +183,7 @@ class JavaWitImportTest {
 				IPV4 Octets[a=127, b=0, c=0, d=1] true
 				-56 7 true
 				tcp-socket-bind of wasi:sockets/types@0.3.0 answered its error arm: InvalidState[]
+				tcp-socket-connect of wasi:sockets/types@0.3.0 answered its error arm: ConnectionRefused[]
 				""");
 		write("http.wit", HTTP_WIT);
 		write("Http.java", HTTP);
@@ -209,6 +218,174 @@ class JavaWitImportTest {
 				outgoing-request-set-method of wasi:http/types@0.2.0 answered its error arm
 				""");
 	}
+
+	/**
+	 * What a host answers in pieces: an {@code async func} is a method that waits for its
+	 * answer, a {@code stream<T>} of values a {@code WitStream<T>} read so many at a
+	 * time, a {@code future<result<_, E>>} a {@code WitFuture<Void>} whose error arm
+	 * {@code get()} throws. Under a JDK, on the interpreter and on the JVM the program's
+	 * provider answers them; on a component the directive blocks on the async func and
+	 * reads the stream and the future through aliases it adds to the WIT. The host
+	 * answers no stream a program hands it, and a stream or a future the subset has no
+	 * reader for is refused at the method.
+	 */
+	@Test
+	void aStreamAndAFutureTheHostAnswersAreReadInPieces() throws Exception {
+		write("rows.wit", ROWS_WIT);
+		write("Rows.java", ROWS);
+		write("MemoryRows.java",
+				"""
+						import java.util.List;
+
+						import am.ik.rontolisp.wit.WitException;
+						import am.ik.rontolisp.wit.WitFuture;
+						import am.ik.rontolisp.wit.WitStream;
+
+						public class MemoryRows implements Rows {
+
+						    public Rows.Query query(String sql) {
+						        if (sql.isEmpty()) {
+						            throw new WitException("query of test:rows/rows answered its error arm",
+						                    new Rows.Error.Refused("no statement"));
+						        }
+						        List<List<String>> rows = List.of(List.of("1", "one"), List.of("2", "two"), List.of("3", "three"));
+						        WitFuture<Void> done = sql.equals("broken") ? WitFuture.failed(new WitException(
+						                "the rows of test:rows/rows answered its error arm", new Rows.Error.Refused("at row 4")))
+						                : WitFuture.of(null);
+						        return new Rows.Query(List.of(new Rows.Column("id", 4), new Rows.Column("name", 16)),
+						                WitStream.of(rows.iterator()), done);
+						    }
+
+						    public long total() {
+						        return 3L;
+						    }
+						}
+						""");
+		write("META-INF/services/Rows", "MemoryRows\n");
+		Path main = write("RowsMain.java", """
+				import java.util.List;
+				import java.util.ServiceLoader;
+
+				import am.ik.rontolisp.wit.WitException;
+
+				public class RowsMain {
+
+				    public static void main(String[] args) {
+				        Rows host = ServiceLoader.load(Rows.class).findFirst().orElseThrow();
+				        System.out.println(host.total());
+				        for (String sql : List.of("select", "broken", "")) {
+				            try {
+				                Rows.Query query = host.query(sql);
+				                System.out.println(query.columns());
+				                for (List<List<String>> chunk = query.rows().read(2); !chunk.isEmpty();
+				                        chunk = query.rows().read(2)) {
+				                    System.out.println(chunk);
+				                }
+				                query.done().get();
+				                System.out.println("done");
+				            }
+				            catch (WitException e) {
+				                System.out.println(e.getMessage() + " " + e.error());
+				            }
+				        }
+				    }
+				}
+				""");
+		String expected = """
+				3
+				[Column[name=id, width=4], Column[name=name, width=16]]
+				[[1, one], [2, two]]
+				[[3, three]]
+				done
+				[Column[name=id, width=4], Column[name=name, width=16]]
+				[[1, one], [2, two]]
+				[[3, three]]
+				the rows of test:rows/rows answered its error arm Refused[value=at row 4]
+				query of test:rows/rows answered its error arm Refused[value=no statement]
+				""";
+		assertThat(jdk(main)).isEqualTo(expected);
+		assertThat(HostBoundaryRuns.cli("--java-source-path", API, main.toString())).isEqualTo(expected);
+		assertThat(HostBoundaryRuns.jvm(main, Files.createDirectories(this.dir.resolve("classes")), "RowsMain",
+				"--java-source-path", API))
+			.isEqualTo(expected);
+		// a component: the directive blocks on the async funcs and adds an alias for
+		// each type it reads, naming its built-ins in the table
+		assertThat(read(main, true).get(0)).isEqualTo("(RONTOLISP:WIT-IMPORT \"rows.wit\" :INTERFACE "
+				+ "\"test:rows/rows@0.1.0\" :NAMES ((\"query\" \"Rows$Wit.query\") (\"total\" \"Rows$Wit.total\") "
+				+ "(\"java-stream-0-read\" \"Rows$Wit.java-stream-0-read\") (\"java-future-1-read\" "
+				+ "\"Rows$Wit.java-future-1-read\") (\"java-future-1-drop-readable\" "
+				+ "\"Rows$Wit.java-future-1-drop-readable\")) :OCTETS T :BLOCKING T :ALIASES ((\"java-stream-0\" "
+				+ "\"stream<list<string>>\") (\"java-future-1\" \"future<result<_, error>>\")))");
+		HostBoundaryRuns.cli("--java-source-path", API, main.toString(), "-o", this.dir.resolve("rows.wasm").toString(),
+				"--component");
+		write("refused/rows.wit", ROWS_WIT);
+		Path refused = write("refused/Main.java", """
+				public class Main {
+
+				    public static void main(String[] args) {
+				        System.out.println(Rows.class);
+				    }
+				}
+				""");
+		write("refused/Rows.java", ROWS.replace("long total();", "void feed(WitStream<List<String>> rows);"));
+		assertThatThrownBy(() -> read(refused, false)).hasMessageContaining(
+				"feed (feed of test:rows/rows@0.1.0, rows.wit:13): its parameter rows carries stream<list<string>>, "
+						+ "which the Java subset carries only where the host answers one");
+		write("refused/Rows.java", ROWS.replace("long total();", "WitFuture<Boolean> ready();"));
+		assertThatThrownBy(() -> read(refused, false)).hasMessageContaining(
+				"ready (ready of test:rows/rows@0.1.0, rows.wit:14): its result is future<bool>, a future of a type one "
+						+ "of whose values the boundary cannot tell from a future its writer dropped");
+	}
+
+	/** An interface answering rows in pieces, and two members a program cannot have. */
+	private static final String ROWS_WIT = """
+			package test:rows@0.1.0;
+
+			interface rows {
+			  variant error {
+			    refused(string)
+			  }
+
+			  record column {
+			    name: string,
+			    width: u32
+			  }
+
+			  feed: func(rows: stream<list<string>>);
+			  ready: func() -> future<bool>;
+			  query: async func(sql: string) -> result<tuple<list<column>, stream<list<string>>, future<result<_, error>>>, error>;
+			  total: async func() -> u64;
+			}
+			""";
+
+	/** The {@code @WitImport} interface of {@link #ROWS_WIT}. */
+	private static final String ROWS = """
+			import java.util.List;
+
+			import am.ik.rontolisp.wit.WitFuture;
+			import am.ik.rontolisp.wit.WitImport;
+			import am.ik.rontolisp.wit.WitStream;
+
+			@WitImport(value = "test:rows/rows", wit = "rows.wit")
+			public interface Rows {
+
+			    Query query(String sql);
+
+			    long total();
+
+			    record Query(List<Column> columns, WitStream<List<String>> rows, WitFuture<Void> done) {
+			    }
+
+			    record Column(String name, int width) {
+			    }
+
+			    sealed interface Error {
+
+			        record Refused(String value) implements Error {
+			        }
+			    }
+			}
+			""";
 
 	/**
 	 * A core module's host is the provider too: the interface's functions are the
@@ -747,6 +924,7 @@ class JavaWitImportTest {
 			    set-hop-limit: func(value: u8) -> result<_, error-code>;
 			    get-receive-buffer-size: func() -> result<u64, error-code>;
 			    set-receive-buffer-size: func(value: u64) -> result<_, error-code>;
+			    connect: async func(remote-address: ip-socket-address) -> result<_, error-code>;
 			  }
 			}
 			""";
@@ -771,6 +949,7 @@ class JavaWitImportTest {
 			        void setHopLimit(byte value);
 			        long getReceiveBufferSize();
 			        void setReceiveBufferSize(long value);
+			        void connect(IpSocketAddress remoteAddress);
 			    }
 
 			    enum IpAddressFamily {

@@ -6830,19 +6830,27 @@ class WasmLispCompilerIntegrationTest {
 		// wasmtime answers both. The counter is seeded through the host's own CLI
 		// (-S keyvalue-in-memory-data), so the reply proves the handler READ the host's
 		// store across the canonical ABI and wrote back a value it read again -- which no
-		// process-local hash table could fake.
+		// process-local hash table could fake. /big reads back 1.5 MB, which the host
+		// lowers through cabi_realloc: more than an allocator of a window of its own in
+		// the
+		// first megabyte of linear memory holds.
 		java.nio.file.Path dir = java.nio.file.Files.createTempDirectory("wit-serve");
 		java.nio.file.Files.writeString(dir.resolve("kv.wit"), WASI_KEYVALUE_WIT);
 		byte[] component = compileServeComponent("""
 				(rontolisp:wit-import "kv.wit" :interface "wasi:keyvalue/store@0.2.0-draft" :package kv)
 				(defun handle (env)
 				  (let* ((page (getf env :path-info))
-				         (bucket (kv:open ""))
-				         (seen (kv:bucket-get bucket page)))
-				    (kv:bucket-set bucket page
-				                   (princ-to-string (+ 1 (if seen (parse-integer seen) 0))))
-				    (list 200 nil
-				          (list page " " (kv:bucket-get bucket page)))))
+				         (bucket (kv:open "")))
+				    (if (string= page "/big")
+				        (progn
+				          (kv:bucket-set bucket page (make-string 1500000 :initial-element #\\x))
+				          (list 200 nil
+				                (list page " " (princ-to-string (length (kv:bucket-get bucket page))))))
+				        (let ((seen (kv:bucket-get bucket page)))
+				          (kv:bucket-set bucket page
+				                         (princ-to-string (+ 1 (if seen (parse-integer seen) 0))))
+				          (list 200 nil
+				                (list page " " (kv:bucket-get bucket page)))))))
 				(rontolisp:http-handler 'handle)
 				""", dir.toString());
 		wasmtime.copyFileToContainer(Transferable.of(component), path("serve-kv.wasm"));
@@ -6854,9 +6862,101 @@ class WasmLispCompilerIntegrationTest {
 					+ " cat " + path("serve-kv.log") + " 1>&2; exit 1; };"
 					+ awaitServePort("port", path("serve-kv.log"))
 					+ " for i in $(seq 1 60); do out=$(curl -s http://127.0.0.1:$port/hits) && [ -n \"$out\" ]"
-					+ " && { echo \"$out\"; exit 0; }; sleep 0.25; done; cat " + path("serve-kv.log") + "; exit 1");
+					+ " && { echo \"$out\"; curl -s http://127.0.0.1:$port/big; echo; exit 0; }; sleep 0.25; done;"
+					+ " cat " + path("serve-kv.log") + "; exit 1");
 		assertThat(result.getExitCode()).as("wasmtime serve keyvalue round trip; log: %s", result.getStderr()).isZero();
-		assertThat(result.getStdout().trim()).isEqualTo("/hits 42");
+		assertThat(result.getStdout().trim()).isEqualTo("/hits 42\n/big 1500000");
+	}
+
+	// What a directory listing of wasi:filesystem@0.3.0 reaches, as the host defines it.
+	private static final String WASI_FILESYSTEM_LISTING_WIT = """
+			package wasi:filesystem@0.3.0;
+
+			interface types {
+			  variant descriptor-type {
+			    block-device,
+			    character-device,
+			    directory,
+			    fifo,
+			    symbolic-link,
+			    regular-file,
+			    socket,
+			    other(option<string>),
+			  }
+
+			  record directory-entry {
+			    %type: descriptor-type,
+			    name: string,
+			  }
+
+			  variant error-code {
+			    access, already, bad-descriptor, busy, deadlock, quota, exist, file-too-large,
+			    illegal-byte-sequence, in-progress, interrupted, invalid, io, is-directory, loop,
+			    too-many-links, message-size, name-too-long, no-device, no-entry, no-lock,
+			    insufficient-memory, insufficient-space, not-directory, not-empty, not-recoverable,
+			    unsupported, no-tty, no-such-device, overflow, not-permitted, pipe, read-only,
+			    invalid-seek, text-file-busy, cross-device, other(option<string>),
+			  }
+
+			  resource descriptor {
+			    read-directory: func() -> tuple<stream<directory-entry>, future<result<_, error-code>>>;
+			    get-type: async func() -> result<descriptor-type, error-code>;
+			  }
+			}
+
+			interface preopens {
+			  use types.{descriptor};
+
+			  get-directories: func() -> list<tuple<descriptor, string>>;
+			}
+			""";
+
+	@Test
+	void httpHandlerReadsADirectoryAsAStreamOfValuesUnderWasmtimeServe() throws Exception {
+		// The host's stream of records and the future that ends it, in the WASI 0.3 shape
+		// (read-directory), read through aliases the directive adds to a WIT as the host
+		// publishes it, two entries a read at most (wasmtime 51 hands the entries over
+		// together, so a read answers two); an async func (get-type) the directive
+		// blocks on answers its value as a call does.
+		java.nio.file.Path dir = java.nio.file.Files.createTempDirectory("wit-serve-fs");
+		java.nio.file.Files.writeString(dir.resolve("fs.wit"), WASI_FILESYSTEM_LISTING_WIT);
+		java.nio.file.Path listed = java.nio.file.Files.createDirectories(dir.resolve("listed"));
+		for (String name : List.of("a.txt", "b.txt", "c.txt")) {
+			java.nio.file.Files.writeString(listed.resolve(name), name);
+		}
+		byte[] component = compileServeComponent("""
+				(rontolisp:wit-import "fs.wit" :interface "wasi:filesystem/types@0.3.0" :package fs :blocking t
+				                      :aliases (("entries" "stream<directory-entry>")
+				                                ("listed" "future<result<_, error-code>>")))
+				(rontolisp:wit-import "fs.wit" :interface "wasi:filesystem/preopens@0.3.0" :package pre)
+				(defun handle (env)
+				  (let* ((dir (first (first (pre:get-directories))))
+				         (listing (fs:descriptor-read-directory dir))
+				         (names nil)
+				         (most 0))
+				    (loop for chunk = (fs:entries-read (first listing) 2)
+				          while chunk
+				          do (setq most (max most (length chunk)))
+				             (dolist (entry chunk) (push (getf entry :name) names)))
+				    (let ((done (fs:listed-read (second listing))))
+				      (fs:entries-drop-readable (first listing))
+				      (fs:listed-drop-readable (second listing))
+				      (list 200 nil
+				            (list (prin1-to-string (fs:descriptor-get-type dir)) " "
+				                  (format nil "~{~a~^,~}" (sort names #'string<)) " "
+				                  (princ-to-string most) " " (prin1-to-string done))))))
+				(rontolisp:http-handler 'handle)
+				""", dir.toString());
+		wasmtime.copyFileToContainer(Transferable.of(component), path("serve-fs.wasm"));
+		ExecResult result = wasmtime.execInContainer("bash", "-c", "wasmtime serve -S cli=y --dir " + listed
+				+ "::/listed --addr 127.0.0.1:0 " + path("serve-fs.wasm") + " >" + path("serve-fs.log")
+				+ " 2>&1 & pid=$!; trap 'kill $pid 2>/dev/null' EXIT;"
+				+ " sleep 0.3; kill -0 $pid 2>/dev/null || { echo 'wasmtime serve exited immediately; log:' 1>&2;"
+				+ " cat " + path("serve-fs.log") + " 1>&2; exit 1; };" + awaitServePort("port", path("serve-fs.log"))
+				+ " for i in $(seq 1 60); do out=$(curl -sf http://127.0.0.1:$port/) && [ -n \"$out\" ]"
+				+ " && { echo \"$out\"; exit 0; }; sleep 0.25; done; cat " + path("serve-fs.log") + " 1>&2; exit 1");
+		assertThat(result.getExitCode()).as("wasmtime serve directory listing; log: %s", result.getStderr()).isZero();
+		assertThat(result.getStdout().trim()).isEqualTo(":DIRECTORY a.txt,b.txt,c.txt 2 (:OK)");
 	}
 
 	@Test

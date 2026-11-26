@@ -13,8 +13,8 @@
 # instance/type indices and per-function canonical options) and re-run the tests. Appending
 # an interface LAST in uni.wit keeps existing indices stable.
 #
-# mem-http-client.wasm (the 16-page memory module) is still regenerated here: the serve
-# variants reuse it. Both rontolisp:fetch AND rontolisp:http-handler are Lisp libraries now
+# A served component takes mem.wasm too, raised to the sixteen pages its preview1 bridge
+# imports (WasmComponentBuilder.memModuleFor). Both rontolisp:fetch AND rontolisp:http-handler are Lisp libraries now
 # (fetch.lisp / serve.lisp) over wit-imported wasi:http (eval/FetchLibrary, eval/ServeLibrary);
 # the standalone http-client adapter, the serve adapter and the extended serve+fetch bridge
 # are all gone. Every dep under deps/ is WASI 0.3 (the 0.2-era version-suffixed directories
@@ -60,14 +60,12 @@ wasm-tools validate "$OUT/shim-nogc-print.wasm"
 wasm-tools validate "$OUT/bridge-nogc-print.wasm"
 wasm-tools validate "$OUT/fixup-nogc-print.wasm"
 wasm-tools parse adapter.wat      -o "$OUT/adapter.wasm"
-wasm-tools parse mem-http-client.wat     -o "$OUT/mem-http-client.wasm"
 # The preview1 bridge is shared by plain serve AND serve+fetch: fetch is the fetch.lisp
 # library over wit-imported wasi:http/outgoing-handler now, so the core imports no `http`
 # function and needs no extended bridge or serve adapter.
 wasm-tools parse adapter-http-server-p1.wat -o "$OUT/adapter-http-server-p1.wasm"
 wasm-tools validate "$OUT/mem.wasm"
 wasm-tools validate "$OUT/adapter.wasm"
-wasm-tools validate "$OUT/mem-http-client.wasm"
 wasm-tools validate "$OUT/adapter-http-server-p1.wasm"
 
 echo "== unified import block (base) =="

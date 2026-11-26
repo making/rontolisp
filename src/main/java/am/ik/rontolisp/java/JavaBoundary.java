@@ -146,8 +146,8 @@ public interface JavaBoundary {
 	 * A WIT type use, with every type nested in it.
 	 *
 	 * @param rep its house representation
-	 * @param element an option's element, a result's ok arm or a list's element, else
-	 * {@code null}
+	 * @param element an option's element, a result's ok arm, a list's or a stream's
+	 * element or a future's payload, else {@code null}
 	 * @param wit the type as the WIT spells it where it is used
 	 * @param error a result's error arm, else {@code null}
 	 * @param parts a record's fields, a variant's cases, an enum's or a flags' labels, a

@@ -167,6 +167,9 @@ PostgreSQL への接続を開き、プールし、`sslmode=require` なら TLS �
 | `flags` | メンバーの enum の `Set` |
 | リソース、`own<R>`、`borrow<R>` | メンバーインタフェース |
 | `result<T, E>` | メソッドの戻り値。エラーの場合は `WitException` |
+| `async func` | ホストの応答を待つメソッド（ほかの呼び出しと同じ） |
+| ホストが返す `stream<T>` | `am.ik.rontolisp.wit.WitStream<T>` |
+| ホストが返す `future<T>` | `am.ik.rontolisp.wit.WitFuture<T>`。`future<result<T, E>>` は `WitFuture<T>`（ok の値がなければ `Void`） |
 
 符号なし整数は同じ幅の Java の型に、そのビットのまま入ります。`u8` の 200 は `byte` の -56
 です（`Byte.toUnsignedInt` で 200 に戻ります）。
@@ -192,6 +195,34 @@ catch (WitException e) {
 リソースは `close()` で解放します。ハンドルはホストに返り、ストアはそのまま残ります。閉じた
 リソースは `IllegalStateException` を投げ、2 度目の `close()` は何もしません。関数に渡した `own`
 のハンドルは関数のものになり、オブジェクトは閉じられます。
+
+### ホストが少しずつ返すもの
+
+`async func` もほかと同じメソッドで、呼び出しはホストの応答を待ちます。ホストが返す値の
+`stream<T>` は `WitStream<T>` です。`read(max)` は、ホストが値を書くか去るまで待って、多くとも
+`max` 個の値を返し、終わりでは空のリストを返します。`future<T>` は `WitFuture<T>` で、`get()` は
+その 1 つの値を待ちます。`future<result<T, E>>` は ok の値を返し、エラーは `WitException` として
+投げます（`result` を返すメソッドと同じです）。どちらも `AutoCloseable` で、`close()` は読み取り側の
+端を返し、読まなかった分はホストが捨てます。
+
+```console
+// spin:postgres の query-async: 列、サーバーが送るままの行、その終わり
+record QueryAsync(List<Column> columns, WitStream<List<DbValue>> rows, WitFuture<Void> done) {
+}
+
+QueryAsync started = connection.queryAsync("select id, title from note", List.of());
+try (WitStream<List<DbValue>> rows = started.rows(); WitFuture<Void> done = started.done()) {
+    for (List<List<DbValue>> chunk = rows.read(50); !chunk.isEmpty(); chunk = rows.read(50)) {
+        ...
+    }
+    done.get();                                // 文が拒否されたならここで投げる
+}
+```
+
+コンポーネントでは値はホストが書き、1 回の読み取りが持つのはその読み取りの値だけです（stream
+全体がどれだけあっても）。JDK、インタプリタ、JVM ではプロバイダが自分のものを返します:
+`WitStream.of(iterator)`、`WitFuture.of(value)`、`WitFuture.failed(exception)`、または自分の
+クラスです。
 
 ## WIT world をエクスポートする
 
@@ -287,9 +318,11 @@ is s32, which is int in Java, not long
 - `Long.MAX_VALUE` を超える `u64` は、どの WASM の境界も越えません。
 - ネイティブ実行ファイル（`--native`）は Preview 1 のモジュールを動かしますが、そのランナーは
   WIT インタフェースを提供しません。そのため、WIT インタフェースを呼ぶプログラムはそこでは起動しません。
-- 宣言の位置で拒否されるもの: `stream`、`future`、`async func`。メソッドの戻り値以外の
-  `result`。`bool`、`list`、`flags`、`option` を要素とする `option`（境界がその none を
-  見分けられないため）。ほかのインタフェースのリソース。エラーの型にある tuple。
+- 宣言の位置で拒否されるもの: プログラムがホストに渡す `stream` と `future`、`stream<u8>`、
+  リソースの stream、`bool`・`list`・`flags`・`option` の `future`（その値を、書き手が捨てた
+  future と境界が見分けられないため）。メソッドの戻り値と future の値以外の `result`。
+  `bool`、`list`、`flags`、`option` を要素とする `option`（境界がその none を見分けられない
+  ため）。ほかのインタフェースのリソース。エラーの型にある tuple。
 - world のエクスポートで使える型は、`rontolisp:wit-export` で使える型です。`async func` の
   エクスポートは拒否されます。同じラベルのエクスポート 2 つ（world の関数とインタフェースの
   関数、または 2 つのインタフェースの関数）は、それぞれのクラスの 2 つのメソッドです。

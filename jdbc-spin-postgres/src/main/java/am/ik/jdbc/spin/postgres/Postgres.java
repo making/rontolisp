@@ -3,7 +3,9 @@ package am.ik.jdbc.spin.postgres;
 import java.util.List;
 import java.util.Optional;
 
+import am.ik.rontolisp.wit.WitFuture;
 import am.ik.rontolisp.wit.WitImport;
+import am.ik.rontolisp.wit.WitStream;
 
 /**
  * The WIT interface {@code spin:postgres/postgres} as the driver calls it: the host owns
@@ -15,10 +17,13 @@ import am.ik.rontolisp.wit.WitImport;
  *
  * <p>
  * What the driver calls is declared -- {@code connection.open}, the connection builder,
- * {@code query} and {@code execute} -- and the {@code async} members are left out. The
- * types those reach are declared whole, since the component model checks the types an
- * import carries against the host's: a variant is a sealed interface whose records are
- * its cases, a WIT tuple a record of the same components.
+ * {@code query}, {@code query-async} and {@code execute} -- and the other {@code async}
+ * members are left out. The types those reach are declared whole, since the component
+ * model checks the types an import carries against the host's: a variant is a sealed
+ * interface whose records are its cases, a WIT tuple a record of the same components.
+ * {@code query-async} is a call that waits for the columns; its rows are a stream the
+ * host writes as the server sends them, its end a future carrying the statement's
+ * refusal.
  */
 @WitImport(value = "spin:postgres/postgres@4.2.0", wit = "wit/postgres.wit")
 interface Postgres {
@@ -46,6 +51,9 @@ interface Postgres {
 
 		RowSet query(String statement, List<ParameterValue> params);
 
+		// the rows as the server sends them, the future their end
+		QueryAsync queryAsync(String statement, List<ParameterValue> params);
+
 		long execute(String statement, List<ParameterValue> params);
 
 		@Override
@@ -54,6 +62,11 @@ interface Postgres {
 	}
 
 	record RowSet(List<Column> columns, List<List<DbValue>> rows) {
+	}
+
+	// query-async's tuple: the columns, the rows (a row a list of values), and the end,
+	// whose error arm is the statement's refusal
+	record QueryAsync(List<Column> columns, WitStream<List<DbValue>> rows, WitFuture<Void> done) {
 	}
 
 	record Column(String name, DbDataType dataType) {
