@@ -2346,6 +2346,24 @@ class JvmLispCompilerTest {
 	}
 
 	@Test
+	void aVectorCallElementCostsItsPushAndOneStore() {
+		// (vector e...) was (make-array n) and an aset an element: a boxed index, a rank
+		// check, an _aset1 call and a pop, some 30 bytes besides the element's push, so a
+		// call of some 1,900 elements outgrew the method. It is an Object[] of the
+		// elements handed to _vectorOf: dup, the index, the push, aastore. Measured 7.02
+		// (a
+		// getstatic push, a bipush index; the count's sipush the .02).
+		assertThat(
+				(codeLengthOf(compileWithVectorCall(128), "F") - codeLengthOf(compileWithVectorCall(64), "F")) / 64.0)
+			.isLessThan(7.5);
+	}
+
+	private static byte[] compileWithVectorCall(int count) {
+		return new JvmLispCompiler("Test").compile(LispReader
+			.readAllFromString("(defvar *x* 7)\n(defun f () (vector" + " *x*".repeat(count) + "))\n(print (f))"));
+	}
+
+	@Test
 	void compileAndRunABodyPastTheOneByteLocalSlotIndex() throws Exception {
 		// A straight-line run of statements burns a local slot per temporary, so a few
 		// hundred of them walk past slot 255 -- which a one-byte load/store operand

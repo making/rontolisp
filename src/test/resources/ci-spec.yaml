@@ -9509,7 +9509,16 @@ cases:
         (print (array-rank (vector 1)))
         (print (array-dimension (make-array (list 2 3)) 1))
         (print (array-total-size (make-array (list 2 3))))
-        (print (array-total-size (vector 1 2 3))))
+        (print (array-total-size (vector 1 2 3)))
+        (let ((order nil) (x 2))
+          (print (vector (progn (push 1 order) 'a) nil "d" (+ x 1)
+                         (loop for i below 4 sum i) -9223372036854775808))
+          (print order))
+        (let ((v (vector 3 -9223372036854775808 1)))
+          (print (sort v #'<))
+          (setf (aref v 0) 'z)
+          (print v))
+        (print (vector)))
       (ci-array-intro)
     expected: |
       #(1 2 3)
@@ -9522,6 +9531,11 @@ cases:
       3
       6
       3
+      #(A NIL "d" 3 6 -9223372036854775808)
+      (1)
+      #(-9223372036854775808 1 3)
+      #(Z 1 3)
+      #()
   - name: coerce-cross-backend
     source: |
       (defun ci-coerce ()
