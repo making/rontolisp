@@ -979,8 +979,9 @@ answer, is answered `500` at the end of the call. Under `--host-timer` the host 
 the program, through JSPI: a wait for a time waits in the host's timer, and a request whose
 threads cannot go on waits in the host, which calls the program for other requests
 meanwhile -- so a request can wait for what another brings, and an exchange nothing answers
-stays open, as a JDK's. The threads take their turns while the host has a request in hand:
-one whose wait ends after the last answer goes on with the next request. What the
+stays open, as a JDK's. The threads go on after the last answer, as a JDK's do: the host
+calls the program again for what they have left, and the generated Worker hands that call
+to `ctx.waitUntil`, so it lasts as long as the platform keeps the Worker. What the
 program prints is discarded unless the build says `--host-output`, which makes it the
 Worker's log, the report of what ended the instance included. The host's `Request` tells a handler neither its peer nor its
 port, as `wasi:http`, and takes no `TRACE` request. Its `Headers` join the values of a

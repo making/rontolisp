@@ -370,7 +370,11 @@ leaves, waits for its bell or its `at`, enters again, restores the call's `conte
 `env.sleep` keeps the lock. `instantiate` is async (`_initialize` through `promising`, under the
 lock); every entry is promising. Arena: popped to where the FIRST call in hand found it --
 popping to one's own mark after an earlier-entered call returned moved the arena back up. A trap
-retires the instance (`discard`): the bells are rung and an idle call re-entering throws. Pinned
+retires the instance (`discard`): the bells are rung and an idle call re-entering throws.
+`env.wake(at)` arms one `setTimeout` for the soonest turn asked for (`Surface.turn`); the turn
+enters `__ronto_turn` through `serially` and `call` as an entry point does, and a trap in it
+discards too. The timer fires after `instantiate`'s tail set the turn's runner: a wake in
+`_initialize` is answered by a macrotask, after the microtasks that finish `instantiate`. Pinned
 by the corpus's reactor leg and
 `WasmHostGlueE2eTest.aSleepUnderHostTimerWaitsInTheHostsTimerAtTheTopLevelAndInACall`.
 

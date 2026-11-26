@@ -137,12 +137,13 @@ rontolisp app.lisp --no-wasi --host-sockets --emit-js-glue -o app.wasm
 
 ### ホストでの待機(`--host-timer`)
 
-`--host-timer` はモジュールの待機をホストに任せます。インポートは最大 3 つで、JSPI を持つホストだけが応えられます。
+`--host-timer` はモジュールの待機をホストに任せます。インポートは最大 4 つで、JSPI を持つホストだけが応えられます。
 
 - `env.sleep(ms)` — `sleep`。ホストは呼び出しを中断し(`WebAssembly.Suspending`)、タイマーが発火したら時計(`__ronto_set_time`)を進めて戻ります。その間もモジュールはこの呼び出しのものです。
 - `env.idle(token, at)` と `env.ring(token)` — Java サーバーのリクエストで、どのスレッドも進めないとき。呼び出しはホストで待機し、その間ホストは別のリクエストでモジュールを呼べます。`env.ring(token)` か、`at` が 0 でなければその時刻(Unix エポックからのナノ秒)まで待ち、それから順番を取り直します。あるリクエストが別のリクエストを待てます。時刻を待つスレッドは、待機中のリクエストを通して起こされます([Java サブセット](../java/index.md))。
+- `env.wake(at)` — 待機中のリクエストがないときに、スレッドに仕事が残っている場合。ホストは `at`(0 なら即座)にモジュールのエクスポート `__ronto_turn` を呼び、その呼び出しの中でスレッドが動きます。そのため、スレッドは最後の応答のあとも動きます。
 
-`_initialize` とすべてのエクスポートは `WebAssembly.promising` 経由で入るので、トップレベルも待てます。`--emit-js-glue` は 3 つとも実装します。`instantiate` は promise を返し、呼び出しは 1 つのキューで順番を取ります。待機に入った呼び出しは順番を次へ譲ります。
+`_initialize` とすべてのエクスポートは `WebAssembly.promising` 経由で入るので、トップレベルも待てます。`--emit-js-glue` は 4 つとも実装します。`instantiate` は promise を返し、呼び出しは 1 つのキューで順番を取ります。待機に入った呼び出しは順番を次へ譲ります。`worker()` は、待っているターンを `ctx.waitUntil` に渡します。
 
 ```bash
 rontolisp app.lisp --no-wasi --host-timer --emit-js-glue -o app.wasm
