@@ -1241,7 +1241,8 @@ public final class ComponentWriter {
 	 * @return the encoded defined value type
 	 */
 	public static byte[] definedFuture(int payloadTypeIndex) {
-		return enc(w -> w.write(0x65).write(0x01).writeUnsignedLeb128(payloadTypeIndex));
+		// a value type: an index is an s33, so one past 63 takes two bytes
+		return enc(w -> w.write(0x65).write(0x01).writeSignedLeb128(payloadTypeIndex));
 	}
 
 	/**
