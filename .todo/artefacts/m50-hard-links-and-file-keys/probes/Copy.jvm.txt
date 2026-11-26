@@ -1,0 +1,12 @@
+copy locked locked: java.nio.file.AccessDeniedException: locked.txt
+copy locked lk: java.nio.file.AccessDeniedException: locked.txt
+copy locked lk replace: java.nio.file.AccessDeniedException: locked.txt
+copy slk locked: java.nio.file.AccessDeniedException: slk
+copy locked slk: java.nio.file.AccessDeniedException: locked.txt
+copy slk locked nofollow: java.nio.file.FileAlreadyExistsException: locked.txt
+copy a b attrs: b.txt
+copy d d/.: d/.
+copy a missing-dir: java.nio.file.NoSuchFileException: nodir/b
+move locked lk: lk.txt
+move a b in ro: b.txt
+exists: true true true true

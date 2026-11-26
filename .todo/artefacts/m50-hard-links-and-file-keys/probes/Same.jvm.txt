@@ -1,0 +1,14 @@
+mismatch: -1
+copy: b.txt
+after copy: a=true b=true nlink=2
+copy replace: b.txt
+after copy replace: a=true b=true nlink=2
+read b: hello
+move: b.txt
+after move: a=true b=true nlink=2
+move replace: b.txt
+after move replace: a=true b=true nlink=2
+move atomic: b.txt
+after move atomic: a=true b=true nlink=2
+Exception in thread "main" java.nio.file.FileAlreadyExistsException: b.txt
+  at Same.java:39 in Same.main(String[])

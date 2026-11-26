@@ -2130,17 +2130,18 @@ final class JvmIoRuntimeBuilder {
 
 	/**
 	 * {@code _fileStat(Object path, Object follow) -> (type size modified accessed made
-	 * mode) | Long}. What {@code Files.readAttributes} says of the path, its links
-	 * followed where {@code follow} is not nil: the type (1 a regular file, 2 a
+	 * mode dev ino) | Long}. What {@code Files.readAttributes} says of the path, its
+	 * links followed where {@code follow} is not nil: the type (1 a regular file, 2 a
 	 * directory, 3 a link, 4 anything else), the size and the three times in nanoseconds,
 	 * the time of making the host's {@code creationTime}, the permission bits the unix
-	 * view's {@code mode} (nil on a host without that view); or, where it throws,
-	 * {@code _fileRefusal}'s reason. The empty path names nothing, as it does to a WASI
-	 * host. Its constant-pool entries are minted here, so only a program that calls the
-	 * primitive carries them.
+	 * view's {@code mode}, its device and its inode (nil, the three, on a host without
+	 * that view); or, where it throws, {@code _fileRefusal}'s reason. The empty path
+	 * names nothing, as it does to a WASI host. Its constant-pool entries are minted
+	 * here, so only a program that calls the primitive carries them.
 	 */
 	private MethodCode buildFileStat() {
-		// Slots: 0=path, 1=follow, 2=p (String), 3=attrs, 4=acc, 5=type (int)
+		// Slots: 0=path, 1=follow, 2=p (String), 3=attrs, 4=acc, 5=type (int), 6=unix
+		// (Map)
 		MethodCode code = new MethodCode();
 		ClassEntry attributes = this.cp.classEntry("java/nio/file/attribute/BasicFileAttributes");
 		ClassEntry fileTime = this.cp.classEntry("java/nio/file/attribute/FileTime");
@@ -2178,31 +2179,47 @@ final class JvmIoRuntimeBuilder {
 		code.iconst_4();
 		code.istore(5);
 		code.labelBinding(typed);
-		// acc = (type size modified accessed made mode), consed from the end; the mode is
-		// Files.getAttribute(path, "unix:mode", options) & 07777, nil where it throws
+		// acc = (type size modified accessed made mode dev ino), consed from the end; the
+		// last three are unix = Files.readAttributes(path, "unix:mode,dev,ino",
+		// options)'s,
+		// the mode & 07777, each nil where it throws
 		code.aconst_null();
 		code.astore(4);
 		MethodCode.Label modeStart = code.newBoundLabel();
 		emitFilePath(code, 2);
-		code.ldc(this.cp.stringEntry("unix:mode"));
+		code.ldc(this.cp.stringEntry("unix:mode,dev,ino"));
 		emitLinkOptions(code, 1);
-		code.invokestatic(this.cp.methodRef(this.cp.classEntry("java/nio/file/Files"), "getAttribute",
-				"(Ljava/nio/file/Path;Ljava/lang/String;[Ljava/nio/file/LinkOption;)Ljava/lang/Object;"));
+		code.invokestatic(this.cp.methodRef(this.cp.classEntry("java/nio/file/Files"), "readAttributes",
+				"(Ljava/nio/file/Path;Ljava/lang/String;[Ljava/nio/file/LinkOption;)Ljava/util/Map;"));
+		code.astore(6);
+		MethodCode.Label modeEnd = code.newBoundLabel();
+		InterfaceMethodRefEntry get = this.cp.interfaceMethodRef(this.cp.classEntry("java/util/Map"), "get",
+				"(Ljava/lang/Object;)Ljava/lang/Object;");
+		for (String name : new String[] { "ino", "dev" }) {
+			code.aload(6);
+			code.ldc(this.cp.stringEntry(name));
+			code.invokeinterface(get);
+			emitConsObject(code, 4);
+		}
+		code.aload(6);
+		code.ldc(this.cp.stringEntry("mode"));
+		code.invokeinterface(get);
 		ClassEntry integer = this.cp.classEntry("java/lang/Integer");
 		code.checkcast(integer);
 		code.invokevirtual(this.cp.methodRef(integer, "intValue", "()I"));
 		code.loadConstant(07777);
 		code.iand();
 		code.i2l();
-		code.invokestatic(this.longValueOf);
-		MethodCode.Label modeEnd = code.newBoundLabel();
+		emitConsLong(code, 4);
 		MethodCode.Label moded = code.newLabel();
 		code.goto_(moded);
 		MethodCode.Label modeless = code.newBoundLabel();
 		code.pop();
-		code.aconst_null();
+		for (int i = 0; i < 3; i++) {
+			code.aconst_null();
+			emitConsObject(code, 4);
+		}
 		code.labelBinding(moded);
-		emitConsObject(code, 4);
 		// the inner handler first: the JVM takes the first entry whose range holds the
 		// throw
 		code.exceptionCatch(modeStart, modeEnd, modeless, this.cp.classEntry("java/lang/Exception"));

@@ -702,13 +702,17 @@ where its host preopens it. A `.wasm` follows, reads and makes no link whose tar
 absolute path: there such a link leads nowhere (`exists` is false, its attributes an
 `AccessDeniedException`), and `readSymbolicLink` of it, `createSymbolicLink` of an absolute
 target and `copy` of such a link with `NOFOLLOW_LINKS` are an `AccessDeniedException`.
+A `.wasm` makes no hard link to or at a path outside its preopens: `createLink` is a
+`FileSystemException` with `Operation not permitted`.
 
 **What a file is, its size and its times are the host's `stat`, on every target, and a
 `.wasm` has a part of it.** WASI's `stat` holds no time a file was made, so there
 `creationTime` is the time of last writing, a JDK's answer on a file system that keeps
 none. A `.wasm` writes no time before 1970: such a time is written as
-`1970-01-01T00:00:00Z`, and on Preview 1 read as it too. `fileKey()` is null on every
-target. The attributes named in a text are those of the `basic` view and, on the
+`1970-01-01T00:00:00Z`, and on Preview 1 read as it too. `fileKey()` is the host's
+device and inode, equal for two names of one file, and so is what `isSameFile` compares;
+on a `.wasm` its numbers are those the WASI host gives, which tell files apart without
+being the inode (wasmtime: a hash of the file's identity). The attributes named in a text are those of the `basic` view and, on the
 interpreter and the JVM, of the `posix`, `unix` and `owner` views; a JDK on a Unix host has
 `dos` and `user` too, which are an `UnsupportedOperationException` here (`View 'dos' not
 available`) and which `supportedFileAttributeViews` does not name. `getFileAttributeView`
@@ -738,7 +742,7 @@ whether it opens, the setters (`setReadable` ..) false, and `getTotalSpace`,
 `DSYNC` and `SPARSE` change nothing. Every `Path` is of one class of the subset's own (what
 `getClass()` answers), and so is the one `FileSystem`. A glob whose bracket expression is
 empty (`[]`, `[!]`) is refused with words of the subset's own. Not there, refused by name:
-`Path.register`; `Files.createLink`; `FileSystem.getUserPrincipalLookupService`, the
+`Path.register`; `FileSystem.getUserPrincipalLookupService`, the
 `dos` and `user` views (`DosFileAttributes`, `UserDefinedFileAttributeView` ..);
 `FileDescriptor` and the channels.
 `FileSystems.newFileSystem` of a file finds no provider (`ProviderNotFoundException`): an

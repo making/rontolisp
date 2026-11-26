@@ -3769,7 +3769,56 @@ wasm, absolute links.
 - **Pinned by** java-spec
   `a-program-makes-reads-copies-moves-lists-and-is-refused-its-files-through-java-nio-file`,
   which makes its own links; `links:` keeps `links/abs: /`, the link no WASI leg can make.
-- **Not there**: `Files.createLink` (a hard link) -- a todo item.
+- **A hard link** is "Hard links and a file's key" below.
+
+### Hard links and a file's key (2026-11-26)
+
+Written from the API documentation and JDK 25's answers to probes
+(`.todo/artefacts/m50-hard-links-and-file-keys/`, its `README.md`): every line a JDK's on
+four backends but the key's class name, the leg's own path and, on wasm, a path outside the
+preopens.
+
+- **`%make-hard-link` (target, path -> 0 or a Preview 1 errno), one primitive per backend**:
+  `RontoFileModes.hardLink` on the interpreter and the JVM (the exception mapped to the
+  errno), an injected `path_link` on Preview 1 (its own `(i32 x 7) -> i32` type), the
+  adapter's over `link-at` on the component (`$p1_link_errno` adds exist, name-too-long and
+  cross-device to `$p1_errno`, which stays as it was). The errno, not a "whether": EEXIST,
+  ENOENT, EPERM (a directory), ENOTDIR, EXDEV and ELOOP are each a JDK exception or words of
+  their own, naming `link -> target`, which a stat afterwards cannot tell apart. A link in
+  the target's last name is not followed (a JDK's: the hard link to a symbolic link is one).
+- **`%file-stat` carries the device and the inode** (its 7th and 8th): `Disk.DEVICE`,
+  `Disk.INODE`, both 0 where the host does not say. Same call count on the interpreter (the
+  unix view read `unix:mode,dev,ino` where it read `unix:mode`). On WASI they are the host's
+  numbers, which are no inode: wasmtime 51.0.0's Preview 1 answers device 1 and a 64-bit hash
+  of the file's identity, the same for two names of one file and after a write (measured);
+  WASI 0.3's stat has neither, so the adapter's `path_filestat_get` calls `metadata-hash-at`
+  after `stat-at` (upper half the device, lower the inode). That is one host call more per
+  stat: `WasmComponentBuilder.Narrowing.asksFileKeys` (the program names `%file-stat`)
+  retains it, else `path_filestat_get_keyless`, so a `file-write-date` program keeps its
+  bytes. Its price: 20,000 `isRegularFile` on a component 0.13-0.16 s -> 0.22-0.26 s
+  (about 5 us a stat; precompiled, a loaded host).
+- **What a JDK does, measured**: `isSameFile` of equal paths asks nothing; else it stats
+  both, the first first, refusing as `refusal(path, false)` does (`Not a directory`, the
+  loop words: not `readAttributes`' `NoSuchFileException`), and compares device and inode;
+  where the host gives neither, the real paths. `copy` and `move` onto another name of the
+  source are a no-op (`ATOMIC_MOVE` too), `mismatch` of two names of one file is -1 unread,
+  and `copy` of a file the program may not read is `AccessDeniedException` of the source
+  before the target is looked at, onto itself too. `createLink`: the empty path is the
+  working directory (`FileAlreadyExistsException:  -> a`, `j -> : Operation not permitted`);
+  a hard link of a mode-000 file is made.
+- **On WASI**: across preopens a link is made (wasmtime 51.0.0, both legs); outside them
+  `perm` (`Operation not permitted`, where a JDK makes it or says `Invalid cross-device
+  link`; `deviations.md`).
+- **Measured** (wasm / component / class bytes; `sizes/` of the artefacts, m27's programs):
+  byte-identical: programs of no file, of collections, `examples/java/shop` and a Lisp program
+  of files (`file-write-date`: the keyless stat). Every Java program reaching `%file-stat`
+  +490 to +504 / +783 to +794 / +999 (the stat's two slots; `Described.fileKey` and `Key`);
+  reading attributes by name +2,961 / +3,253 / +4,715 (the map's `fileKey` reaches `Key`'s
+  `toString`, whose hexadecimal is written by hand: `Long.toHexString` cost 14.7 KB of wasm
+  there). `createLink` with `isSameFile`: 187,227 / 194,333 / 324,271.
+- **Pinned by** java-spec
+  `a-program-makes-reads-copies-moves-lists-and-is-refused-its-files-through-java-nio-file`
+  (`hard link` .. `copy unread onto itself`).
 
 ### What l68 added: permission bits and the space of a disk (2026-11-25)
 
@@ -3863,8 +3912,8 @@ and the JVM answer every line a JDK's but the helpful `NullPointerException` and
   works), the others unmodifiable. The maps' iteration is a `HashMap` filled in the order
   basic, `permissions owner group`, `mode ino dev rdev nlink uid gid ctime`: 3000 random name
   sets of the three views against a JDK, no difference.
-- **`fileKey` stays null**: a JDK's is `(dev=<hex>,ino=<decimal>)`, its hash `(int) (dev +
-  ino)` (measured with `/proc/self/ns/net`, ino 4026531840); `.todo/m56`.
+- **`fileKey`**: a JDK's is `(dev=<hex>,ino=<decimal>)`, its hash `(int) (dev + ino)`
+  (measured with `/proc/self/ns/net`, ino 4026531840); "Hard links and a file's key" below.
 - **Measured** (wasm bytes; the artefacts' `sizes/`): byte-identical (wasm, component,
   class): a program of no file, one of collections, `examples/java/shop`, one reading and
   writing through `Files`, one of `java.io.File`, a Lisp program of files. The slots of
