@@ -194,7 +194,8 @@ console.log(new TextDecoder().decode(new Uint8Array(calc.memory.buffer, at, leng
   呼び出しの中で代入される static の `String`、このバックエンドがコンパイルできないライブラリの
   メンバーです。最後のものには、`null` と `0` を区別できる前提で書かれた `substring(int, int)`、
   `compareTo`、`Integer.parseInt` と、`indexOf`、`toUpperCase`、`+` の `double` と `float` があります。
-  `main` のあるプログラムはコマンドで、`--no-gc` はコマンドを作りません。`--component` も拒否されます。
+  `main` のあるプログラムはコマンドで、`--no-gc` はコマンドを作りません。`--component` では、
+  エクスポートは `@WitExport` の world のものです（[WIT world をエクスポートする](wit.md#exporting-a-wit-world)）。
 
 ## 複数ファイルのプログラム
 

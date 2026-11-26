@@ -628,14 +628,6 @@ final class CompileFrontend {
 			throw new IllegalArgumentException("Cannot compile: a Starlark program needs the GC backend -- --no-gc"
 					+ " has no structure, no hash table and no closure (drop --no-gc)");
 		}
-		if (language == SourceLanguage.JAVA && noGc && component) {
-			// A Java component's exports are a WIT world, whose uncaught report the
-			// scalar backend has no condition to write (.kb/java-frontend.md, "A
-			// reactor on --no-gc").
-			throw new IllegalArgumentException("Cannot compile: a Java program compiles --no-gc to a core module,"
-					+ " whose exports are the public static methods of a class with no main -- not to a component"
-					+ " (drop --component, or --no-gc)");
-		}
 		SourceLoader files = SourceLoader.fileSystem(request.javaClassLoader(), request.javaClassLookup(),
 				request.javaClassPath());
 		if (language == SourceLanguage.COMMON_LISP) {

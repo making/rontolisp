@@ -192,8 +192,9 @@ console.log(new TextDecoder().decode(new Uint8Array(calc.memory.buffer, at, leng
   whose initialization can throw, a static `String` assigned during a call, and the library
   members it cannot compile: `substring(int, int)`, `compareTo` and `Integer.parseInt`
   (written over a `null` that is no `0` there), `indexOf`, `toUpperCase`, a `double` or a
-  `float` in a `+`. A program with a `main` is a command, which `--no-gc` does not make, and
-  `--component` is refused.
+  `float` in a `+`. A program with a `main` is a command, which `--no-gc` does not make.
+  With `--component` the exports are a `@WitExport` world's
+  ([Exporting a WIT world](wit.md#exporting-a-wit-world)).
 
 ## A program of several files
 

@@ -247,6 +247,12 @@ wasmtime run --invoke 'vowel-count("hello world")' counter.wasm   # 3
 composes it with a Rust component that calls `vowel-count`, and builds it with the Maven
 plugin, whose `wasm` goal compiles the classes `@WitExport` marks when no main class is set.
 
+With `--no-gc` too, a class of scalar values
+([A reactor on `--no-gc`](index.md#a-reactor-on---no-gc)) compiles to a component of the
+scalar backend, which runs its static initialization when it is instantiated. The counter
+above, its `indexOf` written as comparisons, is 2,040 bytes there and 12,988 without
+`--no-gc`.
+
 Under a JDK, on the interpreter and on the JVM the annotation does nothing: `vowelCount` is
 an ordinary static method, which a program or a test calls. A program with no `main` is
 refused there, and on a module and `--native`: a world is exported by a component. A
@@ -288,4 +294,6 @@ export answers for a `u32` is 4294967295.
   interfaces') are two methods, each of its own class.
 - An exception an export leaves uncaught is reported on standard error by the line a JDK
   writes (`Exception in thread "main" java.lang.IllegalStateException: ...`), then the call
-  traps; so is one the static initialization run by the first call leaves.
+  traps; so is one the static initialization run by the first call leaves. A component
+  compiled with `--no-wasi`, which has no standard error, or with `--no-gc` traps and writes
+  nothing.

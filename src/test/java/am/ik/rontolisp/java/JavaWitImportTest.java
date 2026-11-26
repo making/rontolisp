@@ -345,7 +345,9 @@ class JavaWitImportTest {
 	 * JDK, on the interpreter and on the JVM the class is an ordinary one a program with
 	 * a {@code main} calls, which prints what the component answers; the program with no
 	 * {@code main} is refused there and on a module. The class is checked against its
-	 * world on every target, the interpreter's included.
+	 * world on every target, the interpreter's included. On {@code --no-gc} a class of
+	 * scalar values is the scalar component of the world, an uncaught exception its bare
+	 * trap.
 	 */
 	@Test
 	void aClassImplementsTheWorldAComponentExports() throws Exception {
@@ -397,6 +399,16 @@ class JavaWitImportTest {
 		// wasi:cli/exit
 		assertThat(new String(Files.readAllBytes(module), StandardCharsets.ISO_8859_1)).contains("wasi:cli/stdout")
 			.doesNotContain("wasi:cli/exit");
+		// --no-gc: the scalar component of the world, the static String the start
+		// function initializes
+		Path scalar = this.dir.resolve("scalar.wasm");
+		write("Kinds.java",
+				KINDS
+					.replace("StringBuilder seen = new StringBuilder(\"seen:\")",
+							"String seen = \"seen: \" + (touched - 1)")
+					.replace("seen.append(' ').append(name);", ""));
+		HostBoundaryRuns.cli("--java-source-path", API, kinds.toString(), "-o", scalar.toString(), "--component",
+				"--no-gc");
 		assumeTrue(HostWasmtime.isAvailable(), "no wasmtime " + HostWasmtime.MINIMUM_MAJOR + "+ on PATH");
 		Map<String, String> answers = new LinkedHashMap<>();
 		answers.put("low-byte(200)", "201");
@@ -405,19 +417,31 @@ class JavaWitImportTest {
 		answers.put("test:kinds/math.count@0.1.0()", "10");
 		answers.put("add(4294967295, 2)", "1");
 		answers.put("half(5.0)", "2.5");
-		for (Map.Entry<String, String> answer : answers.entrySet()) {
-			HostWasmtime.ExecResult run = HostWasmtime.INSTANCE.execInContainer("wasmtime", "run", "--invoke",
-					answer.getKey(), module.toString());
-			assertThat(run.exitCode()).as("wasmtime: %s", run.stderr()).isZero();
-			assertThat(run.stdout()).as(answer.getKey()).isEqualTo(answer.getValue() + "\n");
-		}
-		// what an export leaves uncaught is reported by the line a JDK writes, then traps
+		invoked(module, answers);
+		answers.put("greet(\"Java\")", "\"Hello, Java! seen: -1\"");
+		invoked(scalar, answers);
+		// what an export leaves uncaught is reported by the line a JDK writes, then
+		// traps;
+		// the scalar component has no condition to write it from: the bare trap
 		HostWasmtime.ExecResult thrown = HostWasmtime.INSTANCE.execInContainer("wasmtime", "run", "--invoke",
 				"low-byte(0)", module.toString());
 		assertThat(thrown.exitCode()).isNotZero();
 		assertThat(thrown.stderr())
 			.startsWith("Exception in thread \"main\" java.lang.IllegalArgumentException: no low byte of 0\n")
 			.contains("unreachable");
+		thrown = HostWasmtime.INSTANCE.execInContainer("wasmtime", "run", "--invoke", "low-byte(0)", scalar.toString());
+		assertThat(thrown.exitCode()).isNotZero();
+		assertThat(thrown.stderr()).doesNotContain("Exception").contains("unreachable");
+	}
+
+	/** Each export of a component invoked under wasmtime, with the answer it writes. */
+	private static void invoked(Path module, Map<String, String> answers) throws Exception {
+		for (Map.Entry<String, String> answer : answers.entrySet()) {
+			HostWasmtime.ExecResult run = HostWasmtime.INSTANCE.execInContainer("wasmtime", "run", "--invoke",
+					answer.getKey(), module.toString());
+			assertThat(run.exitCode()).as("wasmtime: %s", run.stderr()).isZero();
+			assertThat(run.stdout()).as(answer.getKey()).isEqualTo(answer.getValue() + "\n");
+		}
 	}
 
 	/** The program of the class refused, a declaration of it replaced. */
