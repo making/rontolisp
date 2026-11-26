@@ -106,9 +106,10 @@ boundary").
 source file's directory and `:world` may be omitted when the file declares exactly one.
 
 **It LOWERS into `wasm-export` -- there is no new export path.** `WitExportDirective.lower()`
-returns one `(rontolisp:wasm-export ...)` per world export, and **the emitted component is
-byte-identical to the hand-written equivalent** on wasm-GC and `--no-gc` `--component` -- the
-design invariant. No I/O, no codegen.
+returns one `(rontolisp:wasm-export ...)` per world export, and for an export of flat types **the
+emitted component is byte-identical to the hand-written equivalent** on wasm-GC and `--no-gc`
+`--component` -- the design invariant. No I/O, no codegen. An export of any other type is the
+CANONICAL form of the same directive ("Compound types across an export" below).
 
 Three call sites: `eval/WitExportInliner` on the compile path (**after** `UserMacroExpander`, so
 every `defun` is a literal top-level form, **before** `LibraryDefunPruner`, so the directives are
@@ -148,9 +149,76 @@ member is `docs:adder/add.add@0.1.0(...)`; a bare name finds the world's functio
 Each names the WIT file and line: world selection; an export not defined; **arity** mismatch or an
 exported `defun` with `&optional`/`&rest`/`&key`; a duplicate; a name that is not a lower-kebab
 `label` or is the reserved `run`; an interface the file does not define; an inline `import name:
-func` (rejected, not dropped); a type outside the export subset (`compiler/BoundaryType`, from
-which the "supported: ..." list is DERIVED); an `async func` under `--no-gc --component`.
+func` (rejected, not dropped); a type no export carries, or none on this backend ("Compound
+types across an export"; the flat list is DERIVED, `BoundaryType.witNames`); an `async func`
+under `--no-gc --component`.
 **A user-facing message carries no `.todo` pointer** -- a todo file is deleted when the work lands.
+
+### Compound types across an export — the canonical form
+**Invariant: an export whose signature names a type outside the flat set lowers to
+`(rontolisp:wasm-export 'f :as "label" :wit "<document>" :wit-world "w" :wit-at "file:line"
+:param-names ...)` -- the WIT text in the form, as a `%component-import`'s -- and its wrapper is
+the flat export's (`WasmExportCompiler.emitBody`: entry bookkeeping, call, way out) with the two
+halves that are the WIT's swapped in: the parameters LIFTED as an import's result is, the result
+LOWERED as an import's argument is, by the one generator (`WasmComponentImportCompiler.Gen`,
+`ExportMarshal`).** A flat export beside it keeps its bytes; an alias of a flat type is flat.
+
+- **Shared, measured**: every lowering and every memory lift of the import side is reused as it
+  is. New for the direction: a lift out of FLAT values (`emitLiftFlats`, the mirror of
+  `emitLowerParam`; a joined variant flat narrows to what the case reads, `pushFlat`), since an
+  import's result has at most one flat; a tuple of parameters past 16 flats is lifted from the one
+  pointer (`spilledParams`).
+- **Exact or trap, as the flat boundary** (`Gen.export`): an `s32` lifts through `_int_new` (an
+  import's flat `s32` result is an i31), a `u64` at or past 2^63 traps where an import's degrades
+  to a float, a narrow integer answered out of range traps (`lowerNarrow`) where an import's
+  argument is masked by the host. The import side's widths are untouched (its bytes are pinned).
+- **Memory**: the result's area and what it stages are bump-allocated and stay until the host has
+  read them; `cabi_post_*` pops to the mark `cabi_realloc` took. The wrapper allocates the area
+  THROUGH `cabi_realloc(0, 0, 8, size)` after the call, which takes the mark when the host lowered
+  nothing and leaves the heap top 8-aligned (an intern leaves it anywhere: "The alignment trap").
+  Measured 2026-11-26, wasmtime 51: 9,000,000 calls of list / record / string exports from a
+  composed Lisp command under `-W max-memory-size=48MiB`, no growth.
+- **A `result` at the top of the answer is the provider's mapping**: the function returns the ok
+  arm and signals `rontolisp:wit-error` for the error arm. `lower` writes a defun
+  `<f>%wit-export` making the envelope (`handler-case` only in a program that holds wit.lisp, so
+  one that names no `wit-error` pays no EH mode); the codegen lowers the envelope and learns no
+  condition. Anywhere else a `result` is the envelope both ways. So the functions a world exports
+  are, unchanged, a `wit-provide` provider of the interface (`examples/wit/shapes/app.lisp`).
+- **Types in the component** (`WitExportTypes`, the shape `wasm-tools component new` gives, read
+  off a probe): a world's own named type is a type IMPORT; an exported interface's are defined
+  bare, its functions lifted over those, then a nested SHIM component imports each used type and
+  function and exports every type and each function ascribed over the exported types (an inline
+  instance cannot name a type). Every type the scope defines is declared, used or not -- a
+  component importing the interface names them --, in the tool's order: definition order, a type
+  waiting for the ones it mentions (the earliest that can go, goes). `--emit-wit` prints them
+  back, byte-identical to the tool. A scope whose exports are all flat declares none (its bytes
+  are the old ones). An interface with a canonical member is a shim even for its flat members.
+- **Refused at the WIT line** (`requireCanonical`): flags, a resource handle, a stream, a future,
+  a type of another interface (`use`), a compound type in an `async func`; `--no-gc`, which has
+  no value a record could be (no cons); a core module (Preview 1, `--no-wasi`), in the compiler,
+  which knows the output's shape (`.todo/m79`). `describe` (the Java and Clojure front ends) still
+  answers the flat set alone (`.todo/m80`, `.todo/m81`). The refused types and the hosts not
+  measured: `.todo/m82`.
+- `:octets t` on the directive: a `list<u8>` parameter is the `(unsigned-byte 8)` vector, not
+  text. A `list<u8>` answered is a string or a packed vector, anything else traps (`reverse` of a
+  packed vector is a general one).
+- **Fixed on the way**: a `:string` parameter with an `:s64` / `:u64` result failed validation on
+  the wasm-GC component (the post-return's parameter was declared `i32`;
+  `WasmExportCompiler.postReturnParam`). `WitPrinter` printed a world's consecutive type
+  definitions without the blank line the tool puts between them.
+- Sizes (2026-11-26, default `--optimize`, raw / gzip): an interface of `flip: func(p: point) ->
+  point` 1,814 / 1,073 B (`--no-wasi` 1,659 / 985) against 1,036 / 695 for an `s32` adder;
+  `longest: func(list<string>) -> option<string>` 1,905 / 1,086; `examples/wit/shapes` 69,764 /
+  26,645 (its `format` and `loop`). Byte-identical before and after, 34 outputs: hello, string and
+  interface exports, the `examples/wit` and count-vowels worlds, mandelbrot, the Java counter and
+  `PageHits`, two Clojure worlds, each on the shapes it compiles to.
+- Hosts measured: wasmtime 51's WAVE `--invoke` (every type, both shapes of component) and a
+  composed Lisp importer. Not measured: jco, a `bindgen` host, a Rust importer.
+- Pins: `WasmLispCompilerIntegrationTest.aWorldsCompoundTypesCrossItsExportsThroughTheCanonicalAbi`,
+  `WitOracleE2eTest.gcMixedFlatAndInterfaceExportsMatchWasmToolsByteForByte` /
+  `.aComponentCallsWhatAnotherExportsOverCompoundTypes`,
+  `WitExportDirectiveTest.lowersATypeBeyondTheFlatSetIntoTheCanonicalFormOrRefusesItAgainstTheWitLine`,
+  `WitExportInlinerTest.aWorldIsRefusedAnOutputThatCannotExportIt`, `examples.yaml`'s `wit/shapes`.
 
 ### The integer boundary — the exact-or-trap rule (`compiler/BoundaryType`)
 **The vocabulary IS the WIT spelling**: `:s8`..`:u64`, plus `:float` (f64 -- no internal f32,

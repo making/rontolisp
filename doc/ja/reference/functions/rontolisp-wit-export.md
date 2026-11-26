@@ -8,7 +8,8 @@
 ディレクティブへとローワリングされます。したがって境界型を手で書くことはなく、
 `.wit` ファイルとコンパイルされたコンポーネントが乖離することもありません。WIT
 が唯一の真実の源です: world がプログラムのエクスポート一覧であり (手書きの
-`rontolisp:wasm-export` を併用するとエラーになります)、生成されるコンポーネントは
+`rontolisp:wasm-export` を併用するとエラーになります)、
+[フラットな型](#supported-wit-types)だけの world から生成されるコンポーネントは
 手書きのディレクティブが生成するものとバイト単位で同一です。これは通常の関数では
 なくコンパイル時のディレクティブです。**インタプリタ**および **JVM**
 バックエンドでも同じ契約チェックを行ったうえで `nil` を返すため、同じソースが
@@ -60,6 +61,10 @@ wasmtime run --invoke 'greet("world")' greet.wasm
   エクスポートを呼ぶホストはトップレベルを実行しません。WASI のコマンドモジュール
   (`-o out.wasm` だけ、または `--native`)では拒否されます。`--no-wasi` と `--no-gc` の
   出力は、もともとリアクタです。インタプリタと JVM は無視します。
+- `:octets` — `t` を指定すると、`list<u8>` の引数を、UTF-8 として復号した文字列ではなく、
+  オクテットそのままの `(unsigned-byte 8)` ベクタで受け取ります
+  (逆向きの [`rontolisp:wit-import`](rontolisp-wit-import.md#arguments) にある同名の
+  オプションと同じ意味です)。
 
 それ以外はすべて world から得られます。`rontolisp:wasm-export` の `:params`、
 `:param-names`、`:returns`、`:async` はすべて world から埋められるため、`defun`
@@ -104,10 +109,78 @@ world 中の `async func` はエクスポートを `:async t` としてリフト
 (非同期組み込みはホストが即座に受理する限りブロックせずに完了します) が、BLOCKED を
 報告するホストではトラップし、非同期リフトはその残余リスクを取り除きます —
 非同期かどうかを
-推測させるのではなく、WIT が宣言します。それ以外の WIT 型 (`record`、`list`、
-`option`、`result`、リソースなど) は現時点ではエクスポート境界でコンパイルエラーに
-なります。エラーメッセージは、その型のマーシャリングが実装された際に得られる、
-確定済みの rontolisp 表現を示します。
+推測させるのではなく、WIT が宣言します。
+
+### 複合型
+
+コンポーネント (`--component`) のエクスポートでは、上の表以外の WIT 型も受け渡せます。
+Lisp の値との対応は [`rontolisp:wit-import`](rontolisp-wit-import.md) と同じです。
+
+| WIT 型 | Lisp の値 |
+| --- | --- |
+| `record` | キーワードの plist。`(:x 1 :y 2)` |
+| `enum` | キーワード。`:green` |
+| `variant` | ケース名のキーワード。ペイロードを持つケースは `(キーワード . ペイロード)` |
+| `tuple` | リスト |
+| `list<T>` | リスト |
+| `list<u8>` | 文字列か `(unsigned-byte 8)` ベクタ。引数は文字列で届き、`:octets t` を指定するとベクタで届く |
+| `option<T>` | 値そのもの。none は `nil` |
+| 関数の結果としての `result<T, E>` | 返した値が ok 側。error 側はペイロードを付けて `rontolisp:wit-error` を通知する |
+| それ以外の位置の `result<T, E>` | `(:ok . 値)` か `(:error . 値)` |
+| `f32` `char` | 浮動小数点数、文字 |
+
+```console
+// wit/shapes.wit
+package example:shapes@0.1.0;
+
+interface geometry {
+  record point { x: s32, y: s32 }
+  variant shape { circle(f64), rect(point), dot }
+
+  flip: func(p: point) -> point;
+  area: func(s: shape) -> result<f64, string>;
+}
+
+world shapes {
+  export geometry;
+}
+```
+
+```console
+(defun flip (p) (list :x (getf p :y) :y (getf p :x)))
+
+(defun area (s)
+  (cond ((eq s :dot) (error 'rontolisp:wit-error :payload "a dot has no area"))
+        ((eq (car s) :circle) (* 3.0d0 (cdr s) (cdr s)))
+        (t (float (* (getf (cdr s) :x) (getf (cdr s) :y)) 1.0d0))))
+
+(rontolisp:wit-export "wit/shapes.wit" :reactor t)
+```
+
+```bash
+rontolisp shapes.lisp --component -o shapes.wasm
+wasmtime run --invoke 'flip({x: 1, y: 2})' shapes.wasm
+# {x: 2, y: 1}
+wasmtime run --invoke 'area(dot)' shapes.wasm
+# err("a dot has no area")
+```
+
+結果が `result` の関数は、ok 側の値を返し、error 側では `rontolisp:wit-error` を
+通知します。これは[プロバイダ](rontolisp-wit-provide.md)の書き方と同じです。それ以外の
+コンディションを捕まえずに終えると、呼び出しはトラップします。宣言された型で表せない値も
+トラップします。たとえば `u8` のフィールドに 300 を入れた場合、どのケースの名前でもない
+キーワードを返した場合、`list<T>` の結果としてリスト以外を返した場合です。コンポーネントは、
+world とエクスポートするインタフェースが定義する型をすべて宣言します。そのため
+`--emit-wit` はそれらの型を出力し、別のコンポーネントがそのインタフェースをインポート
+できます
+([`examples/wit/shapes`](https://github.com/making/rontolisp/tree/develop/examples/wit/shapes)
+は 2 つのコンポーネントを合成する例です)。
+
+次のものは受け渡せず、エクスポートの WIT の行を示すコンパイルエラーになります。`flags`、
+リソースのハンドル、`stream`、`future`、インタフェースが `use` で別のインタフェースから
+取り込んだ型、`async func` の中の複合型です。コアモジュール (`-o out.wasm` だけ、
+`--no-wasi`) と `--no-gc` はフラットな型だけをエクスポートでき、それ以外の型を含む world を
+拒否します。
 
 ## チェックされる内容
 
@@ -120,8 +193,8 @@ world 中の `async func` はエクスポートを `:async t` としてリフト
   `wit/greeter.wit:5: export 'greet' declares 1 parameter(s), but (defun greet ...) takes 2`
   (エクスポートされる関数は必須引数のみを取ります。`&optional` / `&rest` /
   `&key` は拒否されます)
-- エクスポート境界が運べない WIT 型 (固定幅整数族全体と `f64` / `bool` / `string`
-  は渡ります。`record` や `list` などはまだ渡りません)
+- エクスポートで受け渡せない WIT 型。コアモジュールと `--no-gc` ではフラットな型以外、
+  それ以外の出力でも `flags`、ハンドル、`stream`、`future`、別のインタフェースの型
 - `--no-gc --component` での `async func` (アダプタのないリアクターには非同期の
   機構がありません)
 - コンポーネントモデルのラベル (lower-kebab-case の語) でないエクスポート名、

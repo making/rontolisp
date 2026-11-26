@@ -8,8 +8,9 @@ into the [`rontolisp:wasm-export`](rontolisp-wasm-export.md) directives they
 stand for, so the boundary types are never written by hand and the `.wit` file
 and the compiled component cannot drift apart. The WIT is the single source of
 truth: the world is the program's export list (a hand-written
-`rontolisp:wasm-export` alongside it is an error), and the emitted component is
-byte-identical to the one those hand-written directives would have produced. It
+`rontolisp:wasm-export` alongside it is an error), and for a world of
+[flat types](#supported-wit-types) the emitted component is byte-identical to
+the one those hand-written directives would have produced. It
 is a compile-time directive, not an ordinary function: on the **interpreter**
 and **JVM** backends it runs the same contract check and then returns `nil`, so
 the same source runs on every backend. See
@@ -63,6 +64,10 @@ wasmtime run --invoke 'greet("world")' greet.wasm
   host that calls an export never runs the top level. A WASI command module
   (`-o out.wasm` alone, or `--native`) refuses it; `--no-wasi` and `--no-gc`
   outputs are reactors already. The interpreter and the JVM ignore it.
+- `:octets` — `t` hands a `list<u8>` parameter over as the octets it holds, an
+  `(unsigned-byte 8)` vector, instead of the string they decode to as UTF-8
+  ([`rontolisp:wit-import`](rontolisp-wit-import.md#arguments)'s option, for the
+  other direction).
 
 Everything else comes from the world: `rontolisp:wasm-export`'s `:params`,
 `:param-names`, `:returns` and `:async` are all filled in from it, so the
@@ -107,10 +112,78 @@ always legal inside it: I/O inside a sync export usually works too (the
 asynchronous built-ins complete without blocking when the host accepts
 immediately), but a host that reports BLOCKED would make it trap, and the
 async lift removes that residual risk — the WIT states
-which exports are async rather than leaving it to be guessed. Every other WIT
-type (`record`, `list`, `option`, `result`, resources, ...) is a compile error at
-the export boundary today; the error names the rontolisp representation the type
-is settled to have, once marshalling it lands.
+which exports are async rather than leaving it to be guessed.
+
+### Compound types
+
+A component's export (`--component`) carries the other WIT types too, each as
+the Lisp value [`rontolisp:wit-import`](rontolisp-wit-import.md) gives it:
+
+| WIT type | Lisp value |
+| --- | --- |
+| `record` | a keyword plist, `(:x 1 :y 2)` |
+| `enum` | a keyword, `:green` |
+| `variant` | the case's keyword, or `(keyword . payload)` when the case carries one |
+| `tuple` | a list |
+| `list<T>` | a list |
+| `list<u8>` | a string, or an `(unsigned-byte 8)` vector; a parameter arrives as a string, or as the vector under `:octets t` |
+| `option<T>` | the value, or `nil` for none |
+| `result<T, E>` as the function's result | the value is the ok arm; the error arm is a `rontolisp:wit-error` signalled with the payload |
+| `result<T, E>` anywhere else | `(:ok . value)` or `(:error . value)` |
+| `f32` `char` | a float, a character |
+
+```console
+// wit/shapes.wit
+package example:shapes@0.1.0;
+
+interface geometry {
+  record point { x: s32, y: s32 }
+  variant shape { circle(f64), rect(point), dot }
+
+  flip: func(p: point) -> point;
+  area: func(s: shape) -> result<f64, string>;
+}
+
+world shapes {
+  export geometry;
+}
+```
+
+```console
+(defun flip (p) (list :x (getf p :y) :y (getf p :x)))
+
+(defun area (s)
+  (cond ((eq s :dot) (error 'rontolisp:wit-error :payload "a dot has no area"))
+        ((eq (car s) :circle) (* 3.0d0 (cdr s) (cdr s)))
+        (t (float (* (getf (cdr s) :x) (getf (cdr s) :y)) 1.0d0))))
+
+(rontolisp:wit-export "wit/shapes.wit" :reactor t)
+```
+
+```bash
+rontolisp shapes.lisp --component -o shapes.wasm
+wasmtime run --invoke 'flip({x: 1, y: 2})' shapes.wasm
+# {x: 2, y: 1}
+wasmtime run --invoke 'area(dot)' shapes.wasm
+# err("a dot has no area")
+```
+
+A function whose answer is a `result` returns the ok value and signals
+`rontolisp:wit-error` for the error arm, as a
+[provider](rontolisp-wit-provide.md) does; any other condition it leaves
+uncaught traps the call. A value the declared type cannot state traps too: a
+`u8` field given 300, a keyword that names no case, a `list<T>` answered with
+anything but a list. The component declares every type its world and its
+exported interfaces define, so `--emit-wit` prints them back and another
+component can import the interface
+([`examples/wit/shapes`](https://github.com/making/rontolisp/tree/develop/examples/wit/shapes)
+composes two).
+
+Not carried, each a compile error at the export's WIT line: `flags`, a resource
+handle, a `stream`, a `future`, a type an interface takes from another with
+`use`, and a compound type in an `async func`. A core module (`-o out.wasm`
+alone, `--no-wasi`) and `--no-gc` export the flat types alone and refuse a world
+with any other.
 
 ## What it checks
 
@@ -123,9 +196,9 @@ offending export:
   `wit/greeter.wit:5: export 'greet' declares 1 parameter(s), but (defun greet ...) takes 2`
   (an exported function takes required parameters only: `&optional` / `&rest` /
   `&key` are rejected)
-- a WIT type the export boundary does not carry (the whole fixed-width integer
-  family plus `f64` / `bool` / `string` crosses; a `record`, `list`, ... does
-  not yet)
+- a WIT type the export does not carry: beyond the flat types on a core module
+  or under `--no-gc`, and `flags`, a handle, a `stream`, a `future` or a type
+  of another interface anywhere
 - an `async func` under `--no-gc --component`, whose adapter-free reactor has no
   async machinery
 - an export name that is not a component-model label (lower-kebab-case words), a

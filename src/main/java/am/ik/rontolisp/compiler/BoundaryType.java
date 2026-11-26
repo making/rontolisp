@@ -354,6 +354,20 @@ public enum BoundaryType {
 	}
 
 	/**
+	 * {@return the WIT spellings of the flat boundary's types, in vocabulary order} --
+	 * derived from the table, so a message listing them cannot drift from it
+	 */
+	public static String witNames() {
+		List<String> names = new java.util.ArrayList<>();
+		for (BoundaryType type : values()) {
+			if (type.witName != null) {
+				names.add(type.witName);
+			}
+		}
+		return String.join(", ", names);
+	}
+
+	/**
 	 * The subset of {@link #valueDesignators()} a WASM boundary can carry, i.e. without
 	 * the {@link #jvmOnly()} members.
 	 * @return the canonical designators of every non-void, non-import-only, non-JVM-only

@@ -183,6 +183,11 @@ cells 160/164/168) **guarded by the runtime intern count**, so intern records ne
 Bodies in `WasmExportRuntimeBuilder`; kind mapping
 `WasmExportCompiler.componentPostReturnKind`.
 
+A canonical export (`:wit`, a world's compound types: `.kb/wit.md`, "Compound types across an
+export") answers its pointer itself, with no retptr shim, and its post-return is keyed by its one
+core result (`cabi_post_i32` / `_i64` / `_f64` / `_f32` / `_void`); its types are declared between
+the alias and the canon sections, a shim component per interface behind the lifts.
+
 Purely additive: an export-free or scalar-export-only program's component is byte-identical.
 Export names must match the component `label` grammar (`COMPONENT_EXPORT_NAME`, fix with
 `:as`); `"run"` is reserved. Documented, not statically checked: I/O inside a SYNC export only

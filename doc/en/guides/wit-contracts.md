@@ -54,8 +54,10 @@ single source of truth**:
 - The world is the program's export list, so a hand-written
   `rontolisp:wasm-export` in the same program is a compile error.
 - Every export must have a matching `defun` of the right arity, every WIT
-  type must be one the boundary carries (every fixed-width integer `s8` …
-  `u64`, plus `f64`, `bool`, `string`), and an `async func` in the world
+  type must be one the export carries (the integers `s8` … `u64`, `f64`,
+  `bool` and `string` everywhere;
+  [records, variants and lists](#records-variants-and-lists) on a component),
+  and an `async func` in the world
   lifts that export with
   `:async t` (so an export that does I/O is declared async by the WIT
   instead of being guessed at). Each mismatch is a compile error naming the
@@ -67,8 +69,9 @@ single source of truth**:
 
 The directive is a front-end for the machinery of the previous sections, not
 a second export path: it lowers into exactly the `rontolisp:wasm-export`
-directives a hand-written implementation would carry, so **the emitted
-component is byte-identical** to that one — on the GC path and under
+directives a hand-written implementation would carry, so for a world of
+those flat types **the emitted component is byte-identical** to that one — on
+the GC path and under
 [`--no-gc --component`](wasm-nogc.md#compact-component-output---no-gc---component)
 alike (a world using `s64`/`u64` works on both: the GC backend carries the
 64-bit types through its boxed exact integers).
@@ -137,6 +140,71 @@ An inline `export ops: interface { ... }` works the same way, keyed by its
 plain name, and `--emit-wit` reconstructs the interface — `export
 docs:adder/add@0.1.0;` plus its `interface` definition — byte-for-byte the way
 `wasm-tools` prints it.
+
+### Records, variants and lists
+
+A component's export carries WIT's compound types as well, with no boundary
+code in the program: each value arrives as the Lisp value the type maps to,
+the same one [`wit-import`](#importing-a-wit-interface-wit-import) hands a
+caller.
+
+```console
+// wit/shapes.wit
+package example:shapes@0.1.0;
+
+interface geometry {
+  record point { x: s32, y: s32 }
+  variant shape { circle(f64), rect(point), dot }
+
+  flip: func(p: point) -> point;
+  squares: func(n: u32) -> list<point>;
+  area: func(s: shape) -> result<f64, string>;
+}
+
+world shapes {
+  export geometry;
+}
+```
+
+```console
+;;; shapes.lisp
+(defun flip (p) (list :x (getf p :y) :y (getf p :x)))
+
+(defun squares (n) (loop for i from 1 to n collect (list :x i :y (* i i))))
+
+(defun area (s)
+  (cond ((eq s :dot) (error 'rontolisp:wit-error :payload "a dot has no area"))
+        ((eq (car s) :circle) (* 3.0d0 (cdr s) (cdr s)))
+        (t (float (* (getf (cdr s) :x) (getf (cdr s) :y)) 1.0d0))))
+
+(rontolisp:wit-export "wit/shapes.wit" :reactor t)
+```
+
+```bash
+rontolisp shapes.lisp --component -o shapes.wasm
+wasmtime run --invoke 'squares(2)' shapes.wasm
+# [{x: 1, y: 1}, {x: 2, y: 4}]
+wasmtime run --invoke 'area(rect({x: 3, y: 4}))' shapes.wasm
+# ok(12)
+wasmtime run --invoke 'area(dot)' shapes.wasm
+# err("a dot has no area")
+```
+
+A record is a keyword plist, a variant its case's keyword (dotted with the
+payload when it has one), a list a list, an option the value or `nil`. A
+function whose WIT result is a `result` returns the ok value and signals
+`rontolisp:wit-error` for the error arm — what a
+[provider](#importing-a-wit-interface-wit-import) does, so the functions of
+`shapes.lisp` also answer a `wit-import` of the interface on the interpreter
+and the JVM. The full table, and what is not carried (`flags`, handles,
+streams, a type of another interface), is in the
+[reference](../reference/functions/rontolisp-wit-export.md#compound-types);
+[`examples/wit/shapes`](https://github.com/making/rontolisp/tree/develop/examples/wit/shapes)
+is this world with a second component calling it.
+
+A core module (`-o out.wasm` alone, `--no-wasi`) and `--no-gc` export the flat
+types alone: a function of core values has no type to state a record by, and
+the scalar backend no value to hold one.
 
 Current limitations:
 

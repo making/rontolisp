@@ -153,8 +153,12 @@ public final class WitExportDirective {
 	 * first export call runs the program's top level, once, before its own body. A
 	 * program with no main of its own says so: the Java front end's program of
 	 * {@code @WitExport} classes
+	 * @param octets whether a {@code list<u8>} a host passes an export arrives as the
+	 * octets it holds, an {@code (unsigned-byte 8)} vector, instead of the text they
+	 * decode to ({@code :octets t}, {@code rontolisp:wit-import}'s option)
 	 */
-	public record Directive(String path, @Nullable String world, @Nullable Map<String, String> names, boolean reactor) {
+	public record Directive(String path, @Nullable String world, @Nullable Map<String, String> names, boolean reactor,
+			boolean octets) {
 
 		/**
 		 * A directive with no naming hook: each export is the defun its label spells.
@@ -162,7 +166,18 @@ public final class WitExportDirective {
 		 * @param world the world to implement, or {@code null} for the file's only one
 		 */
 		public Directive(String path, @Nullable String world) {
-			this(path, world, null, false);
+			this(path, world, null, false, false);
+		}
+
+		/**
+		 * A directive whose {@code list<u8>} parameters are text.
+		 * @param path the WIT file path as written
+		 * @param world the world to implement, or {@code null} for the file's only one
+		 * @param names the naming hook, or {@code null}
+		 * @param reactor whether the world's exports are the program's entry points
+		 */
+		public Directive(String path, @Nullable String world, @Nullable Map<String, String> names, boolean reactor) {
+			this(path, world, names, reactor, false);
 		}
 
 	}
@@ -212,6 +227,7 @@ public final class WitExportDirective {
 		String world = null;
 		Map<String, String> names = null;
 		boolean reactor = false;
+		boolean octets = false;
 		int i = 2;
 		while (i < items.size()) {
 			if (!(items.get(i) instanceof LispSymbol keyword) || !keyword.isKeyword()) {
@@ -231,13 +247,16 @@ public final class WitExportDirective {
 			else if (":REACTOR".equals(keyword.name())) {
 				reactor = WasmImportDirective.booleanValue(value, "rontolisp:wit-export", ":reactor", form);
 			}
+			else if (":OCTETS".equals(keyword.name())) {
+				octets = WasmImportDirective.booleanValue(value, "rontolisp:wit-export", ":octets", form);
+			}
 			else {
 				throw new UnsupportedOperationException(
 						"Unknown rontolisp:wit-export option " + keyword.name() + " in " + form.print());
 			}
 			i += 2;
 		}
-		return new Directive(path.value(), world, names, reactor);
+		return new Directive(path.value(), world, names, reactor, octets);
 	}
 
 	/**
@@ -298,8 +317,17 @@ public final class WitExportDirective {
 		Implemented implemented = implemented(directive, source);
 		WitLocations locations = implemented.locations();
 		List<LispVal> forms = new ArrayList<>();
-		walk(implemented, witPath, (name, func, item, ifaceId) -> forms
-			.add(exportForm(name, func, witPath, locations, item, defuns, backend, ifaceId, directive.names())));
+		// The whole document as one text, printed at most once: what a canonical export
+		// carries to the backend, which reads no file (as a wit-import's form does).
+		String[] text = new String[1];
+		java.util.function.Supplier<String> document = () -> {
+			if (text[0] == null) {
+				text[0] = am.ik.wit.WitPrinter.print(implemented.resolver().document());
+			}
+			return text[0];
+		};
+		walk(implemented, witPath, (name, func, item, ifaceId, scope) -> forms.addAll(exportForms(name, func, witPath,
+				locations, item, defuns, backend, ifaceId, directive, implemented, scope, document)));
 		if (forms.isEmpty()) {
 			throw new UnsupportedOperationException(WitSource.at(witPath, locations, implemented.world()) + ": world '"
 					+ implemented.world().name() + "' declares no exports");
@@ -309,24 +337,29 @@ public final class WitExportDirective {
 
 	/**
 	 * One world export, as the walk hands it over: its label, its function, the world
-	 * item declaring it, and the interface it belongs to ({@code null} for a freestanding
-	 * function).
+	 * item declaring it, the interface it belongs to ({@code null} for a freestanding
+	 * function), and the scope its type names resolve in -- that interface, or the
+	 * world's own type definitions.
 	 */
 	@FunctionalInterface
 	private interface ExportVisitor {
 
-		void visit(String name, WitFunc func, WitItem item, @Nullable String ifaceId);
+		void visit(String name, WitFunc func, WitItem item, @Nullable String ifaceId, WitItem.InterfaceDef scope);
 
 	}
 
-	/** The world a directive implements, parsed and selected. */
-	private record Implemented(WitLocations locations, WitResolver resolver, WitItem.World world) {
+	/**
+	 * The world a directive implements, parsed and selected, with the scope a
+	 * freestanding function export's type names resolve in.
+	 */
+	private record Implemented(WitLocations locations, WitResolver resolver, WitItem.World world,
+			WitItem.InterfaceDef worldScope) {
 	}
 
 	private static Implemented implemented(Directive directive, WitSource source) {
 		WitParseResult parsed = source.parse();
 		WitItem.World world = selectWorld(parsed.document(), directive.world(), source);
-		return new Implemented(parsed.locations(), new WitResolver(parsed.document()), world);
+		return new Implemented(parsed.locations(), new WitResolver(parsed.document()), world, worldScope(world));
 	}
 
 	/**
@@ -395,17 +428,19 @@ public final class WitExportDirective {
 		Implemented implemented = implemented(directive, source);
 		WitLocations locations = implemented.locations();
 		List<Export> exports = new ArrayList<>();
-		walk(implemented, witPath, (name, func, item, ifaceId) -> {
+		WitResolver resolver = implemented.resolver();
+		walk(implemented, witPath, (name, func, item, ifaceId, scope) -> {
 			checkLabel(name, witPath, locations, item);
 			List<WitTypeMapper.Param> params = new ArrayList<>();
 			for (WitFunc.Param param : func.params()) {
 				params.add(new WitTypeMapper.Param(param.name(),
-						shapeOf(param.type(), name, param.name(), witPath, locations, item)));
+						shapeOf(param.type(), name, param.name(), witPath, locations, item, resolver, scope)));
 			}
 			WitType result = func.result();
 			exports.add(new Export(name, List.copyOf(params),
-					result == null ? null : shapeOf(result, name, "the result", witPath, locations, item), func.async(),
-					ifaceId, WitSource.at(witPath, locations, item)));
+					result == null ? null
+							: shapeOf(result, name, "the result", witPath, locations, item, resolver, scope),
+					func.async(), ifaceId, WitSource.at(witPath, locations, item)));
 		});
 		if (exports.isEmpty()) {
 			throw new UnsupportedOperationException(WitSource.at(witPath, locations, implemented.world()) + ": world '"
@@ -414,13 +449,75 @@ public final class WitExportDirective {
 		return new WorldDescription(implemented.world().name(), List.copyOf(exports));
 	}
 
-	// The shape of an export's type: a primitive the boundary carries (designator()
-	// refuses anything else, with lower()'s own message).
+	// The shape of an export's type for a front end that binds its own names: a primitive
+	// the flat boundary carries. A front end maps a compound type itself, and none does
+	// yet for an export, so anything else is refused here with the reason.
 	private static WitTypeMapper.Shape shapeOf(WitType type, String exportName, String what, String witPath,
-			WitLocations locations, WitItem item) {
-		BoundaryType boundary = designator(type, exportName, what, witPath, locations, item, Backend.OTHER);
+			WitLocations locations, WitItem item, WitResolver resolver, WitItem.InterfaceDef scope) {
+		BoundaryType boundary = flatDesignator(type, resolver, scope);
+		if (boundary == null) {
+			throw error(witPath, locations, item,
+					"export '" + exportName + "': the WIT type of " + what + " is not supported at this front end's "
+							+ "export boundary yet (supported: " + supportedWitTypes() + "). Its rontolisp "
+							+ "representation is settled (" + describe(type) + "), and a Lisp program's "
+							+ "rontolisp:wit-export carries it on a component");
+		}
 		String wit = java.util.Objects.requireNonNull(boundary.witName());
 		return new WitTypeMapper.Shape(WitTypeMapper.rep(new WitType.Prim(wit)), null, wit);
+	}
+
+	/**
+	 * One function a world exports, with what a backend needs to marshal it through the
+	 * canonical ABI: the scope its type names resolve in.
+	 *
+	 * @param resolver the resolver over the WIT document
+	 * @param scope the interface the function's type names are written in -- the exported
+	 * interface, or the world's own type definitions for a freestanding function
+	 * @param ofWorld whether {@code scope} is the world's (its named types are the
+	 * world's, which a component declares as type imports), not an exported interface's
+	 * @param func the function
+	 */
+	public record Signature(WitResolver resolver, WitItem.InterfaceDef scope, boolean ofWorld, WitFunc func) {
+	}
+
+	// The world the last signature was read from: every canonical export of a program
+	// carries one document, and reading it once keeps one resolver -- one identity of
+	// each scope -- behind all of them.
+	private record ReadWorld(String text, String world, Implemented implemented) {
+	}
+
+	private static volatile @Nullable ReadWorld lastRead;
+
+	/**
+	 * Finds the function behind a canonical export ({@code rontolisp:wasm-export ... :wit
+	 * "text" :wit-world "world"}), as {@link #lower} walked to it.
+	 * @param witText the WIT document the form carries
+	 * @param world the world's name
+	 * @param ifaceId the exported interface's id, or {@code null} for a freestanding
+	 * function
+	 * @param label the export's label
+	 * @return the function and its scope
+	 * @throws UnsupportedOperationException when the world exports no such function
+	 */
+	public static Signature signature(String witText, String world, @Nullable String ifaceId, String label) {
+		ReadWorld read = lastRead;
+		if (read == null || !read.text().equals(witText) || !read.world().equals(world)) {
+			read = new ReadWorld(witText, world,
+					implemented(new Directive("the world", world), WitSource.file("the world", witText)));
+			lastRead = read;
+		}
+		Implemented implemented = read.implemented();
+		Signature[] found = new Signature[1];
+		walk(implemented, "the world", (name, func, item, id, scope) -> {
+			if (name.equals(label) && java.util.Objects.equals(id, ifaceId)) {
+				found[0] = new Signature(implemented.resolver(), scope, id == null, func);
+			}
+		});
+		if (found[0] == null) {
+			throw new UnsupportedOperationException("the world '" + world + "' exports no function '"
+					+ namesKey(label, ifaceId) + "' (rontolisp:wasm-export :wit)");
+		}
+		return found[0];
 	}
 
 	// Walks the world's exports in world order, handing each to the visitor right after
@@ -431,6 +528,7 @@ public final class WitExportDirective {
 		WitLocations locations = implemented.locations();
 		WitResolver resolver = implemented.resolver();
 		Set<String> seen = new LinkedHashSet<>();
+		WitItem.InterfaceDef worldScope = implemented.worldScope();
 		for (WitItem item : implemented.world().items()) {
 			switch (item) {
 				case WitItem.ExportNamed export -> {
@@ -439,15 +537,16 @@ public final class WitExportDirective {
 							if (!seen.add(export.name())) {
 								throw error(witPath, locations, item, "duplicate export '" + export.name() + "'");
 							}
-							visitor.visit(export.name(), func.func(), item, null);
+							visitor.visit(export.name(), func.func(), item, null, worldScope);
 						}
 						// An inline interface export (`export add: interface { ... }`):
 						// its
 						// plain name is the exported instance's id, and each of its
 						// functions
 						// is a member the program must implement.
-						case WitItem.Extern.ExternInterface inline -> lowerInterfaceMembers(export.name(),
-								inline.items(), seen, witPath, locations, item, visitor);
+						case WitItem.Extern.ExternInterface inline ->
+							lowerInterfaceMembers(export.name(), inline.items(), seen, witPath, locations, item,
+									visitor, inlineScope(export.name(), inline));
 					}
 				}
 				case WitItem.ExportRef ref -> {
@@ -477,7 +576,7 @@ public final class WitExportDirective {
 					// canonicalId is non-null for an interface obtained from this
 					// resolver.
 					String ifaceId = java.util.Objects.requireNonNull(resolver.canonicalId(iface));
-					lowerInterfaceMembers(ifaceId, iface.items(), seen, witPath, locations, item, visitor);
+					lowerInterfaceMembers(ifaceId, iface.items(), seen, witPath, locations, item, visitor, iface);
 				}
 				case WitItem.ImportNamed named -> throw error(witPath, locations, item, "import '" + named.name()
 						+ "': a world's inline function imports are not bound; declare the interface to call with "
@@ -546,7 +645,7 @@ public final class WitExportDirective {
 	// exported component instance. `ifaceId` is the instance's export id (the interface's
 	// fully-qualified id for a reference, its plain name for an inline interface).
 	private static void lowerInterfaceMembers(String ifaceId, List<WitItem> members, Set<String> seen, String witPath,
-			WitLocations locations, WitItem item, ExportVisitor visitor) {
+			WitLocations locations, WitItem item, ExportVisitor visitor, WitItem.InterfaceDef scope) {
 		boolean any = false;
 		for (WitItem member : members) {
 			// Only plain functions are exportable members; an interface's type
@@ -557,7 +656,7 @@ public final class WitExportDirective {
 					throw error(witPath, locations, item,
 							"duplicate export '" + func.name() + "' in interface '" + ifaceId + "'");
 				}
-				visitor.visit(func.name(), func.func(), item, ifaceId);
+				visitor.visit(func.name(), func.func(), item, ifaceId, scope);
 				any = true;
 			}
 		}
@@ -591,13 +690,19 @@ public final class WitExportDirective {
 		}
 	}
 
-	// Builds the (rontolisp:wasm-export 'name :params '(...) :param-names '(...) :returns
-	// ... [:async t] [:interface "id"]) form for one world export, after checking it
-	// against the program. `ifaceId` is null for a freestanding function export and the
-	// exported interface's id for an interface member. Under a :names table the function
-	// is the one the table names, exported under the label (:as).
-	private static LispVal exportForm(String name, WitFunc func, String witPath, WitLocations locations, WitItem item,
-			Defuns defuns, Backend backend, @Nullable String ifaceId, @Nullable Map<String, String> names) {
+	// Builds the forms of one world export, after checking it against the program:
+	// (rontolisp:wasm-export 'name :params '(...) :param-names '(...) :returns ...
+	// [:async
+	// t] [:interface "id"]) where every type is one the flat boundary carries -- the
+	// form a hand-written export list would hold, byte for byte --, and otherwise the
+	// canonical form, which names the function's place in the WIT instead of its types
+	// (:wit, with the text). `ifaceId` is null for a freestanding function export and
+	// the exported interface's id for an interface member. Under a :names table the
+	// function is the one the table names, exported under the label (:as).
+	private static List<LispVal> exportForms(String name, WitFunc func, String witPath, WitLocations locations,
+			WitItem item, Defuns defuns, Backend backend, @Nullable String ifaceId, Directive directive,
+			Implemented implemented, WitItem.InterfaceDef scope, java.util.function.Supplier<String> document) {
+		Map<String, String> names = directive.names();
 		checkLabel(name, witPath, locations, item);
 		String defunName = name;
 		List<String> lambdaList;
@@ -645,32 +750,84 @@ public final class WitExportDirective {
 					"export '" + name + "' is an async func, which --no-gc --component cannot lift "
 							+ "(the adapter-free reactor has no async machinery)");
 		}
+		WitResolver resolver = implemented.resolver();
 		List<LispVal> params = new ArrayList<>();
 		List<LispVal> paramNames = new ArrayList<>();
+		boolean flat = true;
 		for (WitFunc.Param param : func.params()) {
-			params.add(new LispSymbol(
-					designator(param.type(), name, param.name(), witPath, locations, item, backend).designator()));
+			BoundaryType boundary = flatDesignator(param.type(), resolver, scope);
+			if (boundary == null) {
+				flat = false;
+				requireCanonical(param.type(), name, param.name(), witPath, locations, item, backend, resolver, scope);
+			}
+			else {
+				params.add(new LispSymbol(boundary.designator()));
+			}
 			paramNames.add(new LispSymbol(param.name()));
 		}
 		WitType result = func.result();
-		String returns = result == null ? BoundaryType.VOID.designator()
-				: designator(result, name, "the result", witPath, locations, item, backend).designator();
+		String returns = BoundaryType.VOID.designator();
+		if (result != null) {
+			BoundaryType boundary = flatDesignator(result, resolver, scope);
+			if (boundary == null) {
+				flat = false;
+				requireCanonical(result, name, "the result", witPath, locations, item, backend, resolver, scope);
+			}
+			else {
+				returns = boundary.designator();
+			}
+		}
+		if (!flat && func.async()) {
+			throw error(witPath, locations, item,
+					"export '" + name + "' is an async func, and an async export carries the flat types only ("
+							+ supportedWitTypes() + ")");
+		}
 
+		List<LispVal> forms = new ArrayList<>();
+		String exported = defunName;
+		// A result at the top of a canonical export's answer is the settled mapping's:
+		// the function answers the ok arm and signals rontolisp:wit-error for the error
+		// arm, as a provider does. The boundary lowers the envelope, which a defun
+		// around the function makes -- no backend learns a condition. Only a WASM
+		// backend compiles the export.
+		if (!flat && backend != Backend.OTHER && result != null
+				&& resolveAliases(result, resolver, scope).type() instanceof WitType.ResultOf) {
+			exported = defunName + "%wit-export";
+			forms.add(envelopeDefun(exported, defunName, lambdaList, defuns.lambdaList(WIT_RUNTIME_DEFUN) != null));
+		}
 		List<LispVal> out = new ArrayList<>();
 		out.add(new LispSymbol(PackageRegistry.qualify(LispNames.RONTOLISP_PKG, LispNames.WASM_EXPORT)));
-		out.add(quote(new LispSymbol(defunName)));
-		if (names != null) {
+		out.add(quote(new LispSymbol(exported)));
+		if (names != null || !flat) {
 			// the label, since the function's own name derives no export name (a
-			// c%ns/name symbol lowercased is no label)
+			// c%ns/name symbol lowercased is no label, nor is the envelope defun's)
 			out.add(new LispSymbol(":AS"));
 			out.add(new LispString(name));
 		}
-		out.add(new LispSymbol(":PARAMS"));
-		out.add(quote(list(params)));
+		if (flat) {
+			out.add(new LispSymbol(":PARAMS"));
+			out.add(quote(list(params)));
+		}
+		else {
+			// The function's types are the WIT's own: the text travels in the form, with
+			// the world and the line the export stands on.
+			out.add(new LispSymbol(":WIT"));
+			out.add(new LispString(document.get()));
+			out.add(new LispSymbol(":WIT-WORLD"));
+			out.add(new LispString(implemented.world().name()));
+			out.add(new LispSymbol(":WIT-AT"));
+			out.add(new LispString(WitSource.at(witPath, locations, item)));
+			if (directive.octets()) {
+				out.add(new LispSymbol(":OCTETS"));
+				out.add(LispTrue.INSTANCE);
+			}
+		}
 		out.add(new LispSymbol(":PARAM-NAMES"));
 		out.add(quote(list(paramNames)));
-		out.add(new LispSymbol(":RETURNS"));
-		out.add(new LispSymbol(returns));
+		if (flat) {
+			out.add(new LispSymbol(":RETURNS"));
+			out.add(new LispSymbol(returns));
+		}
 		if (func.async()) {
 			out.add(new LispSymbol(":ASYNC"));
 			out.add(LispTrue.INSTANCE);
@@ -682,39 +839,182 @@ public final class WitExportDirective {
 			out.add(new LispSymbol(":INTERFACE"));
 			out.add(new LispString(ifaceId));
 		}
-		return list(out);
+		forms.add(list(out));
+		return forms;
 	}
 
-	// The wasm-export type designator a WIT type crosses the component boundary as. The
-	// supported set is exactly the boundary's: the whole fixed-width integer family, plus
-	// f64 / bool / string (WitTypeMapper names the representation of every WIT type, but
-	// only these have a component-model scalar/string lift today); anything else is a
-	// clear
-	// compile error rather than a silent reinterpretation.
-	private static BoundaryType designator(WitType type, String exportName, String what, String witPath,
-			WitLocations locations, WitItem item, Backend backend) {
-		if (type instanceof WitType.Prim prim) {
-			BoundaryType boundary = BoundaryType.forWitName(prim.name());
-			if (boundary != null) {
-				return boundary;
+	// A defun of the WIT run time (wit.lisp): the program holds it exactly when the
+	// library was spliced, that is when it names rontolisp:wit-error and so may signal
+	// it.
+	private static final String WIT_RUNTIME_DEFUN = PackageRegistry.qualify(LispNames.RONTOLISP_PKG,
+			LispNames.WIT_PROVIDE);
+
+	// (defun f%wit-export (p0 p1) (handler-case (cons :ok (f p0 p1)) (rontolisp:wit-error
+	// (e) (cons :error (rontolisp:wit-error-payload e))))) -- or, in a program that names
+	// no rontolisp:wit-error and so can signal none, the ok arm alone.
+	private static LispVal envelopeDefun(String name, String target, List<String> lambdaList, boolean signals) {
+		List<LispVal> parameters = new ArrayList<>();
+		List<LispVal> call = new ArrayList<>();
+		call.add(new LispSymbol(target));
+		for (int i = 0; i < lambdaList.size(); i++) {
+			LispSymbol parameter = new LispSymbol("P" + i);
+			parameters.add(parameter);
+			call.add(parameter);
+		}
+		LispVal ok = list(List.of(new LispSymbol(LispNames.CONS), new LispSymbol(":OK"), list(call)));
+		LispVal body = ok;
+		if (signals) {
+			LispSymbol condition = new LispSymbol("E");
+			LispVal payload = list(List.of(
+					new LispSymbol(PackageRegistry.qualify(LispNames.RONTOLISP_PKG, LispNames.WIT_ERROR_PAYLOAD)),
+					condition));
+			LispVal clause = list(
+					List.of(new LispSymbol(PackageRegistry.qualify(LispNames.RONTOLISP_PKG, LispNames.WIT_ERROR)),
+							list(List.of(condition)),
+							list(List.of(new LispSymbol(LispNames.CONS), new LispSymbol(":ERROR"), payload))));
+			body = list(List.of(new LispSymbol(LispNames.HANDLER_CASE), ok, clause));
+		}
+		return list(List.of(new LispSymbol(LispNames.DEFUN), new LispSymbol(name), list(parameters), body));
+	}
+
+	// The world's own type definitions and `use` clauses, as the scope a freestanding
+	// function export's type names resolve in.
+	private static WitItem.InterfaceDef worldScope(WitItem.World world) {
+		List<WitItem> types = new ArrayList<>();
+		for (WitItem item : world.items()) {
+			switch (item) {
+				case WitItem.TypeAlias ignored -> types.add(item);
+				case WitItem.RecordDef ignored -> types.add(item);
+				case WitItem.VariantDef ignored -> types.add(item);
+				case WitItem.EnumDef ignored -> types.add(item);
+				case WitItem.FlagsDef ignored -> types.add(item);
+				case WitItem.ResourceDef ignored -> types.add(item);
+				case WitItem.Use ignored -> types.add(item);
+				default -> {
+				}
 			}
 		}
-		throw error(witPath, locations, item,
-				"export '" + exportName + "': the WIT type of " + what + " is not supported at the export boundary yet "
-						+ "(supported: " + supportedWitTypes() + "). Its rontolisp representation is settled " + "("
-						+ describe(type) + "), but the component boundary cannot marshal it yet");
+		return new WitItem.InterfaceDef(world.meta(), world.name(), List.copyOf(types));
 	}
 
-	// The WIT spellings the export boundary carries, in vocabulary order, for the error
-	// message above -- derived from the table so the message can never drift from it.
+	// An inline interface export's items, as the scope its members' type names resolve
+	// in.
+	private static WitItem.InterfaceDef inlineScope(String name, WitItem.Extern.ExternInterface inline) {
+		return new WitItem.InterfaceDef(am.ik.wit.WitMeta.none(), name, inline.items());
+	}
+
+	// A type and the scope it is written in.
+	private record Scoped(WitItem.InterfaceDef scope, WitType type) {
+	}
+
+	// Follows a `type` alias chain (across interfaces) to the type it bottoms out at.
+	private static Scoped resolveAliases(WitType type, WitResolver resolver, WitItem.InterfaceDef scope) {
+		if (type instanceof WitType.Named named) {
+			WitResolver.Owned owned = resolver.resolveOwned(scope, named.name());
+			if (owned != null && owned.item() instanceof WitItem.TypeAlias alias) {
+				return resolveAliases(alias.target(), resolver, owned.owner());
+			}
+		}
+		return new Scoped(scope, type);
+	}
+
+	// The wasm-export type designator of a WIT type the flat boundary carries: the whole
+	// fixed-width integer family, f64, bool and string, through any alias; null for
+	// every other type, which crosses through the canonical ABI or not at all.
+	private static @Nullable BoundaryType flatDesignator(WitType type, WitResolver resolver,
+			WitItem.InterfaceDef scope) {
+		return resolveAliases(type, resolver, scope).type() instanceof WitType.Prim prim
+				? BoundaryType.forWitName(prim.name()) : null;
+	}
+
+	// Refuses a type the canonical export does not carry, and a backend that has no
+	// canonical export: the scalar backend holds no value a record, a list or a variant
+	// could be. What is carried is everything but flags, a resource handle, a stream
+	// and a future, wherever it nests, defined in the scope that exports it.
+	private static void requireCanonical(WitType type, String exportName, String what, String witPath,
+			WitLocations locations, WitItem item, Backend backend, WitResolver resolver, WitItem.InterfaceDef scope) {
+		if (backend.isNoGc()) {
+			throw error(witPath, locations, item,
+					"export '" + exportName + "': the WIT type of " + what + " is not one --no-gc can carry ("
+							+ supportedWitTypes() + "): the scalar backend has no value for it (" + describe(type)
+							+ "); compile the world on the default backend's --component, where the canonical ABI "
+							+ "marshals it");
+		}
+		String refused = refusedCanonical(type, resolver, scope, new java.util.HashSet<>());
+		if (refused != null) {
+			throw error(witPath, locations, item,
+					"export '" + exportName + "': the WIT type of " + what + " holds " + refused
+							+ ", which an export does not carry (carried: every primitive type, and a list, an "
+							+ "option, a result, a tuple, a record, a variant or an enum of them, defined where the "
+							+ "export is)");
+		}
+	}
+
+	// What of a type the canonical export does not carry, in words, or null.
+	private static @Nullable String refusedCanonical(WitType type, WitResolver resolver, WitItem.InterfaceDef scope,
+			Set<String> walking) {
+		return switch (type) {
+			case WitType.Prim ignored -> null;
+			case WitType.ListOf list -> refusedCanonical(list.element(), resolver, scope, walking);
+			case WitType.OptionOf option -> refusedCanonical(option.element(), resolver, scope, walking);
+			case WitType.ResultOf res -> {
+				String ok = res.ok() == null ? null : refusedCanonical(res.ok(), resolver, scope, walking);
+				yield ok != null || res.err() == null ? ok : refusedCanonical(res.err(), resolver, scope, walking);
+			}
+			case WitType.TupleOf tuple -> {
+				String refused = null;
+				for (WitType element : tuple.elements()) {
+					refused = refused != null ? refused : refusedCanonical(element, resolver, scope, walking);
+				}
+				yield refused;
+			}
+			case WitType.StreamOf ignored -> "a stream";
+			case WitType.FutureOf ignored -> "a future";
+			case WitType.BorrowOf borrow -> "a handle of the resource '" + borrow.resource() + "'";
+			case WitType.OwnOf own -> "a handle of the resource '" + own.resource() + "'";
+			case WitType.Named named -> {
+				WitResolver.Owned owned = resolver.resolveOwned(scope, named.name());
+				if (owned == null) {
+					yield "'" + named.name() + "', a type the file does not define";
+				}
+				if (owned.owner() != scope) {
+					yield "'" + named.name() + "', a type of another interface (a use clause)";
+				}
+				if (!walking.add(named.name())) {
+					yield "'" + named.name() + "', a type that contains itself";
+				}
+				String refused = switch (owned.item()) {
+					case WitItem.TypeAlias alias -> refusedCanonical(alias.target(), resolver, scope, walking);
+					case WitItem.RecordDef record -> {
+						String field = record.fields().isEmpty() ? "'" + named.name() + "', a record of no field"
+								: null;
+						for (WitItem.Field f : record.fields()) {
+							field = field != null ? field : refusedCanonical(f.type(), resolver, scope, walking);
+						}
+						yield field;
+					}
+					case WitItem.VariantDef variant -> {
+						String payload = null;
+						for (WitItem.Case c : variant.cases()) {
+							payload = payload != null || c.payload() == null ? payload
+									: refusedCanonical(c.payload(), resolver, scope, walking);
+						}
+						yield payload;
+					}
+					case WitItem.EnumDef ignored -> null;
+					case WitItem.FlagsDef ignored -> "the flags '" + named.name() + "'";
+					case WitItem.ResourceDef ignored -> "a handle of the resource '" + named.name() + "'";
+					default -> "'" + named.name() + "'";
+				};
+				walking.remove(named.name());
+				yield refused;
+			}
+		};
+	}
+
+	// The WIT spellings the flat boundary carries, in vocabulary order.
 	private static String supportedWitTypes() {
-		List<String> names = new ArrayList<>();
-		for (BoundaryType type : BoundaryType.values()) {
-			if (type.witName() != null) {
-				names.add(type.witName());
-			}
-		}
-		return String.join(", ", names);
+		return BoundaryType.witNames();
 	}
 
 	// Names the WIT type and its settled house representation, so the error says what the

@@ -6189,7 +6189,9 @@ public final class WasmLispCompiler implements LispCompiler {
 				|| componentCallLiftWrappers.values()
 					.stream()
 					.anyMatch(WasmComponentImportCompiler.AsyncCall::liftsOctets)
-				|| componentAsyncWrappers.values().stream().anyMatch(WasmComponentImportCompiler.Async::liftsOctets);
+				|| componentAsyncWrappers.values().stream().anyMatch(WasmComponentImportCompiler.Async::liftsOctets)
+				// a canonical export bound with :octets t lifts a list<u8> parameter so
+				|| exportDecls.stream().anyMatch(decl -> decl.wit() != null && decl.wit().liftsOctets());
 		boolean bytesFromMem = bytesBoundary || streamReadsBytes || liftsOctets;
 		// An import wrapper that stages two or more :string/:s-expr PARAMETERS needs the
 		// park allocator under --reentrant (the regions must survive a park, and an
@@ -6487,6 +6489,14 @@ public final class WasmLispCompiler implements LispCompiler {
 							+ "' declares :bytes, a core-module (Preview 1 / --no-wasi) boundary type; the"
 							+ " --component path does not lift it yet");
 				}
+				// A canonical export's types are a component's: a core module's export
+				// is a function of core values, with no type to say a record by.
+				WitExportSignature wit = decl.wit();
+				if (wit != null && !this.component) {
+					throw new UnsupportedOperationException(wit.at() + ": export '" + decl.exportName()
+							+ "' carries a type only a component's export does (--component); a core module exports "
+							+ "the flat types alone (" + BoundaryType.witNames() + ")");
+				}
 				if (this.component && !this.serve) {
 					if (!WasmExportCompiler.COMPONENT_EXPORT_NAME.matcher(decl.exportName()).matches()) {
 						throw new UnsupportedOperationException("rontolisp:wasm-export name '" + decl.exportName()
@@ -6516,11 +6526,14 @@ public final class WasmLispCompiler implements LispCompiler {
 							+ "': its lambda list takes &optional/&rest/&key arguments, which have no fixed"
 							+ " host signature");
 				}
-				if (decl.paramTypes().size() != target.paramCount()) {
+				if (decl.arity() != target.paramCount()) {
 					throw new UnsupportedOperationException("rontolisp:wasm-export arity mismatch for '" + decl.name()
-							+ "': declared " + decl.paramTypes().size() + " params, but the function takes "
-							+ target.paramCount());
+							+ "': declared " + decl.arity() + " params, but the function takes " + target.paramCount());
 				}
+				// A canonical export's scratch is the two pools its marshalling draws
+				// from, sized by what its types' nesting measured.
+				WasmComponentImportCompiler.ExportPools pools = wit == null ? null : WasmComponentImportCompiler
+					.measureExport(ctxBuilder, decl, allocFuncIndex, strFromMemFuncIndex, bytesFromMemFuncIndex);
 				ByteArrayOutputStream bodyStream = new am.ik.wasm.UnsynchronizedByteArrayOutputStream();
 				WasmWriter bodyWriter = new WasmWriter(bodyStream);
 				Ctx wrapperCtx = ctxBuilder.writer(bodyWriter).bodyStream(bodyStream).build();
@@ -6533,10 +6546,16 @@ public final class WasmLispCompiler implements LispCompiler {
 				// parameters, so the boxing code can address them by a base it knows
 				// before emission; the (ref null eq) temps allocTemp hands out follow,
 				// then what a report compiled into the wrapper asks for.
-				List<Type> scratch = WasmExportCompiler.scratchTypes(decl);
+				List<Type> scratch = pools == null ? WasmExportCompiler.scratchTypes(decl) : pools.types();
 				wrapperCtx.nextLocal = paramSlots + scratch.size();
+				// What a canonical result stages is released by the post-return of the
+				// core's own cabi_realloc, the first function behind the wrappers.
+				WasmComponentImportCompiler.ExportMarshal marshal = pools == null ? null
+						: WasmComponentImportCompiler.exportMarshal(wrapperCtx, decl, pools, allocFuncIndex,
+								strFromMemFuncIndex, bytesFromMemFuncIndex,
+								exportHelperBase + helperFuncCount + exportDecls.size());
 				WasmExportCompiler.emitBody(wrapperCtx, decl, target.callIndex(), strFromMemFuncIndex,
-						bytesFromMemFuncIndex, bytesCopyFuncIndex);
+						bytesFromMemFuncIndex, bytesCopyFuncIndex, marshal);
 				exportBodies.add(assembleEntry(wrapperCtx, scratch, wrapperCtx.nextLocal - paramSlots - scratch.size(),
 						new byte[0], bodyStream.toByteArray()));
 				exportPlans.add(new ExportPlan(decl, target.funcIndex(), wrapperTypeIndex++, wrapperFuncIndex++));
@@ -6670,12 +6689,8 @@ public final class WasmLispCompiler implements LispCompiler {
 					retptrShimPlans.add(p);
 				}
 				if (WasmExportCompiler.usesMemory(p.decl())) {
-					componentPostKinds.putIfAbsent(WasmExportCompiler.componentPostReturnKind(p.decl()),
-							switch (WasmExportCompiler.componentPostReturnKind(p.decl())) {
-								case "f64" -> Type.F64;
-								case "void" -> null;
-								default -> Type.I32;
-							});
+					String kind = WasmExportCompiler.componentPostReturnKind(p.decl());
+					componentPostKinds.putIfAbsent(kind, WasmExportCompiler.postReturnParam(kind));
 				}
 			}
 		}
