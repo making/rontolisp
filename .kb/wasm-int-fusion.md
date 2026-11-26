@@ -170,6 +170,12 @@ or checked step; `fastBails` mirrors `emitFast`'s choices) emits its fast path a
   `valueRange` reads `%mask-signed-field` as its field, so a binding assigned one is exact.
 - **An order boundary with nothing to check is no boundary** (`planOrder`): its probe could
   never run.
+- **A Java `long >>>` by a computed count is one `i64.shr_u`** (`%ushr`, the JVM's twin,
+  [jvm-int-fusion.md](jvm-int-fusion.md), "Unsigned shift"): the 2^64 - 1 literal had declined
+  `(logand x 2^64-1)` to a leaf. 100,000 shifts of negative values 140-160 M fuel -> 20-25 M; a
+  SHA-512 digest reused for 20,000 messages 707-889 -> 166-308 ms; the `java-spec.yaml` corpus
+  4,907,785 -> 4,903,980 B (component 4,917,959 -> 4,914,154). Pinned by the fuel budget in
+  `WasmLispCompilerIntegrationTest.aMaskedSignedFieldAnswersTheSameFusedUnfusedAndAsAComponent`.
 - **A masked signed field over a lone leaf it cannot bail on is fused** (unfused it is the inline
   lowering, `expandMaskSignedField`); over a leaf that can bail it declines. The JVM fuses every
   such field ([jvm-int-fusion.md](jvm-int-fusion.md)).

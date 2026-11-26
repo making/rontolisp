@@ -11,15 +11,20 @@ public final class MaskSignedFieldProgram {
 
 	/**
 	 * {@code %mask-signed-field} over the shapes the fused root takes (a product, a sum,
-	 * a narrower field, a raw local's step) and the bails it survives (a bignum leaf, a
-	 * float, nil), plus literal fields the fusion leaves to the lowering (100 and 0 bits,
-	 * a lone constant). The values are SBCL's {@code sb-c::mask-signed-field}.
+	 * a narrower field, a raw local's step, a Java {@code long >>>} by a computed count)
+	 * and the bails it survives (a bignum leaf, a float, nil, a float operand of the
+	 * unsigned shift signalling before its count runs), plus literal fields the fusion
+	 * leaves to the lowering (100 and 0 bits, a lone constant). The values are SBCL's
+	 * {@code sb-c::mask-signed-field}.
 	 */
 	public static final String PROGRAM = """
 			(defun msf-mul (a b) (%mask-signed-field 64 (* a b)))
 			(defun msf-add (a b) (%mask-signed-field 64 (+ a b)))
 			(defun msf-int (a b) (%mask-signed-field 32 (* a b)))
 			(defun msf-byte (x) (%mask-signed-field 8 x))
+			(defun msf-ushr (x n) (%mask-signed-field 64 (ash (logand x 18446744073709551615) (- (logand n 63)))))
+			(defun msf-ushr-order (x)
+			  (%mask-signed-field 64 (ash (logand x 18446744073709551615) (- (logand (progn (princ "c") 3) 63)))))
 			(print (msf-mul 9223372036854775807 31))
 			(print (msf-mul 3 4))
 			(print (msf-mul -9223372036854775808 -1))
@@ -43,6 +48,12 @@ public final class MaskSignedFieldProgram {
 			(print (handler-case (%mask-signed-field 64 1.5) (type-error (c) (princ-to-string c))))
 			(print (handler-case (msf-mul 1.5 2) (type-error (c) (princ-to-string c))))
 			(print (handler-case (msf-add nil 2) (type-error () :type-error)))
+			(print (list (msf-ushr -1 0) (msf-ushr -1 1) (msf-ushr -1 63) (msf-ushr -1 64) (msf-ushr -1 -1)
+			             (msf-ushr -9223372036854775808 8) (msf-ushr 12345 3) (msf-ushr (- (expt 2 64) 2) 1)
+			             (msf-ushr 5 (+ (expt 2 70) 2))))
+			(print (msf-ushr-order -8))
+			(print (handler-case (msf-ushr-order 1.5) (type-error (c) (princ-to-string c))))
+			(print (handler-case (msf-ushr -1 nil) (type-error (c) (princ-to-string c))))
 			""";
 
 	/** What {@link #PROGRAM} prints. */
@@ -67,6 +78,10 @@ public final class MaskSignedFieldProgram {
 			-6598722044477124753
 			"LOGXOR: The value 1.5 is not of type INTEGER"
 			"LOGXOR: The value 3.0 is not of type INTEGER"
-			:TYPE-ERROR""";
+			:TYPE-ERROR
+			(-1 9223372036854775807 1 -1 1 36028797018963968 1543 9223372036854775807 1)
+			c2305843009213693951
+			"LOGAND: The value 1.5 is not of type INTEGER"
+			"LOGAND: The value NIL is not of type INTEGER\"""";
 
 }

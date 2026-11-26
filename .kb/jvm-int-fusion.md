@@ -44,6 +44,17 @@ that cannot throw is emitted in place ("Exact locals").
   fused. Pinned by
   `JvmLispCompilerTest.aMaskedSignedFieldOverAProductMultipliesInOneUncheckedLong`
   (`testsupport/MaskSignedFieldProgram`, default and size levels print SBCL's values).
+- **Unsigned shift**: `(%mask-signed-field 64 (ash (logand x 2^64-1) (- (logand c k))))`, a Java
+  `long >>>` by a computed count (`LispMacroExpander.unsignedShift`, the `--no-gc` backend's
+  matcher too), is the `%ushr` node, one `LUSHR`. Otherwise the 2^64 - 1 literal made
+  `(logand x 2^64-1)` a leaf failing its guard for every negative `x`. Its operand is the node
+  `(logand x -1)`: the masking `logand`'s application in the interpreter's order, so a
+  non-integer `x` signals before the count's leaves run (probe). Measured 2026-11-26 (a SHA-512
+  digest reused for 20,000 messages, median of rounds 6-11, three alternated pairs at load 26-33):
+  63-byte messages Graal 255-314 -> 54-90 ms, C2 337-352 -> 99-113; 64-byte 326-374 -> 130-175,
+  C2 444-445 -> 195-323, the rest the sentinel's bails ("Declared arrays"). The `java-spec.yaml`
+  corpus 8,222,992 -> 8,222,954 B, the reused-digest program 76,580 -> 76,421. Pinned by the
+  same test (`msf-ushr`, `msf-ushr-order`: an `LUSHR` in a fused method).
 
 ## The interpreter's order
 The call evaluates every leaf before the method applies anything, which matches the interpreter
@@ -221,9 +232,11 @@ other array form ([java-frontend.md](java-frontend.md), "Numbers").
   -> 189-252). After MD5, SHA-1, SHA-256 and SHA3-256 in one JVM: SHA-512 Graal 222-532 -> 95-193,
   C2 424-653 -> 223-241; SHA3-256 Graal 102-208 -> 40-73, C2 172-202 -> 83-124; the others within
   noise. Classes shrink: the `java-spec.yaml` corpus 8,258,946 -> 8,230,665 B, the SHA-512
-  program 310,720 -> 297,337. A digest reused for 20,000 messages of 64 bytes is within noise
-  (Graal 330-560 ms either way): `Sha512.output`'s `>>>` by a variable count goes through a
-  2^64 - 1 bignum mask.
+  program 310,720 -> 297,337.
+- **A read of the sentinel bails its whole tree** (`Long.MIN_VALUE` held packed,
+  [adjustable-arrays.md](adjustable-arrays.md)), whose fallback wraps each `long` through the
+  2^64 - 1 bignum: SHA-512's padding word of a message a multiple of 8 bytes long. A digest reused
+  for 64-byte messages: ~45% of JFR samples in `BigInteger` under `Sha512.block`.
 - **What C2 leaves**: it inlines no method past 325 bytecodes, which the round's fused method
   (877 B, most of it the fallback) is.
 
