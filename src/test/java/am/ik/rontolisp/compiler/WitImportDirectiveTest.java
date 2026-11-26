@@ -168,6 +168,15 @@ class WitImportDirectiveTest {
 		assertThat(WitImportDirective.parse(form("(rontolisp:wit-import \"wit/kv.wit\" :interface \"" + STORE + "\" "
 				+ ":package kv :from \"keyvalue\" :field-style :kebab)")))
 			.isEqualTo(new Directive("wit/kv.wit", STORE, "KV", "keyvalue", FieldStyle.KEBAB));
+		assertThat(WitImportDirective.parse(form("(rontolisp:wit-import \"kv.wit\" :interface store :blocking t"
+				+ " :aliases ((\"rows\" \"stream<row>\") (\"done\" \"future<result<_, error>>\")))")))
+			.isEqualTo(new Directive("kv.wit", "store", null, null, FieldStyle.CAMEL, null, false, false, true,
+					List.of(new WitImportDirective.Alias("rows", "stream<row>"),
+							new WitImportDirective.Alias("done", "future<result<_, error>>"))));
+		assertThatThrownBy(() -> WitImportDirective
+			.parse(form("(rontolisp:wit-import \"kv.wit\" :interface store :aliases (\"rows\"))")))
+			.isInstanceOf(UnsupportedOperationException.class)
+			.hasMessageStartingWith("rontolisp:wit-import :aliases expects a list of (\"name\" \"type\") pairs");
 	}
 
 	@Test
@@ -482,6 +491,18 @@ class WitImportDirectiveTest {
 		// A plain member stays exactly as it was -- the option is absent, not nil, so
 		// every pre-:async artifact keeps its byte identity.
 		assertThat(printed(lowerApi("  pull: func(url: string) -> string;", Backend.WASM_GC))).doesNotContain(":ASYNC");
+		// :blocking t binds it as a call that waits and answers the value: a plain
+		// import,
+		// a plain provider call, a component's synchronous lowering.
+		Directive blocking = new Directive(WIT, API, null, null, FieldStyle.CAMEL, null, false, false, true, List.of());
+		String body = "  pull: async func(url: string) -> string;";
+		assertThat(printed(lower(iface(body), Backend.WASM_GC, blocking)))
+			.isEqualTo("(RONTOLISP:WASM-IMPORT 'PULL :FROM \"api\" :AS \"pull\" :PARAMS '(:STRING) :RETURNS :STRING)");
+		assertThat(printed(lower(iface(body), Backend.OTHER, blocking)))
+			.isEqualTo("(DEFUN PULL (|url|) (RONTOLISP::%WIT-CALL \"example:app/api@0.1.0\" \"pull\" |url|))");
+		assertThat(printed(lower(iface(body), Backend.WASM_COMPONENT, blocking))).contains("(\"pull\" \"PULL\")")
+			.doesNotContain(":ASYNC-CALL")
+			.doesNotContain("ASYNC-DEFUN");
 	}
 
 	@Test
@@ -747,14 +768,35 @@ class WitImportDirectiveTest {
 	}
 
 	@Test
-	void refusesAStreamWhoseElementIsNotU8OnTheComponentBoundary() {
-		// Only a byte stream crosses in this release; a stream of a richer element has no
-		// canonical read yet, so it is a friendly compile error rather than a codegen
-		// throw.
-		assertThatThrownBy(() -> lowerApi("  drain: func(src: stream<string>);", Backend.WASM_COMPONENT))
+	void aStreamOfValuesCrossesAsAHandleItsAliasReadsAndNoGuestWrites() {
+		// A stream of another element than u8 crosses as its handle; an alias of it --
+		// the WIT's own, or one the directive adds for a stream the WIT writes where it
+		// is used -- binds a read of so many values, never a write: the guest reads it.
+		String body = "  list: func() -> tuple<stream<string>, future<result<_, string>>>;";
+		Directive aliased = new Directive(WIT, API, null, null, FieldStyle.CAMEL, null, false, false, false,
+				List.of(new WitImportDirective.Alias("names", "stream<string>"),
+						new WitImportDirective.Alias("listed", "future<result<_, string>>")));
+		Set<String> named = Set.of("list", "names-read", "names-drop-readable", "listed-read");
+		String printed = printed(
+				WitImportDirective.lower(aliased, iface(body), WIT, Backend.WASM_COMPONENT, named, named));
+		assertThat(printed).contains("(:ASYNC \"names\" \"read\" \"NAMES-READ\")")
+			.contains("(:ASYNC \"names\" \"drop-readable\" \"NAMES-DROP-READABLE\")")
+			.contains("(:ASYNC \"listed\" \"read\" \"LISTED-READ\")")
+			.contains("type names = stream<string>;")
+			.contains("type listed = future<result<_, string>>;");
+		Set<String> writes = Set.of("list", "names-write");
+		assertThatThrownBy(
+				() -> WitImportDirective.lower(aliased, iface(body), WIT, Backend.WASM_COMPONENT, writes, writes))
 			.isInstanceOf(UnsupportedOperationException.class)
-			.hasMessageContaining("is a stream whose element is not u8")
-			.hasMessageContaining("only stream<u8>");
+			.hasMessageContaining(
+					"'names-write': the alias 'names' names a stream of string, which is read-only for " + "the guest");
+		// an alias of a name the interface has is refused, as two of one name would be
+		Directive taken = new Directive(WIT, API, null, null, FieldStyle.CAMEL, null, false, false, false,
+				List.of(new WitImportDirective.Alias("list", "stream<string>")));
+		assertThatThrownBy(
+				() -> WitImportDirective.lower(taken, iface(body), WIT, Backend.WASM_COMPONENT, named, named))
+			.isInstanceOf(UnsupportedOperationException.class)
+			.hasMessage("kv.wit: rontolisp:wit-import :aliases names 'list', which interface 'api' already declares");
 	}
 
 	@Test
@@ -835,15 +877,6 @@ class WitImportDirectiveTest {
 				.hasMessageContaining("body-stream-read")
 				.hasMessageContaining("only the --component backend");
 		}
-	}
-
-	@Test
-	void anAsyncAliasToANonU8StreamIsRefusedWhenBound() {
-		String body = "  type wide = stream<string>;\n  probe: func() -> u32;";
-		assertThatThrownBy(() -> WitImportDirective.lower(new Directive(WIT, API, null, null, FieldStyle.CAMEL),
-				iface(body), WIT, Backend.WASM_COMPONENT, Set.of("probe", "wide-read"), Set.of("probe", "wide-read")))
-			.isInstanceOf(UnsupportedOperationException.class)
-			.hasMessageContaining("names a stream whose element is not u8");
 	}
 
 	@Test

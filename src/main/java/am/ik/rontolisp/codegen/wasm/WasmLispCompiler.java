@@ -6179,7 +6179,7 @@ public final class WasmLispCompiler implements LispCompiler {
 		// designator). Every module without one is byte-identical.
 		boolean streamReadsBytes = componentAsyncWrappers.values()
 			.stream()
-			.anyMatch(async -> async.stream() && !async.handleElement());
+			.anyMatch(WasmComponentImportCompiler.Async::byteElement);
 		// A component import bound with :octets t lifts a list<u8> in its result as the
 		// same packed vector, so it forces the helper on too -- only where such a result
 		// exists, so an :octets binding with none is byte-identical to one without.

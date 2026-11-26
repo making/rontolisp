@@ -103,7 +103,9 @@ public final class WitTypeMapper {
 		 * the async canonical built-ins ({@code stream.read} / {@code stream.write}).
 		 * Only the {@code --component} backend can marshal it; the interpreter, the JVM
 		 * and Preview 1 WASM reject it, since it needs the component-model async ABI. A
-		 * {@code stream<u8>} reads out as a byte string.
+		 * {@code stream<u8>} reads out as a byte string, a stream of resource handles a
+		 * handle a read, a stream of any other element a list of at most as many values
+		 * as the read asks for.
 		 */
 		STREAM_HANDLE,
 
@@ -153,8 +155,9 @@ public final class WitTypeMapper {
 	 * representation: the representation plus every type nested in it, aliases followed.
 	 *
 	 * @param rep the house representation
-	 * @param element an {@code option}'s element, a {@code result}'s ok arm or a
-	 * {@code list}'s element ({@code null} for a payload-less arm, and for every other
+	 * @param element an {@code option}'s element, a {@code result}'s ok arm, a
+	 * {@code list}'s or a {@code stream}'s element or a {@code future}'s payload
+	 * ({@code null} for a payload-less arm, a bare stream or future, and every other
 	 * representation)
 	 * @param wit the type as the WIT spells it where it is used, for a message
 	 * @param error a {@code result}'s error arm, {@code null} for a payload-less arm and

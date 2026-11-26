@@ -135,6 +135,17 @@ rontolisp counter.lisp -o Counter.class && java Counter
   します。プログラムがどの関数を呼んでも、インポートの名前と値はコンポーネントと
   同じになります(Java のフロントエンドのバインディングはそこでこれを指定します)。
   ほかのバックエンドでは無視されます。
+- `:blocking` — `t` にすると、すべての `async func` を、future ではなく呼び出しが
+  返るのを待って値を返す関数として、`func` と同じように束縛します。コンポーネントは
+  同期的に lower し、Preview 1 のモジュールは `:async t` なしでインポートし、
+  インタプリタと JVM はプロバイダを直接呼びます。Java のフロントエンドの
+  バインディングがこれを指定します。
+- `:aliases` — `(("name" "type") ...)`: ディレクティブがインターフェースに加える
+  型エイリアスです。それぞれ、WIT がそこで `type name = type;` を宣言したものとして
+  扱われます。stream と future は、その型のエイリアスの組み込みで読みます
+  ([stream と future](#streams-and-futures))。ホストが公開するままの WIT は
+  `stream<row>` を使う場所に直接書きますが、ディレクティブのエイリアスなら
+  そのファイルを編集せずに名前を付けられます。
 
 ## 何が束縛されるか
 
@@ -346,10 +357,49 @@ cons `(:ok . V)` / `(:error . E)` — これは戻り値の `result` が ok
 | `variant` | a keyword, or `(keyword . payload)` | no | yes |
 | `flags` | a list of keywords | no | no |
 | `resource`, `borrow<R>`, `own<R>` | an opaque integer handle | `:int` | yes |
-| `stream`, `future` | — | no | no |
+| `stream<T>`, `future<T>` | an opaque integer handle, read through an alias's built-ins | no | yes |
 
-`stream` と `future` はどのバックエンドにも対応する rontolisp
-の値がないため (言語レベルの async が必要)、すべてのバックエンドで拒否されます。
+`stream` と `future` にはコンポーネントモデルの async canonical ABI が必要なので、
+渡れるのは `--component` だけです。ほかのバックエンドは拒否します。
+
+## stream と future
+
+stream 型や future 型の `type` エイリアス (WIT 自身のもの、または
+[`:aliases`](#arguments) が加えたもの) は、その型の canonical な組み込みを、
+プログラムが名前を書いたときにエイリアスの名前で束縛します:
+
+| 組み込み | 呼び出し | 返すもの |
+| --- | --- | --- |
+| `stream<u8>` の `<alias>-read` | `(body-read h)` | 書き手が送ったものの `(unsigned-byte 8)` ベクタ。終わりでは `nil` |
+| リソースハンドルの stream の `<alias>-read` | `(accepted-read h)` | ハンドル 1 つ。終わりでは `nil` |
+| それ以外の型の stream の `<alias>-read` | `(rows-read h 100)` | 多くともその数の値のリスト。各値は関数の結果と同じように持ち上げられます。終わりでは `nil` |
+| `future<T>` の `<alias>-read` | `(done-read h)` | 値。`future<result<...>>` なら `(:ok . V)` / `(:error . E)` のエンベロープ。書き手が書かずに去ったときは `nil` |
+| `<alias>-drop-readable` | `(rows-drop-readable h)` | `nil`。読み取り側の端をホストに返します |
+| `<alias>-cancel-read` (stream のもの) | `(body-cancel-read h)` | まだ進行中の読み取りを取り下げます |
+
+値の stream の読み取りは、書き手が 1 つ送るか去るまでその場で待ちます(サーブされる
+コンポーネントでも同じです)。値を持ち上げたあと、ホストがその読み取りのために lower
+したものはすべて pop されます。したがって読み手が線形メモリに持つのは、stream が
+どれだけ保持していても、1 回の読み取りの値だけです。このような stream はゲストにとって
+読み取り専用です (`-new` も `-write` も束縛されません)。終わった stream は、ホストに
+問い合わせずに再び `nil` を返します。
+
+```console
+;;; spin:postgres の query-async は、列と stream<row>、それを終わらせる
+;;; future<result<_, error>> を返します。WIT は Spin のものを編集せずに使います。
+(rontolisp:wit-import "postgres.wit" :interface "spin:postgres/postgres@4.2.0" :package pg
+                      :blocking t
+                      :aliases (("rows" "stream<row>") ("done" "future<result<_, error>>")))
+
+(destructuring-bind (columns rows done)
+    (pg:connection-query-async conn "select id, title from note" nil)
+  (loop for chunk = (pg:rows-read rows 100)
+        while chunk
+        do (dolist (row chunk) (print row)))
+  (pg:done-read done)                      ; (:ok) または (:error . error)
+  (pg:rows-drop-readable rows)
+  (pg:done-drop-readable done))
+```
 
 ### 豊かな値を引数として渡す
 

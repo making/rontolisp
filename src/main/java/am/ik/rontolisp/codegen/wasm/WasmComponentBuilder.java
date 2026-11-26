@@ -1426,16 +1426,17 @@ public final class WasmComponentBuilder {
 
 	// The canon entry of one async built-in, typed by the derived component-level type.
 	// Memory options mirror the hand-assembled base block: reads and writes stage
-	// through the shared memory (core memory 0); a future.read whose payload carries a
-	// string/list<u8> additionally needs realloc (the shared memory's cabi_realloc =
-	// core func 0) for the host-staged bytes.
+	// through the shared memory (core memory 0); a future.read whose payload, or a
+	// stream.read whose values, carry a string or a list additionally needs realloc (the
+	// shared memory's cabi_realloc = core func 0) for the host-staged bytes.
 	static byte[] asyncCanon(WasmComponentImportCompiler.Async async, int type) {
 		return switch (async.op()) {
 			case NEW -> async.stream() ? ComponentWriter.canonStreamNew(type) : ComponentWriter.canonFutureNew(type);
 			// reads/writes are the ASYNC (non-blocking) built-in variants of base
 			// component-model-async: the generated wrapper parks on the interface's
 			// waitable-set when one reports BLOCKED (no gated feature involved)
-			case READ -> async.stream() ? ComponentWriter.canonStreamReadAsync(type, 0)
+			case READ -> async.stream() ? (WasmComponentImportCompiler.asyncReadNeedsRealloc(async)
+					? ComponentWriter.canonStreamReadAsync(type, 0, 0) : ComponentWriter.canonStreamReadAsync(type, 0))
 					: (WasmComponentImportCompiler.asyncReadNeedsRealloc(async)
 							? ComponentWriter.canonFutureReadAsync(type, 0, 0)
 							: ComponentWriter.canonFutureReadAsync(type, 0));
