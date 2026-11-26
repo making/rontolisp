@@ -395,6 +395,11 @@ record RunTimeImage(String source, @Nullable String entryFile, @Nullable String 
 			return this.delegate.makeLink(target, path);
 		}
 
+		@Override
+		public int makeHardLink(String target, String path) {
+			return this.delegate.makeHardLink(target, path);
+		}
+
 	}
 
 }

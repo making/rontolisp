@@ -11,6 +11,7 @@ import java.util.Enumeration;
 import java.util.LinkedHashMap;
 import java.util.List;
 import java.util.Map;
+import java.util.Objects;
 import java.util.zip.ZipEntry;
 import java.util.zip.ZipFile;
 
@@ -129,6 +130,19 @@ public interface SourceLoader {
 	}
 
 	/**
+	 * Makes a hard link at a path to what a target names -- what {@code %make-hard-link}
+	 * does. Never throws. The default makes none: a loader that is not a filesystem has
+	 * nothing to link to.
+	 * @param target what the link is made to
+	 * @param path where the link is made
+	 * @return 0 when made, else why not as WASI preview 1 numbers it (44: nothing is
+	 * there)
+	 */
+	default int makeHardLink(String target, String path) {
+		return 44;
+	}
+
+	/**
 	 * What the host's {@code stat} (following a link in the last component) or
 	 * {@code lstat} says of a path -- what {@code %file-stat} answers. Like
 	 * {@link #exists} it must never throw. The default is "nothing there", since a loader
@@ -238,9 +252,10 @@ public interface SourceLoader {
 	/**
 	 * What the host's {@code stat} or {@code lstat} said of a path: its {@code type} (1 a
 	 * regular file, 2 a directory, 3 a symbolic link, 4 anything else), size, times in
-	 * nanoseconds since 1970 ({@code made} {@code null} where the host does not say) and
-	 * permission bits ({@code null} where it has none); or, with {@code type} 0, why it
-	 * could not say ({@code refusal}).
+	 * nanoseconds since 1970 ({@code made} {@code null} where the host does not say),
+	 * permission bits ({@code null} where it has none), device and inode ({@code null}
+	 * where it does not say); or, with {@code type} 0, why it could not say
+	 * ({@code refusal}).
 	 *
 	 * @param type the type, 0 where refused
 	 * @param size the size in bytes
@@ -248,10 +263,12 @@ public interface SourceLoader {
 	 * @param accessed the time of last access
 	 * @param made the time the file was made, or {@code null}
 	 * @param mode the permission bits (07777), or {@code null}
+	 * @param device the device the file is on, or {@code null}
+	 * @param inode the file's number on its device, or {@code null}
 	 * @param refusal why nothing could be said, 0 where something was
 	 */
 	record FileStat(int type, long size, long modified, long accessed, @Nullable Long made, @Nullable Integer mode,
-			int refusal) {
+			@Nullable Long device, @Nullable Long inode, int refusal) {
 
 		/** Nothing is there, or something above the last name is no directory. */
 		public static final int MISSING = 1;
@@ -271,7 +288,7 @@ public interface SourceLoader {
 		 * @return the answer
 		 */
 		public static FileStat refused(int why) {
-			return new FileStat(0, 0, 0, 0, null, null, why);
+			return new FileStat(0, 0, 0, 0, null, null, null, null, why);
 		}
 
 		/**
@@ -572,6 +589,11 @@ public interface SourceLoader {
 			}
 
 			@Override
+			public int makeHardLink(String target, String path) {
+				return RontoFileModes.hardLink(target, path);
+			}
+
+			@Override
 			public FileStat stat(String path, boolean follow) {
 				if (path.isEmpty()) {
 					return FileStat.refused(FileStat.MISSING);
@@ -582,8 +604,12 @@ public interface SourceLoader {
 					java.nio.file.attribute.BasicFileAttributes a = Files.readAttributes(Path.of(path),
 							java.nio.file.attribute.BasicFileAttributes.class, options);
 					int type = a.isRegularFile() ? 1 : a.isDirectory() ? 2 : a.isSymbolicLink() ? 3 : 4;
+					Map<String, Object> unix = unix(Path.of(path), options);
 					return new FileStat(type, a.size(), nanos(a.lastModifiedTime()), nanos(a.lastAccessTime()),
-							nanos(a.creationTime()), mode(Path.of(path), options), 0);
+							nanos(a.creationTime()),
+							unix == null ? null : ((Integer) Objects.requireNonNull(unix.get("mode"))) & 07777,
+							unix == null ? null : (Long) unix.get("dev"), unix == null ? null : (Long) unix.get("ino"),
+							0);
 				}
 				catch (IOException | RuntimeException ex) {
 					return FileStat.refused(FileStat.reason(ex));
@@ -594,10 +620,11 @@ public interface SourceLoader {
 				return time.to(java.util.concurrent.TimeUnit.NANOSECONDS);
 			}
 
-			// The permission bits of the unix view, null on a host without one.
-			private static @Nullable Integer mode(Path at, java.nio.file.LinkOption... options) {
+			// The mode, the device and the inode of the unix view, null on a host without
+			// one.
+			private static @Nullable Map<String, Object> unix(Path at, java.nio.file.LinkOption... options) {
 				try {
-					return ((Integer) Files.getAttribute(at, "unix:mode", options)) & 07777;
+					return Files.readAttributes(at, "unix:mode,dev,ino", options);
 				}
 				catch (IOException | RuntimeException ex) {
 					return null;

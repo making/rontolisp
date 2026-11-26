@@ -2436,6 +2436,7 @@ final class JavaIntrinsics {
 		natives.put(disk + "rename(String,String)", runtime("file-rename"));
 		natives.put(disk + "readLink(String)", runtime("file-read-link"));
 		natives.put(disk + "link(String,String)", runtime("file-link"));
+		natives.put(disk + "hardLink(String,String)", runtime("file-hard-link"));
 		natives.put(disk + "workingDirectory()", runtime("file-working-directory"));
 		natives.put(disk + "real(String)", runtime("file-real"));
 		// what a class object holds of its class: the lowering's functions

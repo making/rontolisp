@@ -1,0 +1,17 @@
+mismatch: -1
+copy: b.txt
+after copy: a=true b=true nlink=2
+copy replace: b.txt
+after copy replace: a=true b=true nlink=2
+read b: hello
+move: b.txt
+after move: a=true b=true nlink=2
+move replace: b.txt
+after move replace: a=true b=true nlink=2
+move atomic: b.txt
+after move atomic: a=true b=true nlink=2
+Exception in thread "main" java.nio.file.FileAlreadyExistsException: b.txt
+	at java.base/sun.nio.fs.UnixFileSystem.copy(UnixFileSystem.java:989)
+	at java.base/sun.nio.fs.UnixFileSystemProvider.copy(UnixFileSystemProvider.java:280)
+	at java.base/java.nio.file.Files.copy(Files.java:1192)
+	at Same.main(Same.java:39)

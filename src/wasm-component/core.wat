@@ -49,6 +49,14 @@
   ;; symlink-at is an async func taking two strings; the SYNC lowering flattens to
   ;; (self, old_ptr, old_len, new_ptr, new_len, retptr).
   (import "wasi:filesystem/types@0.3.0" "[method]descriptor.symlink-at" (func (param i32 i32 i32 i32 i32 i32)))
+  ;; link-at is an async func taking path-flags, a string, a borrowed descriptor and a
+  ;; string; the SYNC lowering flattens to (self, old_flags, old_ptr, old_len, new_desc,
+  ;; new_ptr, new_len, retptr).
+  (import "wasi:filesystem/types@0.3.0" "[method]descriptor.link-at" (func (param i32 i32 i32 i32 i32 i32 i32 i32)))
+  ;; metadata-hash-at is an async func taking path-flags and a string; the SYNC lowering
+  ;; flattens to (self, path_flags, path_ptr, path_len, retptr), the result<
+  ;; metadata-hash-value, error-code> landing in the retptr (lower @8, upper @16).
+  (import "wasi:filesystem/types@0.3.0" "[method]descriptor.metadata-hash-at" (func (param i32 i32 i32 i32 i32)))
   (import "wasi:filesystem/preopens@0.3.0" "get-directories" (func (param i32)))
   (import "wasi:random/random@0.3.0" "get-random-u64" (func (result i64)))
   ;; get-terminal-* answer option<terminal-*>, two flat values, so the lowering returns

@@ -29246,6 +29246,15 @@ standalone:
               }
           }
 
+          static String hard(String name, String target) {
+              try {
+                  return Files.createLink(Path.of(name), Path.of(target)).toString();
+              }
+              catch (IOException e) {
+                  return e.toString();
+              }
+          }
+
           public static void main(String[] args) {
               Path empty = Path.of("");
               Path here = empty.toAbsolutePath();
@@ -29605,6 +29614,28 @@ standalone:
                       Path.of("out/lf3"), LinkOption.NOFOLLOW_LINKS, StandardCopyOption.COPY_ATTRIBUTES) + " "
                       + Files.readSymbolicLink(Path.of("out/lf3")));
               show("link copied over one", () -> Files.copy(lf, Path.of("out/lf3"), LinkOption.NOFOLLOW_LINKS));
+              // hard links: two names of one file, its key, and what a copy, a move and
+              // mismatch do with them
+              Path hl = Path.of("out/h/hl.txt");
+              show("hard link", () -> Files.createDirectories(hl.getParent()) + " " + hard("out/h/hl.txt", "links/f.txt")
+                      + " " + Files.readString(hl) + " " + Files.isSymbolicLink(Path.of(hard("out/h/hl2", "links/lf")))
+                      + " " + Files.isSameFile(hl, Path.of("links/f.txt")) + " " + Files.isSameFile(hl, lf) + " "
+                      + Files.isSameFile(hl, Path.of("locked.txt")) + " " + hard("out/h/hl3", "locked.txt"));
+              show("hard link key", () -> {
+                  Object key = Files.readAttributes(hl, BasicFileAttributes.class).fileKey();
+                  Object of = Files.getAttribute(Path.of("links/f.txt"), "fileKey");
+                  return key.equals(of) + " " + (key.hashCode() == of.hashCode()) + " "
+                          + key.equals(Files.readAttributes(lf, BasicFileAttributes.class, LinkOption.NOFOLLOW_LINKS).fileKey())
+                          + " " + key.toString().matches("[(]dev=[0-9a-f]+,ino=[0-9]+[)]");
+              });
+              show("hard links refused", () -> hard("out/h/hl.txt", "links/f.txt") + "; " + hard("out/h/x", "out/none")
+                      + "; " + hard("ro/h", "links/f.txt") + "; " + hard("out/h/w", "links/w") + "; "
+                      + hard("locked.txt/h", "links/f.txt"));
+              show("hard link copied and moved", () -> Files.copy(hl, Path.of("links/f.txt")) + " "
+                      + Files.move(hl, Path.of("links/f.txt"), StandardCopyOption.REPLACE_EXISTING) + " " + Files.exists(hl)
+                      + " " + Files.mismatch(Path.of("locked.txt"), Path.of("out/h/hl3")));
+              show("same file refused", () -> Files.isSameFile(hl, Path.of("locked.txt/x")));
+              show("copy unread onto itself", () -> Files.copy(Path.of("locked.txt"), Path.of("out/h/hl3")));
               // the times to the nanosecond, written by name and copied
               Path tm = Path.of("out/tm.txt");
               FileTime fixed = FileTime.from(Instant.parse("2001-02-03T04:05:06.123456789Z"));
@@ -29911,6 +29942,12 @@ standalone:
       link copied: hello false
       link copied as a link: out/lf2 f.txt out/lf2 . out/lf3 none
       link copied over one: java.nio.file.FileAlreadyExistsException: out/lf3
+      hard link: out/h out/h/hl.txt hello true true true false out/h/hl3
+      hard link key: true true false true
+      hard links refused: java.nio.file.FileAlreadyExistsException: out/h/hl.txt -> links/f.txt; java.nio.file.NoSuchFileException: out/h/x -> out/none; java.nio.file.AccessDeniedException: ro/h -> links/f.txt; java.nio.file.FileSystemException: out/h/w -> links/w: Operation not permitted; java.nio.file.FileSystemException: locked.txt/h -> links/f.txt: Not a directory
+      hard link copied and moved: links/f.txt links/f.txt true -1
+      same file refused: java.nio.file.FileSystemException: locked.txt/x: Not a directory
+      copy unread onto itself: java.nio.file.AccessDeniedException: locked.txt
       times: 2001-02-03T04:05:06.123456789Z 981173106123 true
       times copied: 2001-02-03T04:05:06.123456789Z false
       times by name: out/tm.txt 1970-01-01T00:00:01Z 2 {lastModifiedTime=1970-01-01T00:00:01Z, size=2, isRegularFile=true, isOther=false}

@@ -573,11 +573,45 @@ public final class Files {
         return name != null && name.toString().startsWith(".");
     }
 
+    // Equal paths without asking the host; else what each leads to, by its device and
+    // inode where the host says them (two names of one file are the same file), by its
+    // real path where it does not.
     public static boolean isSameFile(Path path, Path path2) throws IOException {
         if (path.equals(path2)) {
             return true;
         }
+        long[] one = followed(path);
+        long[] two = followed(path2);
+        if (keyed(one) && keyed(two)) {
+            return one[Disk.DEVICE] == two[Disk.DEVICE] && one[Disk.INODE] == two[Disk.INODE];
+        }
         return path.toRealPath().equals(path2.toRealPath());
+    }
+
+    // The stat of what a path leads to, or the exception isSameFile throws where there
+    // is none: a JDK's words for a name above that is no directory and for a loop.
+    private static long[] followed(Path path) throws IOException {
+        long[] stat = Disk.stat(host(path), true);
+        if (stat[Disk.KIND] == Disk.NONE) {
+            throw refusal(path, false);
+        }
+        return stat;
+    }
+
+    // Whether a stat of something there says its device and inode.
+    private static boolean keyed(long[] stat) {
+        return stat[Disk.KIND] != Disk.NONE && (stat[Disk.DEVICE] != 0 || stat[Disk.INODE] != 0);
+    }
+
+    // Whether a copy's or a move's source and target, each there, are one file: a link
+    // in the source's last name followed where asked, the target's never.
+    private static boolean same(Path source, boolean follow, Path target) throws IOException {
+        long[] one = Disk.stat(host(source), follow);
+        long[] two = Disk.stat(host(target), false);
+        if (keyed(one) && keyed(two)) {
+            return one[Disk.DEVICE] == two[Disk.DEVICE] && one[Disk.INODE] == two[Disk.INODE];
+        }
+        return identity(source, follow).equals(identity(target, false));
     }
 
     public static long size(Path path) throws IOException {
@@ -621,7 +655,7 @@ public final class Files {
         return new Described(stat);
     }
 
-    // What a stat said, as attributes. A file's key the subset does not have.
+    // What a stat said, as attributes.
     private static class Described implements BasicFileAttributes {
         private final long[] stat;
 
@@ -661,8 +695,43 @@ public final class Files {
             return stat[Disk.SIZE];
         }
 
+        // The device and the inode, null where the host does not say them.
         public Object fileKey() {
-            return null;
+            return keyed(stat) ? new Key(stat[Disk.DEVICE], stat[Disk.INODE]) : null;
+        }
+    }
+
+    // A file's key: its device and inode, equal for two names of one file, written as a
+    // JDK on a Unix host writes one (measured: the device in hexadecimal, the inode in
+    // decimal; the hash their sum).
+    private static final class Key {
+        private final long device;
+
+        private final long inode;
+
+        Key(long device, long inode) {
+            this.device = device;
+            this.inode = inode;
+        }
+
+        public boolean equals(Object other) {
+            return other instanceof Key that && that.device == device && that.inode == inode;
+        }
+
+        public int hashCode() {
+            return (int) (device + inode);
+        }
+
+        // The device in hexadecimal by hand: Long.toHexString would cost every program
+        // reading attributes by name tens of kilobytes of wasm.
+        public String toString() {
+            String hex = "";
+            long rest = device;
+            do {
+                hex = "0123456789abcdef".charAt((int) rest & 15) + hex;
+                rest >>>= 4;
+            } while (rest != 0);
+            return "(dev=" + hex + ",ino=" + inode + ")";
         }
     }
 
@@ -1082,6 +1151,26 @@ public final class Files {
         return link;
     }
 
+    // Another name of what a path names, a symbolic link in its last name not followed
+    // (a JDK's on Linux); the empty path is the working directory. The host's refusal is
+    // a JDK's exception for its errno, naming both paths.
+    public static Path createLink(Path link, Path existing) throws IOException {
+        int why = Disk.hardLink(host(existing), host(link));
+        if (why == 0) {
+            return link;
+        }
+        String made = link.toString();
+        String to = existing.toString();
+        throw why == 44 ? new NoSuchFileException(made, to, null)
+                : why == 20 ? new FileAlreadyExistsException(made, to, null)
+                        : why == 2 ? new AccessDeniedException(made, to, null)
+                                : new FileSystemException(made, to, why == 63 ? "Operation not permitted"
+                                        : why == 54 ? "Not a directory"
+                                                : why == 75 ? "Invalid cross-device link"
+                                                        : why == 32 ? Disk.LOOP_WORDS
+                                                                : why == 37 ? "File name too long" : null);
+    }
+
     // What a link holds, as a path. A WASI host reads no link whose target is absolute:
     // AccessDeniedException.
     public static Path readSymbolicLink(Path link) throws IOException {
@@ -1285,7 +1374,16 @@ public final class Files {
         if (kind == Disk.LINK && held == null) {
             throw new AccessDeniedException(source.toString());
         }
-        if (own(target) != Disk.NONE && identity(source, follow).equals(identity(target, false))) {
+        if (kind == Disk.FILE) {
+            // a file the program may not read is refused before anything of the target
+            // is asked, onto another name of itself too (a JDK's)
+            Object file = Disk.open(host(source), Disk.READ);
+            if (file == null) {
+                throw refusal(source, false);
+            }
+            Disk.close(file);
+        }
+        if (own(target) != Disk.NONE && same(source, follow, target)) {
             return target;
         }
         cleared(target, replaces(options));
@@ -1354,7 +1452,7 @@ public final class Files {
                     : new NoSuchFileException(source.toString());
         }
         int there = own(target);
-        if (there != Disk.NONE && identity(source, false).equals(identity(target, false))) {
+        if (there != Disk.NONE && same(source, false, target)) {
             return target;
         }
         if (atomic) {
@@ -1385,9 +1483,13 @@ public final class Files {
         return target;
     }
 
+    // One file matches itself unread (a JDK's: a file the program may not read too).
     public static long mismatch(Path path, Path path2) throws IOException {
+        if (isSameFile(path, path2)) {
+            return -1;
+        }
         byte[] one = readAllBytes(path);
-        byte[] two = path.equals(path2) ? one : readAllBytes(path2);
+        byte[] two = readAllBytes(path2);
         int n = Math.min(one.length, two.length);
         for (int i = 0; i < n; i++) {
             if (one[i] != two[i]) {

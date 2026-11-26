@@ -1939,6 +1939,19 @@ final class WasmExprCompiler {
 				ctx.writer.write(Instruction.CALL);
 				ctx.writer.writeUnsignedLeb128(WasmLispCompiler.FUNC_MAKE_LINK);
 			}
+			case LispNames.MAKE_HARD_LINK_INTERNAL -> {
+				// _make_hard_link over the injected path_link, the fixnum 44 on a
+				// --no-wasi module, which has no files.
+				java.util.List<LispVal> parts = cons.toList();
+				if (parts.size() != 3) {
+					throw new UnsupportedOperationException(
+							LispNames.MAKE_HARD_LINK_INTERNAL + " expects 2 arguments, got " + (parts.size() - 1));
+				}
+				WasmExprCompiler.compileExpr(parts.get(1), ctx);
+				WasmExprCompiler.compileExpr(parts.get(2), ctx);
+				ctx.writer.write(Instruction.CALL);
+				ctx.writer.writeUnsignedLeb128(WasmLispCompiler.FUNC_MAKE_HARD_LINK);
+			}
 			case LispNames.FILE_STAT_INTERNAL, LispNames.FILE_SET_TIMES_INTERNAL -> {
 				// _file_stat over the injected path_filestat_get, _file_set_times over
 				// path_filestat_set_times; the fixnum 1 (nothing there) on a --no-wasi

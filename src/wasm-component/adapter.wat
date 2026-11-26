@@ -5,7 +5,7 @@
 ;; (WasmComponentBuilder.PREVIEW1_FUNCS). In WASI 0.3 the wasi:io package is gone and all
 ;; byte I/O flows through the built-in stream<u8> / future<T> types, so fd_write/fd_read/
 ;; path_open/fd_close/fd_readdir/fd_prestat_*/fd_filestat_get/path_filestat_get/
-;; path_filestat_set_times/path_readlink/path_symlink/path_create_directory/
+;; path_filestat_set_times/path_readlink/path_symlink/path_link/path_create_directory/
 ;; path_unlink_file/path_remove_directory/path_rename are implemented with stream.new/read/write/drop + future.read over wasi:cli + wasi:filesystem
 ;; 0.3; fd_fdstat_get answers for the three standard streams over wasi:cli's
 ;; terminal-stdin / terminal-stdout / terminal-stderr; random_get/clock_time_get/environ_*
@@ -132,6 +132,11 @@
   ;; a string), so it gets its own read / drop built-ins.
   (import "w" "stream-read-de" (func $stream_read_de_a (param i32 i32 i32) (result i32)))
   (import "w" "stream-drop-r-de" (func $stream_drop_r_de (param i32)))
+  ;; the last two: a hard link, and what tells two names of one file from two files
+  ;; (behind %make-hard-link and %file-stat's device and inode). Appended last, as
+  ;; their functions below are, so a program reaching neither keeps every index.
+  (import "w" "link-at" (func $link_at (param i32 i32 i32 i32 i32 i32 i32 i32)))
+  (import "w" "metadata-hash-at" (func $metadata_hash_at (param i32 i32 i32 i32 i32)))
 
   ;; The adapter's one waitable-set, created on first blocking completion.
   (func $ensure_ws (result i32)
@@ -957,6 +962,55 @@
         (i32.store8 (local.get $buf) (i32.const 2))))
     (i32.const 0))
 
+  ;; path_link(old_fd, old_flags, old_path, old_len, new_fd, new_path, new_len) ->
+  ;; errno, over descriptor.link-at: the SYNC lowering of async func(old-path-flags,
+  ;; old-path: string, new-descriptor: borrow<descriptor>, new-path: string), so the call
+  ;; is (self, old_flags, old_ptr, old_len, new_desc, new_ptr, new_len, retptr). Each
+  ;; dirfd resolves to its preopen descriptor on its own, as $path_rename's; the flags'
+  ;; symlink-follow bit passes through. The result<_, error-code> lands at 0x50050 like
+  ;; the other filesystem writes'; a refusal is its preview1 errno ($p1_link_errno).
+  (func $path_link (param $ofd i32) (param $oflags i32) (param $opath i32) (param $olen i32)
+    (param $nfd i32) (param $npath i32) (param $nlen i32) (result i32)
+    (local $opre i32) (local $npre i32)
+    (local.set $opre (call $preopen_desc (i32.sub (local.get $ofd) (i32.const 3))))
+    (if (i32.eq (local.get $opre) (i32.const -1)) (then (return (i32.const 76))))
+    (local.set $npre (call $preopen_desc (i32.sub (local.get $nfd) (i32.const 3))))
+    (if (i32.eq (local.get $npre) (i32.const -1)) (then (return (i32.const 76))))
+    (call $link_at (local.get $opre) (i32.and (local.get $oflags) (i32.const 1))
+      (local.get $opath) (local.get $olen) (local.get $npre) (local.get $npath) (local.get $nlen)
+      (i32.const 0x50050))
+    (if (i32.load8_u (i32.const 0x50050))
+      (then (return (call $p1_link_errno (i32.load8_u (i32.const 0x50054))))))
+    (i32.const 0))
+
+  ;; $p1_errno, and the cases a link adds: exist 20, name-too-long 37, cross-device 75.
+  (func $p1_link_errno (param $code i32) (result i32)
+    (if (i32.eq (local.get $code) (i32.const 6)) (then (return (i32.const 20))))
+    (if (i32.eq (local.get $code) (i32.const 17)) (then (return (i32.const 37))))
+    (if (i32.eq (local.get $code) (i32.const 36)) (then (return (i32.const 75))))
+    (call $p1_errno (local.get $code)))
+
+  ;; $path_filestat_get with dev and ino filled from descriptor.metadata-hash-at (the
+  ;; SYNC lowering of async func(path-flags, path: string) -> result<
+  ;; metadata-hash-value, error-code>, so the call is (self, path-flags, path_ptr,
+  ;; path_len, retptr)), its upper half the device and its lower the inode: what tells
+  ;; two names of one file from two files, WASI 0.3's stat having neither. A hash the
+  ;; host refuses leaves both 0, "not said".
+  (func $path_filestat_get_keyed (param $fd i32) (param $flags i32) (param $path i32)
+    (param $plen i32) (param $buf i32) (result i32)
+    (local $errno i32)
+    (local.set $errno (call $path_filestat_get (local.get $fd) (local.get $flags)
+      (local.get $path) (local.get $plen) (local.get $buf)))
+    (if (local.get $errno) (then (return (local.get $errno))))
+    (call $metadata_hash_at (call $preopen_desc (i32.sub (local.get $fd) (i32.const 3)))
+      (i32.and (local.get $flags) (i32.const 1)) (local.get $path) (local.get $plen)
+      (i32.const 0x51600))
+    (if (i32.eqz (i32.load8_u (i32.const 0x51600)))
+      (then
+        (i64.store (local.get $buf) (i64.load offset=16 (i32.const 0x51600)))
+        (i64.store offset=8 (local.get $buf) (i64.load offset=8 (i32.const 0x51600)))))
+    (i32.const 0))
+
   (export "fd_write" (func $fd_write))
   (export "fd_read" (func $fd_read))
   ;; The stdio-only / stdout-only / stdin-only implementations, retained UNDER the names
@@ -975,7 +1029,7 @@
   (export "fd_prestat_get" (func $fd_prestat_get))
   (export "fd_prestat_dir_name" (func $fd_prestat_dir_name))
   (export "fd_filestat_get" (func $fd_filestat_get))
-  (export "path_filestat_get" (func $path_filestat_get))
+  (export "path_filestat_get" (func $path_filestat_get_keyed))
   (export "path_filestat_set_times" (func $path_filestat_set_times))
   (export "path_readlink" (func $path_readlink))
   (export "path_symlink" (func $path_symlink))
@@ -985,4 +1039,10 @@
   (export "path_create_directory" (func $path_create_directory))
   (export "path_unlink_file" (func $path_unlink_file))
   (export "path_remove_directory" (func $path_remove_directory))
-  (export "path_rename" (func $path_rename)))
+  (export "path_rename" (func $path_rename))
+  (export "path_link" (func $path_link))
+  ;; path_filestat_get with the device and the inode filled, retained under that name by
+  ;; WasmComponentBuilder where the program asks a stat's device and inode (%file-stat);
+  ;; the one without them where it does not (file-write-date alone).
+  (export "path_filestat_get_keyless" (func $path_filestat_get))
+  (export "path_filestat_get_keyed" (func $path_filestat_get_keyed)))

@@ -2844,7 +2844,8 @@ public final class JvmLispCompiler implements LispCompiler {
 				|| programUsesSymbol(program, LispNames.FILE_SET_MODE_INTERNAL)
 				|| programUsesSymbol(program, LispNames.FILE_MAKE_INTERNAL)
 				|| programUsesSymbol(program, LispNames.FILE_UNIX_INTERNAL)
-				|| programUsesSymbol(program, LispNames.FILE_SET_OWNER_INTERNAL);
+				|| programUsesSymbol(program, LispNames.FILE_SET_OWNER_INTERNAL)
+				|| programUsesSymbol(program, LispNames.MAKE_HARD_LINK_INTERNAL);
 		// An equalp table folds its keys through RontoHashTable.equalpKey, and every
 		// table's put/remove/count/values helpers call its tombstone machinery, so that
 		// class travels with any hash-using output -- and with nothing else, since no

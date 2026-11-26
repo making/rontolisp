@@ -1581,7 +1581,8 @@ final class JvmExprCompiler {
 					LispNames.MAKE_LINK_INTERNAL ->
 				JvmFileMetaCompiler.compile(cons, ctx, className, sym.name());
 			case LispNames.FILE_ACCESS_INTERNAL, LispNames.FILE_SPACE_INTERNAL, LispNames.FILE_SET_MODE_INTERNAL,
-					LispNames.FILE_MAKE_INTERNAL, LispNames.FILE_UNIX_INTERNAL, LispNames.FILE_SET_OWNER_INTERNAL ->
+					LispNames.FILE_MAKE_INTERNAL, LispNames.FILE_UNIX_INTERNAL, LispNames.FILE_SET_OWNER_INTERNAL,
+					LispNames.MAKE_HARD_LINK_INTERNAL ->
 				compileFileModes(sym.name(), cons, ctx, className);
 			case LispNames.TERMINAL_P_INTERNAL -> {
 				// isatty through runtime/RontoTerminal, which travels with the class.
@@ -2774,8 +2775,9 @@ final class JvmExprCompiler {
 	/**
 	 * Compiles a permission primitive -- {@code %file-access}, {@code %file-space},
 	 * {@code %file-set-mode}, {@code %file-make}, {@code %file-unix},
-	 * {@code %file-set-owner} -- onto its {@code runtime/RontoFileModes} method, which
-	 * travels with the class. The path is the first argument.
+	 * {@code %file-set-owner}, {@code %make-hard-link} -- onto its
+	 * {@code runtime/RontoFileModes} method, which travels with the class. The path is
+	 * the first argument; {@code %make-hard-link}'s two are both paths.
 	 */
 	private static void compileFileModes(String name, LispCons cons, JvmLispCompiler.Ctx ctx, String className) {
 		List<LispVal> items = cons.toList();
@@ -2790,7 +2792,7 @@ final class JvmExprCompiler {
 		}
 		for (int i = 1; i <= arity; i++) {
 			compileExpr(items.get(i), ctx, className);
-			if (i == 1) {
+			if (i == 1 || LispNames.MAKE_HARD_LINK_INTERNAL.equals(name)) {
 				JvmArrayCompiler.emitStrvNormalize(ctx, className);
 			}
 		}
@@ -2800,6 +2802,7 @@ final class JvmExprCompiler {
 			case LispNames.FILE_SET_MODE_INTERNAL -> "fileSetMode";
 			case LispNames.FILE_UNIX_INTERNAL -> "fileUnix";
 			case LispNames.FILE_SET_OWNER_INTERNAL -> "fileSetOwner";
+			case LispNames.MAKE_HARD_LINK_INTERNAL -> "fileHardLink";
 			default -> "fileMake";
 		};
 		ctx.body.invokestatic(ctx.cp.methodRef(ctx.cp.classEntry(JvmLispCompiler.FILE_MODES_CLASS), method,

@@ -720,7 +720,9 @@ handle, an errno, a non-regular file.
 wasmtime REFUSES an unaligned buffer (`Pointer not aligned to 8`). Advance over it for the call and pop
 after (the `_open` discipline, load-bearing under `--component` because the adapter allocates through
 `cabi_realloc` at that cell). `adapter.wat` re-encodes the preview1 `filestat` from a SYNC-lowered
-`descriptor.stat` (result at `0x51600`; dev/ino zero-filled; `$p1_timestamp`).
+`descriptor.stat` (result at `0x51600`; dev/ino zero-filled, but `path_filestat_get`'s keyed form
+fills them from `metadata-hash-at`, [java-frontend.md](java-frontend.md), "Hard links and a file's
+key"; `$p1_timestamp`).
 
 **`file-write-date` is REAL on all four backends.** It names a PATH, so WASM stats it through an
 INJECTED `path_filestat_get` (`.kb/wasm-import.md`), gated on the program naming it (or `%file-stat`),
@@ -734,7 +736,8 @@ file with `touch -d` (`CorpusFixtures.writePre1970File`). The serve bridge answe
 
 **`%file-stat` / `%file-set-times`** (`stat` / `lstat` with no file opened; the Java subset's files
 are their one caller, [java-frontend.md](java-frontend.md)) are real on all four; creation time and
-permission bits are nil on both WASI backends. The interpreter's `BasicFileAttributeView` opens the
+permission bits are nil on both WASI backends; the device and the inode are the host's
+(wasmtime's on WASI, which are no inode). The interpreter's `BasicFileAttributeView` opens the
 file, so a file the program may not read takes its modification time through `File.setLastModified`.
 WASM reads a timestamp signed and writes a time below zero as 0 (Preview 1's is unsigned). wasmtime
 51.0.0: both calls serve a mode-000 file and directory, a link to an absolute path is errno 63, a

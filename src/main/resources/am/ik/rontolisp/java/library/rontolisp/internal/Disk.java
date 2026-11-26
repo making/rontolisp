@@ -46,8 +46,9 @@ public final class Disk {
     public static final int LOOPED = 3;
 
     // the slots of a stat: the kind (or NONE and why), the size, the times of last
-    // writing, last access and making in nanoseconds since 1970, and the permission bits
-    // (07777; -1 where the host has none)
+    // writing, last access and making in nanoseconds since 1970, the permission bits
+    // (07777; -1 where the host has none), and the device and the inode, which tell two
+    // names of one file from two files (both 0 where the host does not say)
     public static final int KIND = 0;
 
     public static final int WHY = 1;
@@ -61,6 +62,10 @@ public final class Disk {
     public static final int MADE = 4;
 
     public static final int MODE = 5;
+
+    public static final int DEVICE = 6;
+
+    public static final int INODE = 7;
 
     // what refused reports
     public static final int MISSING = 0;
@@ -95,9 +100,10 @@ public final class Disk {
     }
 
     // What the host's stat (following a link in the last name) or lstat says of a path,
-    // with no file opened: {kind, size, modified, accessed, made, mode}, the times in
-    // nanoseconds since 1970 (the time of making the time of last writing where the host
-    // does not say), the permission bits -1 where the host has none; or {NONE, why}.
+    // with no file opened: {kind, size, modified, accessed, made, mode, device, inode},
+    // the times in nanoseconds since 1970 (the time of making the time of last writing
+    // where the host does not say), the permission bits -1 where the host has none, the
+    // device and the inode 0 where it does not say them; or {NONE, why}.
     public static native long[] stat(String path, boolean follow);
 
     // Whether the host keeps permission bits: a WASI host keeps none, and the classes
@@ -188,6 +194,10 @@ public final class Disk {
     // Makes a symbolic link at a path holding a target as given: whether it was made (a
     // WASI host makes none whose target is absolute).
     public static native boolean link(String target, String path);
+
+    // Makes a hard link at a path to what a target names, a symbolic link in its last
+    // name not followed: 0, or why not as WASI preview 1 numbers it (errno).
+    public static native int hardLink(String target, String path);
 
     // The working directory, null where the host has none to name (a .wasm whose
     // first preopen has a relative name).

@@ -72,7 +72,7 @@ class ComponentImportBlockTest {
 		assertThat(block.members().get(SYSTEM_CLOCK)).containsExactly("instant", "now");
 		assertThat(block.members().get(FS_TYPES)).startsWith("descriptor", "filesize", "error-code")
 			.contains("new-timestamp", method("set-times-at"))
-			.endsWith(method("unlink-file-at"));
+			.endsWith(method("metadata-hash-at"));
 	}
 
 	@Test
@@ -127,9 +127,11 @@ class ComponentImportBlockTest {
 		// and every index after each hole moves down.
 		ComponentImportBlock base = ComponentImportBlock.parse(embedded("import-block.bin"));
 		Map<String, Set<String>> keep = new LinkedHashMap<>(base.members());
-		keep.put(FS_TYPES, Set.of(method("read-via-stream"), method("append-via-stream"), method("write-via-stream"),
-				method("open-at"), method("read-directory"), method("create-directory-at"), method("unlink-file-at"),
-				method("remove-directory-at"), method("readlink-at"), method("rename-at"), method("symlink-at")));
+		keep.put(FS_TYPES,
+				Set.of(method("read-via-stream"), method("append-via-stream"), method("write-via-stream"),
+						method("open-at"), method("read-directory"), method("create-directory-at"),
+						method("unlink-file-at"), method("remove-directory-at"), method("readlink-at"),
+						method("rename-at"), method("symlink-at"), method("link-at"), method("metadata-hash-at")));
 
 		ComponentImportBlock.Pruned pruned = base.prune(keep);
 
@@ -177,14 +179,14 @@ class ComponentImportBlockTest {
 		// The renumbering has to hold for every combination, not just the ones a program
 		// happens to produce. wasi:filesystem/types is the interface with the most
 		// members and the only one projecting another's type for some of them: each of
-		// the 16,383 non-empty sets of its fourteen functions, with the interfaces around
+		// the 65,535 non-empty sets of its sixteen functions, with the interfaces around
 		// it kept whole, must come back as a block whose every index lands inside it.
 		ComponentImportBlock block = ComponentImportBlock.parse(embedded("import-block.bin"));
 		List<String> functions = java.util.Objects.requireNonNull(block.members().get(FS_TYPES))
 			.stream()
 			.filter(name -> name.startsWith("[method]"))
 			.toList();
-		assertThat(functions).hasSize(14);
+		assertThat(functions).hasSize(16);
 
 		for (int mask = 1; mask < (1 << functions.size()); mask++) {
 			Map<String, Set<String>> keep = new LinkedHashMap<>(block.members());

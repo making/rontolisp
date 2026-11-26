@@ -26,9 +26,10 @@ import java.util.concurrent.TimeUnit;
  * partition holding it ({@code %file-space}), its bits written ({@code %file-set-mode}),
  * a file or a directory made with bits ({@code %file-make}), the numbers and the names
  * {@code stat} gives beside the basic ones ({@code %file-unix}) and an owner and a group
- * given ({@code %file-set-owner}). The interpreter calls the {@code String} forms, the
- * JVM backend the forms over rontolisp values; no WASI host has these, so neither WASM
- * backend compiles them. Nothing here throws.
+ * given ({@code %file-set-owner}); and a hard link made ({@code %make-hard-link}). The
+ * interpreter calls the {@code String} forms, the JVM backend the forms over rontolisp
+ * values; no WASI host has the first six, so neither WASM backend compiles them, and both
+ * make a hard link through the host's own call. Nothing here throws.
  *
  * <p>
  * The class imports nothing of rontolisp, so it travels beside a compiled program that
@@ -228,6 +229,52 @@ public final class RontoFileModes {
 		}
 	}
 
+	/**
+	 * Makes a hard link at a path to what a target names, a link in its last name not
+	 * followed ({@code link(2)}).
+	 * @param target what the link is made to
+	 * @param path where the link is made
+	 * @return 0, or why not as WASI preview 1 numbers it ({@code errno}), which the
+	 * {@code %make-hard-link} of both WASM backends answers as it is
+	 */
+	public static int hardLink(String target, String path) {
+		try {
+			Files.createLink(Path.of(path), Path.of(target));
+			return 0;
+		}
+		catch (IOException | RuntimeException ex) {
+			return errno(ex);
+		}
+	}
+
+	// The preview 1 errno of why an operation failed: the exception's class, or the
+	// words a JDK gives after the paths.
+	private static int errno(Exception failed) {
+		if (failed instanceof NoSuchFileException || failed instanceof InvalidPathException) {
+			return 44;
+		}
+		if (failed instanceof java.nio.file.FileAlreadyExistsException) {
+			return 20;
+		}
+		if (failed instanceof AccessDeniedException) {
+			return 2;
+		}
+		String why = failed instanceof FileSystemException named ? named.getReason() : null;
+		if (why == null) {
+			return 29;
+		}
+		if (why.startsWith("Too many levels of symbolic links")) {
+			return 32;
+		}
+		return switch (why) {
+			case "Operation not permitted" -> 63;
+			case "Not a directory" -> 54;
+			case "Invalid cross-device link" -> 75;
+			case "File name too long" -> 37;
+			default -> 29;
+		};
+	}
+
 	// The permissions of the low nine bits: OWNER_READ is 0400, OTHERS_EXECUTE 01.
 	private static Set<PosixFilePermission> permissions(int mode) {
 		Set<PosixFilePermission> set = EnumSet.noneOf(PosixFilePermission.class);
@@ -316,6 +363,16 @@ public final class RontoFileModes {
 	 */
 	public static Object fileSetOwner(Object path, Object follow, Object uid, Object gid) {
 		return (long) setOwner(text(path), follow != null, ((Number) uid).intValue(), ((Number) gid).intValue());
+	}
+
+	/**
+	 * The JVM backend's {@code %make-hard-link}.
+	 * @param target the target, a quoted string
+	 * @param path the path, a quoted string
+	 * @return 0 or why not, a {@code Long}
+	 */
+	public static Object fileHardLink(Object target, Object path) {
+		return (long) hardLink(text(target), text(path));
 	}
 
 	// A rontolisp string value carries its quotes.
