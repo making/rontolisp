@@ -27,11 +27,13 @@ BOOL and only widen (BOOL -> INT -> FLOAT); `compileExpr` inserts promotions fro
 `i64` makes integers exact to 2^63. INT yields to STRING; FLOAT-vs-STRING and string-vs-number
 are type errors (except nil->""). Predicates and `t`/`nil` answer BOOL; arithmetic seeds INT.
 **Stated residual**: BOOL joined with INT is INT, so `(princ (if p t 1))` prints `1` where the
-interpreter prints `T`.
+interpreter prints `T`. An exact module's nil meeting an integer is `NINT` instead, its seeds
+`NEVER` ("Exact mode").
 
-**VOID is the TRUE bottom** (`join(VOID, X) = X`): a form leaving the stack untouched. It meets
-a value only in `coerce`, which materializes nil in the consumer's representation (`pushNil`);
-`coerce(X, VOID)` is the one place a `drop` is decided. Void are exactly: `while`, `terpri`,
+**VOID is the TRUE bottom** (`join(VOID, X) = X`; an exact module's `NEVER` is below it, "Exact
+mode"): a form leaving the stack untouched. It meets a value only in `coerce`, which
+materializes nil in the consumer's representation (`pushNil`); `coerce(X, VOID)` is the one
+place a `drop` is decided. Void are exactly: `while`, `terpri`,
 an empty `progn`, a call to a `:void` import. It spreads through the return fixpoint
 (`returns` seeds at VOID), except a function exported under a value-returning designator seeds
 at INT.
@@ -335,14 +337,66 @@ it, which traps.
 rely on; a lowered language's program and its run time are written for Common Lisp, so their
 module answers as Common Lisp does or refuses** (`Builder.exact`; the CLI sets it from
 `CompileFrontend.Result.lowered`: an entry source that is no Common Lisp, or a program holding
-`java.lisp`, `JavaLibrary.runs`).
-- **A test of a number is refused** (`refuseNumberTest`): nil and 0 are one value, so the test
-  cannot tell them apart. The dialect reads it as zero-is-false. Measured 2026-11-25, refusing it
-  everywhere: 3 of the 9 compiling `--no-gc` examples refused (the Proxy-Wasm SDK's
-  "nil or a pointer" tests, exact under zero-is-false since a pointer is never 0), so the dialect
-  stays. What it costs Java: `java.lisp`'s nil-or-integer idioms (`%java-substring`'s optional
-  `end`, `%java-string-compare`'s `found`, `position` in a double's text, `digit-char-p` in
-  `parseInt`) are refused, `.todo/m46-nil-or-integer-values-in-an-exact-scalar-module.md`.
+`java.lisp`, `JavaLibrary.runs`). Measured 2026-11-25, refusing a test of a number in the
+dialect too: 3 of the 9 compiling `--no-gc` examples refused (the Proxy-Wasm SDK's "nil or a
+pointer" tests, exact under zero-is-false since a pointer is never 0), so the dialect stays.
+- **Nil meeting an integer is `Ty.NINT`, an i64 whose nil is `Long.MIN_VALUE`** (`NIL_INT`):
+  where nil (`VOID`, `BOOL`) and an `INT` flow into one value something reads -- a slot, an
+  `if`'s branches, a block's result, a parameter, a return, a global. An integer is itself, so a
+  read as one costs nothing; the nil test is `x rotl 1 == 1` (6 B; the dialect's `!= 0`, 3 B),
+  the nil `1 rotr 1` (5 B; its `i64.const` 11, which a global's initializer, a constant
+  expression, takes). So an exact module's `INT` is never nil and its test is true
+  (`neverNil`); a `FLOAT`'s test stays refused (`refuseNumberTest`): its nil is its 0.0, and no
+  nil-or-float was asked for.
+  - **Traps** (`coerce(Fn, Ty, Ty)`, one scratch per function): an integer entering one traps on
+    `MIN_VALUE`, the one integer it shadows; one read as an integer (an operand, an `INT`
+    parameter of a host import, `:s64`) traps on nil, the type error every other backend
+    signals; read as a float (a join with a `FLOAT`, an operand) nil is the 0.0 every float's
+    nil is; a boolean entering one is 1 for `t`. A narrow boundary type's range guard traps on
+    `MIN_VALUE` already, `:bool` is the nil test, and `eql` compares the i64s (nil eql nil).
+  - **Rejected**: a flag beside the value (two values for every slot, parameter and result: a
+    result is multi-value, no MVP module), and nil kept 0 with the integers moved
+    (`n xor MIN_VALUE`: 12 B at every read, which narrowing makes the common use).
+- **A value nothing reads keeps the dialect's join** (`typeOf(.., discard)`, `compileExpr(..,
+  discard)`, the same forms on both sides: a statement, the last form or branches of one, a block
+  whose value is dropped and the values it returns, the body of a function no position reads --
+  `valueUsed`, grown in the inference fixpoint from the value exports). Without it every
+  `if (c) x = v;` -- `(if c (setq x v))`, an `INT` and an absent else -- and every void method
+  ending in one held a nil-or-integer nothing read.
+- **`NEVER`** (exact only; the dialect types the same forms `VOID`, and both emit alike):
+  `error`, and a function every path of which ends in one. Below `VOID`, so `(if c (throw) n)`
+  is `INT` with no nil. Every return and parameter seeds at it: a `BOOL` seed is a real nil
+  there, and joined with the `INT` a later pass finds it made a nil-or-integer of every `:s32`
+  export. A slot left `NEVER` (a parameter no call passes a value that returns) is settled to
+  `BOOL` after the fixpoint; a value export left `VOID`/`NEVER` traps in its wrapper (`:bool`:
+  false).
+- **Narrowing**: in a branch of an `if` whose test shows a local not nil -- the variable, a
+  `not`'s operand false, a conjunction (`and`, an `if` whose else is nil) true -- and which
+  assigns it nowhere (`assigns`: a `setq` the backend's macros reach, the one way a local
+  changes with no closure), the local reads as `INT` (`narrowed`, `narrowLocals`): `(if x x d)`,
+  `(or x d)`, `(and x (< x r))` read it free. `(if b b n)` of a `BOOL` is its `t` there, which
+  meets an integer as the dialect's `INT` does, `t` as 1 (`nilMeetsInt`): `substring(from)`'s
+  `(if end end (length s))` over the nil it passes is byte-identical. Not done: a `while` body's.
+- **`position`, `search`, `digit-char-p`** (exact only, `NoGcInternalForms.normalize(form,
+  exact)`; the dialect refuses them, an index 0 being its nil). `search` of a string in a string
+  (`:start2`, `:end2`, `:from-end`) is `%no-gc-search`, the `__search` helper: bytes match where
+  characters do (a needle starts at a lead byte), the index is the lead bytes before the match,
+  a bound outside the hay traps once `__strlen_cp` has counted it. `position` of a character is
+  the search of its one-character string, given back by a `with-arena` around it: O(n), where a
+  `char` loop is O(n^2) here. `digit-char-p` is an ASCII digit's weight below the radix, as
+  wasm-GC reads it (`.todo/269`); a radix no literal in 2..36 is checked. Arguments bind in the
+  order written; `:test`, `:key` and the rest are refused by name.
+- **Measured 2026-11-26**: every older module byte-identical -- the 37 modules the 15 programs
+  of `examples/` and `size-report/` that compile `--no-gc` make at the default `--optimize`,
+  `=off` and `--component` (the exact ones `hello-java`'s `Worker`, `java/no-wasi`'s `Calc`,
+  `java/shop`'s `Money`), `JavaReactorTest`'s `Tally`, and a 24-method Java probe of statement
+  ifs, `break`/`continue` loops, switches, throws and void methods; every other program of the
+  four trees and the test resources refused as before, by the same message. What it
+  makes, a reactor of one method each (raw / gzip -9; `--no-wasi`'s raw): `substring(int, int)`
+  1,700 / 1,000 (5,715), `compareTo` 1,274 / 803 (4,379), a `double` in a `+` 4,224 / 2,576
+  (8,449), `Integer.parseInt` 3,956 / 1,922 (11,789), `indexOf(String)` 1,089 / 693 (5,446);
+  those with `lastIndexOf`, `indexOf(char)`, `contains`, `Long.parseLong` and `Character.digit`
+  in one class 10,212 / 5,117 (25,488).
 - **An index outside a packed vector traps** (`emitElementAddr`: one unsigned compare against
   the `[count]` header); the dialect does not check.
 - **A nil `:string` result traps** (no host string is nil), as the wasm-GC reactor's illegal
@@ -481,8 +535,10 @@ The top level, structures, `error`, named blocks and exact mode: `NoGcWasmCompil
 `rejectsProgramWithNoExports`; `WasmLispCompilerIntegrationTest`
 `noGcTopLevelHoldsGlobalsAndRunsTheStartFunction` (a computed initial value, a structure, a
 `return-from`, the trap) and `noGcUsesExactI64IntegerArithmetic` (the i64 quotient); a lowered
-program end to end, `JavaReactorTest.aReactorOfScalarValuesCompilesWithNoGcAndWhatLeavesTheSubsetIsRefusedByName`.
+program end to end, `JavaReactorTest.aReactorOfScalarValuesCompilesWithNoGcAndWhatLeavesTheSubsetIsRefusedByName`
+(the nil-or-integer members against a JDK, an index 0 among them); the nil-or-integer's
+byte-identity and representation, `NoGcWasmCompilerTest.anExactModuleHoldsANilOrIntegerOnlyWhereItsValueIsRead`.
 
 ## Unfinished
 `:s-expr` (cons/reader/printer runtime) is deferred (`.todo/023`); the `_start` command-module
-stretch is `.todo/111`; nil-or-integer values in exact mode, `.todo/m46`.
+stretch is `.todo/111`.

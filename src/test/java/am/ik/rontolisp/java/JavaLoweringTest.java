@@ -207,8 +207,7 @@ class JavaLoweringTest {
 			assertThat(JavaLowering.RAISED).as("java.lisp names %s", named.group(1)).contains(named.group(1));
 		}
 		// the decimal digits above ASCII Character.digit reads are the running JDK's
-		assertThat(runtimeLibrary().replaceAll("\\s+", " ")).as("java.lisp's %java-unicode-digit")
-			.contains("'(" + decimalZeros() + ")");
+		assertThat(runtimeLibrary()).as("java.lisp's %java-unicode-digit").contains("\"" + decimalZeros() + "\"");
 		// the prelude keeps a function a program names in any position, so a variable or
 		// a slot of java.lisp named as one keeps it in every program reaching the
 		// definition: `describe` kept 10 KB of wasm in each program that throws
@@ -235,16 +234,17 @@ class JavaLoweringTest {
 
 	/**
 	 * The zeros of the sets of ten code points above ASCII whose general category is Nd,
-	 * as java.lisp's {@code %java-unicode-digit} lists them.
+	 * in order, as java.lisp's {@code %java-unicode-digit} spells them: the characters of
+	 * a string.
 	 */
 	private static String decimalZeros() {
-		List<String> zeros = new ArrayList<>();
+		StringBuilder zeros = new StringBuilder();
 		for (int code = 0x80; code <= Character.MAX_CODE_POINT; code++) {
 			if (Character.getType(code) == Character.DECIMAL_DIGIT_NUMBER && Character.digit(code, 10) == 0) {
-				zeros.add(Integer.toString(code));
+				zeros.appendCodePoint(code);
 			}
 		}
-		return String.join(" ", zeros);
+		return zeros.toString();
 	}
 
 	/**

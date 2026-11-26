@@ -76,8 +76,8 @@
 > ([`rontolisp:tls-connect`](../reference/functions/rontolisp-tls-connect.md)
 > と
 > [`rontolisp:tls-upgrade`](../reference/functions/rontolisp-tls-upgrade.md))
-> はインタプリタ、JVM、WASM `--component` バックエンドで動きます
-> (上記フラグに `-S tls=y` を追加)。TLSの*サーバー*関数
+> はインタプリタ、JVM、WASM `--component` バックエンド
+> (上記フラグに `-S tls=y` を追加)、`--host-sockets` のホストのソケットで動きます。TLSの*サーバー*関数
 > ([`rontolisp:tls-listen`](../reference/functions/rontolisp-tls-listen.md)
 > と
 > [`rontolisp:tls-listen-pem`](../reference/functions/rontolisp-tls-listen-pem.md))
@@ -474,7 +474,10 @@ WASM `--component` バックエンドでも動きます。wasmtime の実験的�
 `-S tls=y` を追加します — そこでは失敗は `nil` を返し、`:insecure` は
 エラーを通知し(ドラフトには検証をスキップするノブがありません)、
 `tls-upgrade` はハンドルを**その場で**アップグレードします(同じハンドルを
-返し、まだ何も書き込まれていないことを要求します)。素の Preview 1 の `.wasm` と
+返し、まだ何も書き込まれていないことを要求します)。`--host-sockets` を付けて
+ビルドした `--no-wasi` のモジュールでは、ホストのソケット(Worker の `startTls()`)
+の上で動きます。そこでは失敗はシグナルし、アップグレードはその場で行い、
+`:insecure` は拒否します。素の Preview 1 の `.wasm` と
 [ネイティブ実行ファイル](../compiling/native.md#tcp-sockets)では、クライアント関数の
 呼び出しは実行時にエラーを通知します。そのため `https://` の分岐を通らない
 プログラムはそこでもコンパイルできます。TLS の*サーバー*関数は

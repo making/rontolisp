@@ -1256,26 +1256,23 @@
 
 ;; Character.digit above ASCII: a fullwidth Latin letter as the ASCII one, a decimal
 ;; digit of Unicode (the general category Nd) as its distance from the zero of its set
-;; of ten, the zeros in order. A running JDK's, as the regular-expression engine's
-;; tables are (JavaLoweringTest#theLoweringTable pins them to it). Third-party: Unicode
-;; Character Database data (Unicode-3.0), Copyright (c) 1991-2026 Unicode, Inc.
-;; Notice: THIRD-PARTY-NOTICES.txt, "Unicode".
+;; of ten, the zeros in order as the characters of a string (data on every backend; a
+;; quoted list would be conses, which --no-gc has none of). A running JDK's, as the
+;; regular-expression engine's tables are (JavaLoweringTest#theLoweringTable pins them
+;; to it). Third-party: Unicode Character Database data (Unicode-3.0), Copyright (c)
+;; 1991-2026 Unicode, Inc. Notice: THIRD-PARTY-NOTICES.txt, "Unicode".
 (defun rontolisp::%java-unicode-digit (code)
   (if (and (>= code 65313) (<= code 65370))
       (digit-char-p (code-char (- code 65248)) 36)
       (let ((zeros
-             '(1632 1776 1984 2406 2534 2662 2790 2918 3046 3174 3302 3430 3558
-               3664 3792 3872 4160 4240 6112 6160 6470 6608 6784 6800 6992 7088
-               7232 7248 42528 43216 43264 43472 43504 43600 44016 65296 66720
-               68912 68928 69734 69872 69942 70096 70384 70736 70864 71248 71360
-               71376 71386 71472 71904 72016 72688 72784 73040 73120 73552 90416
-               92768 92864 93008 93552 118000 120782 120792 120802 120812 120822
-               123200 123632 124144 124401 125264 130032))
+             "٠۰߀०০੦૦୦௦౦೦൦෦๐໐༠၀႐០᠐᥆᧐᪀᪐᭐᮰᱀᱐꘠꣐꤀꧐꧰꩐꯰０𐒠𐴰𐵀𑁦𑃰𑄶𑇐𑋰𑑐𑓐𑙐𑛀𑛐𑛚𑜰𑣠𑥐𑯰𑱐𑵐𑶠𑽐𖄰𖩠𖫀𖭐𖵰𜳰𝟎𝟘𝟢𝟬𝟶𞅀𞋰𞓰𞗱𞥐🯰")
+            (i 0)
             (found nil))
-        (while zeros
-          (let ((above (- code (car zeros))))
-            (if (and (>= above 0) (< above 10)) (setq found above)))
-          (setq zeros (cdr zeros)))
+        (let ((n (length zeros)))
+          (while (< i n)
+            (let ((above (- code (char-code (char zeros i)))))
+              (if (and (>= above 0) (< above 10)) (setq found above)))
+            (setq i (+ i 1))))
         found)))
 
 ;; Character.digit: an ASCII digit or letter as Common Lisp reads it in base 36, which

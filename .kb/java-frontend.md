@@ -1480,27 +1480,29 @@ is a trap", "Exact mode"), so no backend learns a Java name.**
   hello-java`'s `Worker` 1,103 / 699 B against 3,956 / 2,089 on `--no-wasi` (`../hello`'s Lisp is
   465 B); `JavaReactorTest`'s `Tally` 3,770 / 1,956 against 11,102 / 5,297; a 44-method probe of
   the subset 13,552 against 28,328 (`Math.pow`/`sin` pull the fdlibm runtime into both).
-- **Exact** (the module's `Builder.exact`, set for a lowered program): a test of a number is
-  refused, an index outside a `double[]` traps, a null `String` result traps. What that refuses
-  of the run time, by name: `java.lisp`'s nil-or-integer idioms -- `substring` (its optional
-  `end`), `compareTo`, a `double` in a `+` (`position` in `%java-double-string`),
-  `Integer.parseInt` (`digit-char-p`) -- `.todo/m46-nil-or-integer-values-in-an-exact-scalar-module.md`.
-  A `float` computes (`%single-float`: demote and promote, as on wasm-GC); its text refuses
-  (`rational` in `%java-float-string`).
+- **Exact** (the module's `Builder.exact`, set for a lowered program): the run time's index or
+  nil is nil apart from 0 (`.kb/no-gc-scalar-wasm.md`, "Exact mode", with the sizes), so
+  `substring` (both), `compareTo`, `indexOf` and `lastIndexOf` of a `String` and of a `char`,
+  `contains`, `Integer.parseInt`, `Long.parseLong`, `Character.digit` and a `double` in a `+`
+  answer as a JDK; a test of a float is refused, an index outside a `double[]` traps, a null
+  `String` result traps. A `float` computes (`%single-float`: demote and promote, as on wasm-GC);
+  its text refuses (`rational` in `%java-float-string`).
+- **`%java-unicode-digit`'s zeros are a string** (2026-11-26), read with `char`: a quoted list is
+  conses, which `--no-gc` has none of ("`Character.digit`" below, with what it measured).
 - **Outside the subset, refused where the backend meets it**: a read of an object (`reads a
   structure (Point)`), an array of another element type, a lambda, a box (its null test), a
   `StringBuilder`, `try` (`handler-case`), a lazy class (its `<clinit>` catches to wrap in an
-  `ExceptionInInitializerError`), `toUpperCase`, `indexOf` (`search`'s `&key`), a static `String`
-  assigned during a call (the call's memory is given back when it ends). At the innermost form
-  the lowering locates, or with the chain of methods that reached a library's function.
+  `ExceptionInInitializerError`), `toUpperCase`, a static `String` assigned during a call (the
+  call's memory is given back when it ends). At the innermost form the lowering locates, or
+  with the chain of methods that reached a library's function.
 - **A command is refused** (`exports nothing`): a `main` makes one, and the scalar module is a
   reactor (`.todo/111`).
 - **`--component`: a `@WitExport` world** ("WIT exports"), the lowering the GC component's but
   for the report (`JavaBoundary.reportsUncaught`, false on every reactor): the initialization
   is the top level as is, the start function's, and an uncaught exception the bare trap.
-  Measured 2026-11-26: `rust-calls-java`'s counter with `indexOf(char)` written as `==`s 2,040
-  / 1,075 B gzip against 12,988 / 5,913 as a wasm-GC component (the example as written,
-  15,076, stops at `position` in `%java-index-of-char`: the nil-or-integer of `indexOf`);
+  Measured 2026-11-26: `rust-calls-java`'s counter as written 2,345 / 1,282 B gzip against
+  15,076 / 6,984 as a wasm-GC component, its `indexOf(char)` a `position` ("Exact" above);
+  with the `indexOf` written as `==`s 2,040 / 1,075 against 12,988 / 5,913;
   `JavaWitImportTest`'s `Kinds` with its `StringBuilder` a `String`, 2,226 B.
 - **Pinned by** `JavaReactorTest.aReactorOfScalarValuesCompilesWithNoGcAndWhatLeavesTheSubsetIsRefusedByName`
   (a JDK against the module under node, no glue; the traps; the refusals),
@@ -2272,16 +2274,21 @@ answers to probes ([java-frontend-provenance.md](java-frontend-provenance.md)).
   `java.base`), so `Flow.listed(Object[])` is a `native` member calling
   `ImmutableCollections.listed`: no member a program could name.
 - **`Character.digit`** (`%java-digit`): ASCII and the fullwidth Latin letters by base 36, a
-  Unicode decimal digit (Nd) by its distance from its zero, the 75 zeros above ASCII a quoted
-  list (`%java-unicode-digit`, pinned to the running JDK by
+  Unicode decimal digit (Nd) by its distance from its zero, the 75 zeros above ASCII the
+  characters of a string (`%java-unicode-digit`, pinned to the running JDK by
   `JavaLoweringTest#theLoweringTable`); the host's `digit-char-p` knows Unicode's digits on the
   interpreter and the JVM, none on wasm. A number's text and a format's control read ASCII
   digits only, as a JDK. `Sweep.java` of every code point gives a JDK's `digit` and
-  `toTitleCase` on the JVM and wasm. Measured: the list 670 B of wasm and its scan 590 (+1,538
-  in a program parsing an int), where a string of bounds decoded into a vector was 3,166, a
-  vector literal +3.8 KB, the zeros as a string +2.6 KB. **Not made**: `getNumericValue` of the
-  numbers that are no digit (`Ⅷ`, `²`, `½`; 4 KB as text) -- in every program calling it, and
-  programs call it for ASCII digits.
+  `toTitleCase` on the JVM and wasm. Measured at first (k71): the zeros a quoted list, 670 B of
+  wasm and its scan 590 (+1,538 in a program parsing an int), where a string of bounds decoded
+  into a vector was 3,166, a vector literal +3.8 KB, the zeros as a string +2.6 KB. **Measured
+  again 2026-11-26, the string against the list** (the list conses 75 cells at each call, and
+  `--no-gc` has none): a command parsing ints, longs and a double -1,604 B of JVM classes, -215
+  of wasm, -171 of component; one whose only string work is `Character.digit` -1,274 JVM, -294
+  wasm, +271 component; a `--no-wasi` reactor of `parseInt` 12,083 -> 11,789, of
+  `Character.digit` alone 3,982 -> 4,529 (the string's indexing is its only one). **Not
+  made**: `getNumericValue` of the numbers that are no digit (`Ⅷ`, `²`, `½`; 4 KB as text) --
+  in every program calling it, and programs call it for ASCII digits.
 - **Members** (`Strip.java`, `Title.java`): `translateEscapes`' refusal is a JDK's (U+0000
   named after a final backslash); `toTitleCase` is the uppercase but for the digraphs `Ǆ` ..
   `ǌ`, `Ǳ` .. `ǳ` and Georgian's Mkhedruli, which has none.

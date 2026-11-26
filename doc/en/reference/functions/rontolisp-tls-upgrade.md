@@ -76,6 +76,14 @@ HTTPS requests prefer [`rontolisp:fetch`](rontolisp-fetch.md)):
   each 8 KiB piece goes out after a 1 ms wait. (wasmtime 51 holds back the
   end of an unbuffered stream of small writes, and of a write past 16 KiB,
   until the next write.)
+- **WASM `--no-wasi --host-sockets`**: supported over the host's sockets, a
+  Cloudflare Worker's `connect()` and its `startTls()`
+  ([Sockets from the host](../../guides/wasm-gc-module.md#sockets-from-the-host---host-sockets)).
+  Failures signal, with the interpreter's texts and the platform's words. The
+  host verifies the certificate with its own trust anchors, so a non-`nil`
+  `:insecure` value signals.
+  The answer is the **same** handle it was given, upgraded in place; what came
+  in the clear and was not read is dropped.
 - **WASM Preview 1**, a [native executable](../../compiling/native.md#tcp-sockets)
   included: not supported — the call **signals an error when it runs** (no TLS
   host API exists for Preview 1), so a program that never reaches it still
