@@ -111,6 +111,15 @@ public final class NoGcWasmCompiler implements LispCompiler {
 	private enum Ty {
 
 		/**
+		 * A form control never leaves normally -- an {@code error}, a call of a function
+		 * every path of which ends in one -- in an exact module ({@link Builder#exact})
+		 * only; the dialect types the same forms {@link #VOID}. Below {@code VOID}: it
+		 * yields to whatever the other side of a join answers, where {@code VOID} is the
+		 * nil an absent value stands for, so a branch that throws adds no nil to the
+		 * integer the other branch answers. Emitted exactly as {@code VOID} is.
+		 */
+		NEVER,
+		/**
 		 * No value at all -- a form evaluated purely for its effect, which leaves the
 		 * stack untouched. It is the lattice BOTTOM (joining with anything yields the
 		 * other side), so it never meets {@code INT}/{@code FLOAT} in an expression:
@@ -120,6 +129,7 @@ public final class NoGcWasmCompiler implements LispCompiler {
 		 * {@code terpri} and an empty {@code progn} -- and it spreads from there through
 		 * the return fixpoint, so a function all of whose paths are void is itself
 		 * {@code (...) -> ()} and a {@code :void} export of it needs no wrapper at all.
+		 * In an exact module the nil it stands for meets an integer as {@link #NINT}.
 		 */
 		VOID,
 		/**
@@ -133,8 +143,22 @@ public final class NoGcWasmCompiler implements LispCompiler {
 		 * silent agreement.
 		 */
 		BOOL,
-		/** A 64-bit integer ({@code i64}). */
+		/**
+		 * A 64-bit integer ({@code i64}). In an exact module it is never nil (nil meeting
+		 * an integer is {@link #NINT}), so a test of one is true.
+		 */
 		INT,
+		/**
+		 * Nil or an integer, in an exact module ({@link Builder#exact}): an {@code i64}
+		 * whose nil is {@code Long.MIN_VALUE} ({@code NIL_INT}), so 0 stays an integer.
+		 * An integer is itself, read as one for free; the one integer the nil shadows
+		 * traps where it would enter, and so does a nil read as an integer, the type
+		 * error every other backend signals. Where nil and an integer flow into one value
+		 * -- a slot, a join of branches, a block's result -- whose value something reads;
+		 * a value nothing reads keeps the dialect's {@code INT}, so a module with none is
+		 * byte-identical.
+		 */
+		NINT,
 		/** A 64-bit float ({@code f64}). */
 		FLOAT,
 		/**
@@ -200,8 +224,33 @@ public final class NoGcWasmCompiler implements LispCompiler {
 		 * number / string / float-vector), which is a genuine type error.
 		 */
 		Ty join(Ty other) {
+			return join(other, false);
+		}
+
+		/**
+		 * {@link #join(Ty)}, choosing what nil meeting an integer is.
+		 * @param other the other type
+		 * @param nilInt whether nil ({@code VOID} or {@code BOOL}) meeting an {@code INT}
+		 * is {@link #NINT} -- an exact module's value something reads -- rather than the
+		 * {@code INT} whose 0 is nil
+		 * @return the join
+		 */
+		Ty join(Ty other, boolean nilInt) {
 			if (this == other) {
 				return this;
+			}
+			if (this == NEVER) {
+				return other;
+			}
+			if (other == NEVER) {
+				return this;
+			}
+			if (nilInt && ((this == INT && other.isNil()) || (other == INT && this.isNil()))) {
+				return NINT;
+			}
+			// nil-or-integer absorbs nil and an integer
+			if ((this == NINT && (other.isNil() || other == INT)) || (other == NINT && (this.isNil() || this == INT))) {
+				return NINT;
 			}
 			// VOID is the true bottom: a branch that produces nothing yields to one that
 			// does, and the void side then materializes nil at the join.
@@ -222,14 +271,24 @@ public final class NoGcWasmCompiler implements LispCompiler {
 				throw new UnsupportedOperationException("--no-gc: incompatible types " + this + " and " + other
 						+ " (a structure or a function object is no number, string or float-vector)");
 			}
-			if (this == INT) {
+			if (this == INT || this == NINT) {
 				return other;
 			}
-			if (other == INT) {
+			if (other == INT || other == NINT) {
 				return this;
 			}
 			throw new UnsupportedOperationException("--no-gc: incompatible types " + this + " and " + other
 					+ " (a value cannot be more than one of number / string / float-vector)");
+		}
+
+		/** Whether this is a form that leaves nothing on the stack. */
+		boolean isVoid() {
+			return this == VOID || this == NEVER;
+		}
+
+		/** Whether this is only ever nil: an absent value or a boolean's. */
+		private boolean isNil() {
+			return this == VOID || this == BOOL;
 		}
 
 		/**
@@ -239,8 +298,9 @@ public final class NoGcWasmCompiler implements LispCompiler {
 		 */
 		int valType() {
 			return switch (this) {
-				case VOID -> throw new IllegalStateException("--no-gc: VOID has no value type (it is not a value)");
-				case BOOL, INT, OPAQUE -> Type.I64.code();
+				case VOID, NEVER ->
+					throw new IllegalStateException("--no-gc: " + this + " has no value type (it is not a value)");
+				case BOOL, INT, NINT, OPAQUE -> Type.I64.code();
 				case FLOAT -> Type.F64.code();
 				case STRING, F64VEC, F32VEC, F64MAT, F32MAT -> Type.I32.code();
 			};
@@ -252,10 +312,16 @@ public final class NoGcWasmCompiler implements LispCompiler {
 		 * construct that leaves nothing behind).
 		 */
 		int blockType() {
-			return this == VOID ? 0x40 : valType();
+			return isVoid() ? 0x40 : valType();
 		}
 
 	}
+
+	/**
+	 * The nil of a {@link Ty#NINT}: the one {@code i64} no integer of a nil-or-integer
+	 * value may be.
+	 */
+	private static final long NIL_INT = Long.MIN_VALUE;
 
 	/**
 	 * Operators handled directly as primitive numeric/boolean/bitwise/string operations.
@@ -282,7 +348,8 @@ public final class NoGcWasmCompiler implements LispCompiler {
 			LispNames.CODE_CHAR, LispNames.CHAR_EQ, LispNames.PRINC_TO_STRING, LispNames.EXP, LispNames.LOG,
 			LispNames.SIN, LispNames.COS, LispNames.TAN, LispNames.ASIN, LispNames.ACOS, LispNames.ATAN, LispNames.SINH,
 			LispNames.COSH, LispNames.TANH, LispNames.EXPT, LispNames.MASK_SIGNED_FIELD, LispNames.EQ_GENERAL,
-			LispNames.EQL, LispNames.EQUAL, LispNames.STRING, LispNames.SINGLE_FLOAT_INTERNAL);
+			LispNames.EQL, LispNames.EQUAL, LispNames.STRING, LispNames.SINGLE_FLOAT_INTERNAL,
+			NoGcInternalForms.STRING_SEARCH);
 
 	/**
 	 * The forms that handle a condition, which the scalar backend has none of: an error
@@ -459,9 +526,11 @@ public final class NoGcWasmCompiler implements LispCompiler {
 		 * program written for this backend may rely: nil is the number 0, so a number
 		 * tested is false exactly when it is zero (a "nil or a nonzero integer" -- a
 		 * pointer, a count -- tests as Common Lisp would), and an index into a packed
-		 * array is not checked. Exact: a test of a number is refused by name, as it
-		 * cannot tell 0 from nil, and an index outside a packed vector traps, the error
-		 * every other backend signals.
+		 * array is not checked. Exact: a value that is nil or an integer holds its nil
+		 * apart from 0 ({@code Ty.NINT}), so an integer tests true, and the sequence
+		 * functions that answer an index or nil compile ({@code NoGcInternalForms}); a
+		 * test of a float, whose nil is 0.0, is refused by name; an index outside a
+		 * packed vector traps, the error every other backend signals.
 		 * @param exact whether the module answers as Common Lisp does or refuses
 		 * @return this builder
 		 */
@@ -637,10 +706,13 @@ public final class NoGcWasmCompiler implements LispCompiler {
 		boolean formatDefined = defuns.containsKey(LispNames.FORMAT);
 		for (Defun defun : List.copyOf(defuns.values())) {
 			try {
-				defuns.put(defun.name(), new Defun(defun.name(), defun.params(), defun.body()
-					.stream()
-					.map(form -> NoGcInternalForms.normalize(formatDefined ? form : NoGcFormatLowering.lower(form)))
-					.toList()));
+				defuns.put(defun.name(),
+						new Defun(defun.name(), defun.params(),
+								defun.body()
+									.stream()
+									.map(form -> NoGcInternalForms
+										.normalize(formatDefined ? form : NoGcFormatLowering.lower(form), this.exact))
+									.toList()));
 			}
 			catch (UnsupportedOperationException ex) {
 				defuns.remove(defun.name());
@@ -1086,8 +1158,9 @@ public final class NoGcWasmCompiler implements LispCompiler {
 	 *
 	 * @param name the block's name, {@code null} for nil's (what {@code return} leaves)
 	 * @param box the join so far, one element
+	 * @param discard whether nothing reads the block's value
 	 */
-	private record BlockReturns(@Nullable String name, Ty[] box) {
+	private record BlockReturns(@Nullable String name, Ty[] box, boolean discard) {
 	}
 
 	// Receives the callee name and its argument types at a call site, so a fixpoint pass
@@ -1170,12 +1243,21 @@ public final class NoGcWasmCompiler implements LispCompiler {
 		// stands for inside the function rather than leaving the wrapper with an empty
 		// stack. Every other function seeds at VOID, the true bottom, so "this answers
 		// nothing" survives the fixpoint instead of being invented.
+		//
+		// An exact module seeds every return and parameter at NEVER instead: there a
+		// BOOL is a nil, which meeting an integer makes a nil-or-integer, so a seed
+		// standing for "nothing seen yet" has to be the bottom nothing is added by.
 		Set<String> valueExports = new HashSet<>();
 		for (WasmExportCompiler.Decl decl : exportDecls) {
 			if (decl.returnType() != BoundaryType.VOID) {
 				valueExports.add(decl.name());
 			}
 		}
+		// The functions whose value something reads: a value export's, and each one a
+		// call in a position whose value is read reaches (typeOfCall adds them). The
+		// body of any other is typed as a statement, so the nil-or-integer an exact
+		// module makes is never made for a value nothing reads.
+		this.valueUsed = new HashSet<>(valueExports);
 
 		Map<String, Ty[]> params = new HashMap<>();
 		Map<String, Ty> returns = new HashMap<>();
@@ -1190,7 +1272,7 @@ public final class NoGcWasmCompiler implements LispCompiler {
 			}
 			Defun d = Objects.requireNonNull(defuns.get(name));
 			params.put(name, boundary.containsKey(name) ? boundary.get(name).clone() : filled(d.params().size()));
-			returns.put(name, valueExports.contains(name) ? Ty.BOOL : Ty.VOID);
+			returns.put(name, this.exact ? Ty.NEVER : valueExports.contains(name) ? Ty.BOOL : Ty.VOID);
 			locals.put(name, new HashMap<>());
 		}
 		// A global starts at the literal it holds when the module is instantiated, or at
@@ -1224,7 +1306,7 @@ public final class NoGcWasmCompiler implements LispCompiler {
 				Ty[] pt = nextParams.get(callee);
 				if (pt != null) {
 					for (int i = 0; i < pt.length && i < argTypes.length; i++) {
-						pt[i] = pt[i].join(argTypes[i]);
+						pt[i] = pt[i].join(slotTy(argTypes[i]), this.exact);
 					}
 				}
 			};
@@ -1234,9 +1316,10 @@ public final class NoGcWasmCompiler implements LispCompiler {
 				}
 				Defun d = Objects.requireNonNull(defuns.get(name));
 				TC tc = new TC(name, new HashSet<>(d.params()), types, sink, true, changed);
+				boolean discard = this.exact && !this.valueUsed.contains(name);
 				Ty rt;
 				try {
-					rt = typeOf(progn(d.body()), paramEnv(d, params), tc);
+					rt = typeOf(progn(d.body()), paramEnv(d, params), tc, discard);
 				}
 				catch (RuntimeException ex) {
 					throw noteCallers(name, ex);
@@ -1245,7 +1328,7 @@ public final class NoGcWasmCompiler implements LispCompiler {
 					// the start function answers nothing: its last form is a statement
 					continue;
 				}
-				Ty merged = Objects.requireNonNull(returns.get(name)).join(rt);
+				Ty merged = Objects.requireNonNull(returns.get(name)).join(rt, this.exact && !discard);
 				if (merged != returns.get(name)) {
 					returns.put(name, merged);
 					changed[0] = true;
@@ -1258,8 +1341,27 @@ public final class NoGcWasmCompiler implements LispCompiler {
 				}
 			}
 		}
+		if (this.exact) {
+			// A slot every value of which never arrives -- a parameter no call passes a
+			// value that returns, a local bound only to one -- holds nothing any code
+			// that runs reads: it is the nil of a boolean, an i64.
+			for (Ty[] pt : params.values()) {
+				for (int i = 0; i < pt.length; i++) {
+					pt[i] = pt[i] == Ty.NEVER ? Ty.BOOL : pt[i];
+				}
+			}
+			for (Map<String, Ty> fnLocals : locals.values()) {
+				fnLocals.replaceAll((name, ty) -> ty == Ty.NEVER ? Ty.BOOL : ty);
+			}
+		}
 		return types;
 	}
+
+	/**
+	 * The functions whose value a reached position reads, as the last type inference
+	 * found them ({@link #inferTypes}): the body of any other is compiled as a statement.
+	 */
+	private Set<String> valueUsed = new HashSet<>();
 
 	/**
 	 * The internal value type an imported host function's result arrives as: the
@@ -1283,9 +1385,11 @@ public final class NoGcWasmCompiler implements LispCompiler {
 		};
 	}
 
-	private static Ty[] filled(int n) {
+	// The parameter types before any call site is seen: the bottom a call's argument
+	// widens (inferTypes, on the exact module's NEVER).
+	private Ty[] filled(int n) {
 		Ty[] arr = new Ty[n];
-		Arrays.fill(arr, Ty.BOOL);
+		Arrays.fill(arr, this.exact ? Ty.NEVER : Ty.BOOL);
 		return arr;
 	}
 
@@ -1311,16 +1415,18 @@ public final class NoGcWasmCompiler implements LispCompiler {
 
 	// The type a LOCAL SLOT holds. A slot is storage, so it is never VOID: binding the
 	// value of a void form stores the nil it stands for, which is the i64 zero. (The
-	// materialization itself is coerce's, at the initializer.)
+	// materialization itself is coerce's, at the initializer.) NEVER stays the bottom
+	// it is while an exact module's inference runs; what is left of it is settled there.
 	private static Ty slotTy(Ty t) {
 		return t == Ty.VOID ? Ty.BOOL : t;
 	}
 
 	// Widens m[k] by joining in t; records on the shared flag when the type actually
-	// grows. Returns the (possibly widened) current type.
-	private static Ty widenLocal(Map<String, Ty> m, String k, Ty t, boolean[] changed) {
+	// grows. Returns the (possibly widened) current type. A slot's value is read, so
+	// nil meeting an integer in it is an exact module's nil-or-integer.
+	private Ty widenLocal(Map<String, Ty> m, String k, Ty t, boolean[] changed) {
 		Ty old = m.get(k);
-		Ty next = old == null ? t : old.join(t);
+		Ty next = old == null ? t : old.join(t, this.exact);
 		if (next != old) {
 			m.put(k, next);
 			changed[0] = true;
@@ -1348,6 +1454,22 @@ public final class NoGcWasmCompiler implements LispCompiler {
 	}
 
 	private Ty typeOf(LispVal expr, Map<String, Ty> env, TC tc) {
+		return typeOf(expr, env, tc, false);
+	}
+
+	/**
+	 * {@link #typeOf(LispVal, Map, TC)} of a form in a position whose value is read, or
+	 * not: a form whose value nothing reads (a statement, and the last form or the
+	 * branches of one) joins as the dialect does, so the nil-or-integer an exact module
+	 * makes is never made for a value no code reads ({@link Ty#NINT}). The compile walk
+	 * passes the same flag down the same forms (compileExpr).
+	 * @param expr the form
+	 * @param env the visible locals' types
+	 * @param tc the walk's context
+	 * @param discard whether nothing reads the form's value
+	 * @return the form's type
+	 */
+	private Ty typeOf(LispVal expr, Map<String, Ty> env, TC tc, boolean discard) {
 		return switch (expr) {
 			case LispInteger ignored -> Ty.INT;
 			case LispDouble ignored -> Ty.FLOAT;
@@ -1386,7 +1508,7 @@ public final class NoGcWasmCompiler implements LispCompiler {
 			}
 			case LispCons cons -> {
 				try {
-					yield typeOfCall(cons, env, tc);
+					yield typeOfCall(cons, env, tc, discard);
 				}
 				catch (RuntimeException ex) {
 					throw noteLocated(cons, ex);
@@ -1396,7 +1518,7 @@ public final class NoGcWasmCompiler implements LispCompiler {
 		};
 	}
 
-	private Ty typeOfCall(LispCons cons, Map<String, Ty> env, TC tc) {
+	private Ty typeOfCall(LispCons cons, Map<String, Ty> env, TC tc, boolean discard) {
 		String name = ((LispSymbol) cons.car()).name();
 		List<LispVal> args = cons.toList();
 		int argc = args.size() - 1;
@@ -1412,7 +1534,7 @@ public final class NoGcWasmCompiler implements LispCompiler {
 		}
 		LispVal expanded = expandMacro(name, cons, argc);
 		if (expanded != null) {
-			return typeOf(expanded, env, tc);
+			return typeOf(expanded, env, tc, discard);
 		}
 
 		if (isSimdCall(name)) {
@@ -1421,35 +1543,38 @@ public final class NoGcWasmCompiler implements LispCompiler {
 
 		switch (name) {
 			case LispNames.IF -> {
-				typeOf(args.get(1), env, tc);
+				LispVal test = args.get(1);
+				Ty testTy = typeOf(test, env, tc);
 				// Both arms are walked whatever the test says -- the walk is what records
 				// call sites and widens locals -- but a CONSTANT test takes only the
 				// branch it selects into the result. The macro expander ends every cond
 				// chain in `(if t ... nil)`, so without this the dead nil would drag an
 				// all-void chain back up to INT and put the zero it stands for into every
-				// arm.
-				Ty thenTy = typeOf(args.get(2), env, tc);
+				// arm. An exact module's integer is never nil, so its test is one too.
+				Ty thenTy = typeOf(args.get(2), narrowed(env, nonNilWhenTrue(test, env), args.get(2)), tc, discard);
 				// An ABSENT else produces nothing at all -- not the nil an explicit one
 				// would -- so it contributes VOID rather than the INT zero.
-				Ty elseTy = args.size() > 3 ? typeOf(args.get(3), env, tc) : Ty.VOID;
-				if (args.get(1) instanceof LispTrue) {
+				Ty elseTy = args.size() > 3
+						? typeOf(args.get(3), narrowed(env, nonNilWhenFalse(test, env), args.get(3)), tc, discard)
+						: Ty.VOID;
+				if (test instanceof LispTrue || neverNil(testTy)) {
 					return thenTy;
 				}
-				if (args.get(1) instanceof LispNil) {
+				if (test instanceof LispNil) {
 					return elseTy;
 				}
-				return thenTy.join(elseTy);
+				return thenTy.join(elseTy, nilMeetsInt(test, args.get(2), thenTy, discard));
 			}
 			case LispNames.PROGN -> {
 				// An EMPTY progn produces nothing, which is VOID, not the nil zero.
 				Ty last = Ty.VOID;
 				for (int i = 1; i < args.size(); i++) {
-					last = typeOf(args.get(i), env, tc);
+					last = typeOf(args.get(i), env, tc, discard || i < args.size() - 1);
 				}
 				return last;
 			}
 			case LispNames.LET -> {
-				return typeOfLet(cons, env, tc);
+				return typeOfLet(cons, env, tc, discard);
 			}
 			case LispNames.SETQ -> {
 				return typeOfSetq(args, env, tc);
@@ -1459,40 +1584,46 @@ public final class NoGcWasmCompiler implements LispCompiler {
 				// their
 				// call sites and local mutations are recorded.
 				for (int i = 1; i < args.size(); i++) {
-					typeOf(args.get(i), env, tc);
+					typeOf(args.get(i), env, tc, i > 1);
 				}
 				return Ty.VOID;
 			}
 			case LispNames.BLOCK_INTERNAL, LispNames.BLOCK -> {
 				// a block's result = join(normal completion, every return-from of it)
 				boolean named = LispNames.BLOCK.equals(name);
-				Ty[] box = { Ty.VOID };
-				tc.blockReturns.push(new BlockReturns(named ? blockName(args.get(1)) : null, box));
+				Ty[] box = { Ty.NEVER };
+				tc.blockReturns.push(new BlockReturns(named ? blockName(args.get(1)) : null, box, discard));
 				Ty bodyTy = Ty.VOID;
 				for (int i = named ? 2 : 1; i < args.size(); i++) {
-					bodyTy = typeOf(args.get(i), env, tc);
+					bodyTy = typeOf(args.get(i), env, tc, discard || i < args.size() - 1);
 				}
 				tc.blockReturns.pop();
-				return bodyTy.join(box[0]);
+				return bodyTy.join(box[0], this.exact && !discard);
 			}
 			case LispNames.RETURN, LispNames.RETURN_FROM -> {
 				int value = LispNames.RETURN.equals(name) ? 1 : 2;
-				Ty vt = args.size() > value ? typeOf(args.get(value), env, tc) : Ty.VOID;
 				String target = value == 1 ? null : blockName(args.get(1));
+				BlockReturns left = null;
 				for (BlockReturns block : tc.blockReturns) {
 					if (Objects.equals(block.name(), target)) {
-						block.box()[0] = block.box()[0].join(vt);
+						left = block;
 						break;
 					}
 				}
+				// the value is the block's: read where the block's is
+				boolean dropped = left != null && left.discard();
+				Ty vt = args.size() > value ? typeOf(args.get(value), env, tc, dropped) : Ty.VOID;
+				if (left != null) {
+					left.box()[0] = left.box()[0].join(vt, this.exact && !dropped);
+				}
 				return vt;
 			}
-			// A trap: no value at all.
+			// A trap: no value at all, and in an exact module none that a join meets.
 			case LispNames.ERROR -> {
 				for (LispVal arg : effectiveArguments(args)) {
 					typeOf(arg, env, tc);
 				}
-				return Ty.VOID;
+				return this.exact ? Ty.NEVER : Ty.VOID;
 			}
 			// A function object nothing calls, and a structure nothing reads.
 			case LispNames.FUNCTION -> {
@@ -1543,7 +1674,7 @@ public final class NoGcWasmCompiler implements LispCompiler {
 			case LispNames.WITH_ARENA_QUALIFIED -> {
 				Ty last = Ty.VOID;
 				for (int i = 2; i < args.size(); i++) {
-					last = typeOf(args.get(i), env, tc);
+					last = typeOf(args.get(i), env, tc, i < args.size() - 1);
 				}
 				return last;
 			}
@@ -1617,6 +1748,13 @@ public final class NoGcWasmCompiler implements LispCompiler {
 				}
 				return Ty.INT;
 			}
+			// an index or nil (an exact module's alone: NoGcInternalForms)
+			case NoGcInternalForms.STRING_SEARCH -> {
+				for (int i = 1; i < args.size(); i++) {
+					typeOf(args.get(i), env, tc);
+				}
+				return Ty.NINT;
+			}
 			// java.lang.StrictMath over doubles: a double, getExponent's int aside.
 			case LispNames.STRICT_MATH_INTERNAL -> {
 				for (int i = 2; i < args.size(); i++) {
@@ -1644,7 +1782,7 @@ public final class NoGcWasmCompiler implements LispCompiler {
 					LispNames.MIN, LispNames.MAX, LispNames.EXPT -> {
 				Ty t = Ty.INT;
 				for (int i = 1; i < args.size(); i++) {
-					t = t.join(typeOf(args.get(i), env, tc));
+					t = t.join(arith(typeOf(args.get(i), env, tc)));
 				}
 				return t;
 			}
@@ -1665,13 +1803,16 @@ public final class NoGcWasmCompiler implements LispCompiler {
 				if (tc.sink != null) {
 					tc.sink.record(name, argTypes);
 				}
+				if (this.exact && tc.widen && !discard && this.valueUsed.add(name)) {
+					tc.changed[0] = true;
+				}
 				Ty rt = tc.types.returns().get(name);
 				return rt == null ? Ty.BOOL : rt;
 			}
 		}
 	}
 
-	private Ty typeOfLet(LispCons cons, Map<String, Ty> env, TC tc) {
+	private Ty typeOfLet(LispCons cons, Map<String, Ty> env, TC tc, boolean discard) {
 		List<LispVal> parts = cons.toList();
 		List<LispVal> bindings = parts.get(1) instanceof LispCons bc ? bc.toList() : List.of();
 		Map<String, Ty> inner = new HashMap<>(env);
@@ -1690,12 +1831,12 @@ public final class NoGcWasmCompiler implements LispCompiler {
 			// Parallel `let`: initializers see the outer scope only.
 			Ty initTy = slotTy(typeOf(init, env, tc));
 			Ty bindTy = tc.widen ? widenLocal(tc.locals(), varName, initTy, tc.changed)
-					: tc.locals().getOrDefault(varName, initTy).join(initTy);
+					: tc.locals().getOrDefault(varName, initTy).join(initTy, this.exact);
 			inner.put(varName, bindTy);
 		}
 		Ty last = Ty.BOOL;
 		for (int i = 2; i < parts.size(); i++) {
-			last = typeOf(parts.get(i), inner, tc);
+			last = typeOf(parts.get(i), inner, tc, discard || i < parts.size() - 1);
 		}
 		return last;
 	}
@@ -1709,7 +1850,7 @@ public final class NoGcWasmCompiler implements LispCompiler {
 			if (!env.containsKey(var) && tc.types.globals().containsKey(var)) {
 				// A global takes the join of every value assigned to it, anywhere.
 				last = tc.widen ? widenLocal(tc.types.globals(), var, rhsTy, tc.changed)
-						: Objects.requireNonNull(tc.types.globals().get(var)).join(rhsTy);
+						: Objects.requireNonNull(tc.types.globals().get(var)).join(rhsTy, this.exact);
 			}
 			else if (tc.params.contains(var)) {
 				// A parameter has a fixed wasm type; the assignment coerces to it.
@@ -1717,7 +1858,7 @@ public final class NoGcWasmCompiler implements LispCompiler {
 			}
 			else {
 				Ty next = tc.widen ? widenLocal(tc.locals(), var, rhsTy, tc.changed)
-						: tc.locals().getOrDefault(var, rhsTy).join(rhsTy);
+						: tc.locals().getOrDefault(var, rhsTy).join(rhsTy, this.exact);
 				env.put(var, next);
 				last = next;
 			}
@@ -1729,8 +1870,154 @@ public final class NoGcWasmCompiler implements LispCompiler {
 	// holds the final inferred type of every in-scope local, so a fresh env copy is
 	// enough.
 	private Ty staticType(LispVal expr, Fn fn) {
+		return staticType(expr, fn, false);
+	}
+
+	// staticType of a form whose value nothing reads, or not (typeOf's discard).
+	private Ty staticType(LispVal expr, Fn fn, boolean discard) {
 		TC tc = new TC(fn.fnName, fn.paramNames, fn.types, null, false, new boolean[1]);
-		return typeOf(expr, new HashMap<>(fn.localTypes), tc);
+		return typeOf(expr, new HashMap<>(fn.localTypes), tc, discard);
+	}
+
+	/**
+	 * Whether a test of a value of this type is true whatever it holds: an exact module's
+	 * integer is never nil.
+	 */
+	private boolean neverNil(Ty ty) {
+		return this.exact && ty == Ty.INT;
+	}
+
+	/**
+	 * Whether an {@code if}'s branches join as a nil meeting an integer: in an exact
+	 * module, where its value is read -- unless the nil is the boolean the test itself
+	 * is, the {@code (if x x y)} that {@code (or x y)} is, which is {@code t} there: a
+	 * {@code t} meeting an integer is the integer its 1 is, the residual the dialect has
+	 * ({@code (princ (if p t 1))} prints 1).
+	 * @param test the test
+	 * @param then the then-branch
+	 * @param thenTy the then-branch's type
+	 * @param discard whether nothing reads the if's value
+	 * @return the {@code nilInt} of {@link Ty#join(Ty, boolean)}
+	 */
+	private boolean nilMeetsInt(LispVal test, LispVal then, Ty thenTy, boolean discard) {
+		return this.exact && !discard && !(thenTy == Ty.BOOL && test instanceof LispSymbol tested
+				&& then instanceof LispSymbol read && tested.name().equals(read.name()));
+	}
+
+	/**
+	 * The lexical variables a test being true shows are not nil, of those an exact module
+	 * holds as nil-or-integers: the variable tested, a {@code not}'s operand false, and
+	 * each a conjunction -- {@code and}, an {@code if} whose else is nil -- tests true.
+	 * @param test the test form
+	 * @param types the visible lexical variables' types
+	 * @return those variables' names
+	 */
+	private Set<String> nonNilWhenTrue(LispVal test, Map<String, Ty> types) {
+		if (!this.exact) {
+			return Set.of();
+		}
+		if (test instanceof LispSymbol sym) {
+			return types.get(sym.name()) == Ty.NINT ? Set.of(sym.name()) : Set.of();
+		}
+		if (!(test instanceof LispCons cons) || !(cons.car() instanceof LispSymbol head)) {
+			return Set.of();
+		}
+		List<LispVal> parts = cons.toList();
+		LispVal expanded = expandMacro(head.name(), cons, parts.size() - 1);
+		if (expanded != null) {
+			return nonNilWhenTrue(expanded, types);
+		}
+		if (LispNames.NOT.equals(head.name()) && parts.size() == 2) {
+			return nonNilWhenFalse(parts.get(1), types);
+		}
+		if (LispNames.IF.equals(head.name()) && parts.size() >= 3
+				&& (parts.size() == 3 || parts.get(3) instanceof LispNil)) {
+			Set<String> both = new HashSet<>(nonNilWhenTrue(parts.get(1), types));
+			both.addAll(nonNilWhenTrue(parts.get(2), types));
+			return both;
+		}
+		return Set.of();
+	}
+
+	/**
+	 * The lexical nil-or-integer variables a test being false shows are not nil: a
+	 * {@code not}'s operand true ({@link #nonNilWhenTrue}).
+	 * @param test the test form
+	 * @param types the visible lexical variables' types
+	 * @return those variables' names
+	 */
+	private Set<String> nonNilWhenFalse(LispVal test, Map<String, Ty> types) {
+		if (!this.exact || !(test instanceof LispCons cons) || !(cons.car() instanceof LispSymbol head)) {
+			return Set.of();
+		}
+		List<LispVal> parts = cons.toList();
+		LispVal expanded = expandMacro(head.name(), cons, parts.size() - 1);
+		if (expanded != null) {
+			return nonNilWhenFalse(expanded, types);
+		}
+		if (LispNames.NOT.equals(head.name()) && parts.size() == 2) {
+			return nonNilWhenTrue(parts.get(1), types);
+		}
+		return Set.of();
+	}
+
+	/**
+	 * The types a branch is typed under: each variable the test shows not nil read as the
+	 * integer it then is, where the branch assigns it nowhere -- a nil-or-integer is the
+	 * integer itself, so the reads cost nothing.
+	 * @param env the types outside the branch
+	 * @param nonNil the variables the test shows not nil
+	 * @param branch the branch
+	 * @return {@code env} itself, or a copy with those variables narrowed
+	 */
+	private Map<String, Ty> narrowed(Map<String, Ty> env, Set<String> nonNil, LispVal branch) {
+		Map<String, Ty> narrowed = env;
+		for (String name : nonNil) {
+			if (!assigns(branch, name)) {
+				if (narrowed == env) {
+					narrowed = new HashMap<>(env);
+				}
+				narrowed.put(name, Ty.INT);
+			}
+		}
+		return narrowed;
+	}
+
+	/**
+	 * Whether a form assigns a variable of the name anywhere in it, a binding of the same
+	 * name's included: this backend has no closure, so a {@code setq} the macros it
+	 * expands reach is the only way a local changes.
+	 * @param form the form
+	 * @param name the variable's name
+	 * @return whether it may
+	 */
+	private boolean assigns(LispVal form, String name) {
+		if (!(form instanceof LispCons cons)) {
+			return false;
+		}
+		if (cons.car() instanceof LispSymbol head) {
+			if (LispNames.isQuote(head.name()) || LispNames.FUNCTION.equals(head.name())) {
+				return false;
+			}
+			List<LispVal> parts = cons.toList();
+			LispVal expanded = expandMacro(head.name(), cons, parts.size() - 1);
+			if (expanded != null) {
+				return assigns(expanded, name);
+			}
+			if (LispNames.SETQ.equals(head.name())) {
+				for (int i = 1; i < parts.size(); i += 2) {
+					if (parts.get(i) instanceof LispSymbol target && name.equals(target.name())) {
+						return true;
+					}
+				}
+			}
+		}
+		for (LispVal part = cons; part instanceof LispCons c; part = c.cdr()) {
+			if (assigns(c.car(), name)) {
+				return true;
+			}
+		}
+		return false;
 	}
 
 	// --- Linear-memory layout (strings) ------------------------------------------------
@@ -1783,6 +2070,8 @@ public final class NoGcWasmCompiler implements LispCompiler {
 	 * @param used whether the module uses linear memory at all
 	 * @param printUsed whether the module prints (fd_write import + __write_stdout)
 	 * @param ftoaUsed whether the module renders a float to text (__ftoa)
+	 * @param searchIndex the function index of the {@code __search} string search an
+	 * exact module's {@code search} and {@code position} call (-1 when none does)
 	 * @param hostArena whether the arena API (the {@code __ronto_alloc} family of
 	 * exports) is emitted
 	 * @param allocates whether anything in the module can bump the heap during a call
@@ -1793,8 +2082,8 @@ public final class NoGcWasmCompiler implements LispCompiler {
 			int heapBase, int iovAddr, int funcBase, int allocIndex, int memcpyIndex, int streqIndex, int itoaIndex,
 			int strlenIndex, int byteOffsetIndex, int charAtIndex, int markIndex, int resetIndex, int rontoAllocIndex,
 			int ftoaIndex, int schubBase, int fdlibmBase, List<WasmFdlibmRuntimeBuilder.Fn> fdlibmFns,
-			int fdlibmTablesBase, int writeStdoutIndex, int charStringIndex, boolean used, boolean printUsed,
-			boolean ftoaUsed, boolean hostArena, boolean allocates, boolean programOwnsHeap) {
+			int fdlibmTablesBase, int writeStdoutIndex, int charStringIndex, int searchIndex, boolean used,
+			boolean printUsed, boolean ftoaUsed, boolean hostArena, boolean allocates, boolean programOwnsHeap) {
 
 		/**
 		 * Whether the bodies behind the arena API are emitted: for the exports, or for
@@ -1901,6 +2190,9 @@ public final class NoGcWasmCompiler implements LispCompiler {
 	 * {@code __char_at} code-point-index helper)
 	 * @param charStringUsed whether a reachable body makes the string of a character (the
 	 * {@code __char_string} UTF-8 encoder)
+	 * @param searchUsed whether a reachable body searches a string (the {@code __search}
+	 * helper, built on {@code __strlen_cp} and {@code __byte_offset}, which this sets
+	 * too)
 	 * @param hostArena whether the boundary gives the HOST a reason to touch the bump
 	 * heap, which is what the {@code __ronto_alloc} / {@code __ronto_alloc_mark} /
 	 * {@code __ronto_alloc_reset} exports are for
@@ -1912,7 +2204,7 @@ public final class NoGcWasmCompiler implements LispCompiler {
 	private record MemLayout(Map<String, Integer> literals, Map<String, Integer> regions, byte[] data, int heapBase,
 			int iovAddr, int schubBase, int fdlibmTablesBase, List<WasmFdlibmRuntimeBuilder.Fn> fdlibmFns, boolean used,
 			boolean printUsed, boolean ftoaUsed, boolean strlenUsed, boolean byteOffsetUsed, boolean charAtUsed,
-			boolean charStringUsed, boolean hostArena, boolean allocates, boolean programOwnsHeap) {
+			boolean charStringUsed, boolean searchUsed, boolean hostArena, boolean allocates, boolean programOwnsHeap) {
 
 		boolean arenaHelpers() {
 			return this.hostArena || this.programOwnsHeap;
@@ -1932,8 +2224,8 @@ public final class NoGcWasmCompiler implements LispCompiler {
 					this.fdlibmTablesBase != 0);
 			return new MemLayout(plan.literals(), plan.regions(), plan.data(), plan.heapBase(), plan.iovAddr(),
 					plan.schubBase(), plan.fdlibmTablesBase(), this.fdlibmFns, this.used, this.printUsed, this.ftoaUsed,
-					this.strlenUsed, this.byteOffsetUsed, this.charAtUsed, this.charStringUsed, this.hostArena,
-					this.allocates, this.programOwnsHeap);
+					this.strlenUsed, this.byteOffsetUsed, this.charAtUsed, this.charStringUsed, this.searchUsed,
+					this.hostArena, this.allocates, this.programOwnsHeap);
 		}
 	}
 
@@ -2351,9 +2643,21 @@ public final class NoGcWasmCompiler implements LispCompiler {
 		}
 		boolean strlenUsed = usesStringLength(reachable, defuns, imports, types);
 		boolean charStringUsed = makesCharacterString(reachable, defuns, imports, types);
+		// An exact module's search: __search counts the hay's characters and finds the
+		// bytes its bounds start at through the two code-point helpers.
+		boolean searchUsed = false;
+		for (String name : reachable) {
+			if (!imports.containsKey(name) && usesOp(progn(Objects.requireNonNull(defuns.get(name)).body()),
+					NoGcInternalForms.STRING_SEARCH)) {
+				searchUsed = true;
+				strlenUsed = true;
+				byteOffsetUsed = true;
+				break;
+			}
+		}
 		return new MemLayout(plan.literals(), plan.regions(), plan.data(), plan.heapBase(), plan.iovAddr(),
 				plan.schubBase(), plan.fdlibmTablesBase(), fdlibmFns, used, printUsed, ftoaUsed, strlenUsed,
-				byteOffsetUsed, charAtUsed, charStringUsed, hostArena, allocates, programOwnsHeap);
+				byteOffsetUsed, charAtUsed, charStringUsed, searchUsed, hostArena, allocates, programOwnsHeap);
 	}
 
 	/**
@@ -2433,13 +2737,15 @@ public final class NoGcWasmCompiler implements LispCompiler {
 		int writeStdoutIndex = layout.printUsed() ? next++ : -1;
 		// The character encoder last of all: a module that makes no character's string
 		// keeps every index it had.
-		int charStringIndex = layout.charStringUsed() ? next : -1;
+		int charStringIndex = layout.charStringUsed() ? next++ : -1;
+		// the string search after it, for the same reason
+		int searchIndex = layout.searchUsed() ? next : -1;
 		return new Mem(layout.literals(), layout.regions(), layout.data(), STR_DATA_BASE, layout.heapBase(),
 				layout.iovAddr(), funcBase, allocIndex, memcpyIndex, streqIndex, itoaIndex, strlenIndex,
 				byteOffsetIndex, charAtIndex, markIndex, resetIndex, rontoAllocIndex, ftoaIndex, layout.schubBase(),
 				fdlibmBase, layout.fdlibmFns(), layout.fdlibmTablesBase(), writeStdoutIndex, charStringIndex,
-				layout.used(), layout.printUsed(), layout.ftoaUsed(), layout.hostArena(), layout.allocates(),
-				layout.programOwnsHeap());
+				searchIndex, layout.used(), layout.printUsed(), layout.ftoaUsed(), layout.hostArena(),
+				layout.allocates(), layout.programOwnsHeap());
 	}
 
 	/** The printing operators that gate the fd_write import. */
@@ -2523,7 +2829,9 @@ public final class NoGcWasmCompiler implements LispCompiler {
 					continue;
 				}
 				if (LispNames.PRINC_TO_STRING.equals(op)) {
-					if (args.size() == 2 && typeOf(args.get(1), new HashMap<>(env), tc) == Ty.BOOL) {
+					Ty at = args.size() == 2 ? typeOf(args.get(1), new HashMap<>(env), tc) : Ty.INT;
+					if (at == Ty.BOOL || at == Ty.NINT) {
+						// a nil-or-integer's NIL is the boolean's header
 						boolToString = true;
 					}
 					continue;
@@ -2570,7 +2878,11 @@ public final class NoGcWasmCompiler implements LispCompiler {
 				else if (at == Ty.INT || at == Ty.FLOAT) {
 					intFloat = true;
 				}
-				else if (at == Ty.VOID) {
+				else if (at == Ty.NINT) {
+					boolNil = true;
+					intFloat = true;
+				}
+				else if (at.isVoid()) {
 					// A void form used for its value stands for nil.
 					boolNil = true;
 				}
@@ -2816,7 +3128,7 @@ public final class NoGcWasmCompiler implements LispCompiler {
 				+ (mem.charAtIndex() >= 0 ? 1 : 0);
 		int localFuncCount = internalCount + wrapperBodies.size() + (mem.used() ? 4 : 0) + utf8Helpers
 				+ (mem.arenaHelpers() ? 3 : 0) + (mem.ftoaUsed() ? 6 : 0) + mem.fdlibmFns().size()
-				+ (mem.printUsed() ? 1 : 0) + (mem.charStringIndex() >= 0 ? 1 : 0);
+				+ (mem.printUsed() ? 1 : 0) + (mem.charStringIndex() >= 0 ? 1 : 0) + (mem.searchIndex() >= 0 ? 1 : 0);
 		// Canonical string ABI for --component :string exports:
 		// cabi_realloc (the host lowers string arguments through it), one retptr shim
 		// per :string-RETURNING export (MAX_FLAT_RESULTS = 1, so the lifted core
@@ -2937,6 +3249,11 @@ public final class NoGcWasmCompiler implements LispCompiler {
 		if (mem.charStringIndex() >= 0) {
 			// __char_string (code i32) -> i32: __alloc's shape.
 			funcTypes[nextFunc++] = typeTable.intern(new Type[] { Type.I32 }, new Type[] { Type.I32 });
+		}
+		if (mem.searchIndex() >= 0) {
+			// __search (needle i32, hay i32, start i64, end i64, from-end i32) -> i64
+			funcTypes[nextFunc++] = typeTable.intern(new Type[] { Type.I32, Type.I32, Type.I64, Type.I64, Type.I32 },
+					new Type[] { Type.I64 });
 		}
 		if (componentRealloc) {
 			// cabi_realloc (old, old-size, align, new-size) -> i32.
@@ -3125,6 +3442,9 @@ public final class NoGcWasmCompiler implements LispCompiler {
 				if (mem.charStringIndex() >= 0) {
 					code.addFunction(charStringBody(mem.allocIndex()));
 				}
+				if (mem.searchIndex() >= 0) {
+					code.addFunction(searchBody(mem.strlenIndex(), mem.byteOffsetIndex()));
+				}
 				if (componentRealloc) {
 					code.addFunction(cabiReallocBody(mem.allocIndex()));
 				}
@@ -3169,9 +3489,18 @@ public final class NoGcWasmCompiler implements LispCompiler {
 	 * @param mem the memory plan, where a string literal is
 	 */
 	private static void globalInitializer(WasmWriter init, Ty ty, @Nullable LispVal initial, Mem mem) {
+		if (ty == Ty.NINT && (initial == null || initial instanceof LispNil)) {
+			// a constant expression is a constant: the nil's own, not pushNil's rotation
+			i64Const(init, NIL_INT);
+			return;
+		}
 		if (initial == null || initial instanceof LispNil) {
 			pushNil(init, ty);
 			return;
+		}
+		if (ty == Ty.NINT && integer(initial) == NIL_INT) {
+			throw new UnsupportedOperationException("--no-gc: a global starts at the integer " + NIL_INT
+					+ " where nil may be too, and a value that is nil or an integer holds nil as that integer");
 		}
 		if (initial instanceof LispString text && ty == Ty.STRING) {
 			init.write(Instruction.I32_CONST)
@@ -3503,6 +3832,142 @@ public final class NoGcWasmCompiler implements LispCompiler {
 		w.write(Instruction.END); // 2-byte else
 		w.write(Instruction.END); // function
 		return withLocals(b.toByteArray(), List.of(Ty.STRING, Ty.STRING));
+	}
+
+	// __search(needle i32, hay i32, start i64, end i64, from-end i32) -> i64: the index of
+	// the character the first match of the needle's bytes in the hay's starts at, the last
+	// one's where from-end is not 0, between the characters start and end (a nil end, the
+	// nil-or-integer's, is the hay's) -- nil where there is none (NoGcInternalForms
+	// STRING_SEARCH). A bound outside the hay, or a start past the end, traps: the error
+	// every other backend signals. Bytes match where characters do: a needle's first byte
+	// is no continuation byte, so a match starts at a character, and the count of lead
+	// bytes before it is its index. Locals: 5 = count, 6 = needle length, 7 = start byte,
+	// 8 = end byte, 9 = byte, 10 = k, 11 = found, 12 = index.
+	private static byte[] searchBody(int strlenIndex, int byteOffsetIndex) {
+		ByteArrayOutputStream b = new am.ik.wasm.UnsynchronizedByteArrayOutputStream();
+		WasmWriter w = new WasmWriter(b);
+		w.write(Instruction.GET_LOCAL).writeUnsignedLeb128(1);
+		w.write(Instruction.CALL).writeUnsignedLeb128(strlenIndex);
+		w.write(Instruction.SET_LOCAL).writeUnsignedLeb128(5);
+		// a nil end is the hay's
+		w.write(Instruction.GET_LOCAL).writeUnsignedLeb128(3);
+		emitIsNilInt(w);
+		w.write(Instruction.IF, 0x40);
+		w.write(Instruction.GET_LOCAL).writeUnsignedLeb128(5).write(Instruction.I64_EXTEND_U_I32);
+		w.write(Instruction.SET_LOCAL).writeUnsignedLeb128(3);
+		w.write(Instruction.END);
+		// start < 0, start > end, end > count: no bounds of the hay
+		w.write(Instruction.GET_LOCAL).writeUnsignedLeb128(2);
+		i64Const(w, 0);
+		w.write(Instruction.I64_LT_S);
+		w.write(Instruction.GET_LOCAL).writeUnsignedLeb128(2);
+		w.write(Instruction.GET_LOCAL).writeUnsignedLeb128(3);
+		w.write(Instruction.I64_GT_S);
+		w.write(Instruction.I32_OR);
+		w.write(Instruction.GET_LOCAL).writeUnsignedLeb128(3);
+		w.write(Instruction.GET_LOCAL).writeUnsignedLeb128(5).write(Instruction.I64_EXTEND_U_I32);
+		w.write(Instruction.I64_GT_S);
+		w.write(Instruction.I32_OR);
+		w.write(Instruction.IF, 0x40);
+		w.write(Instruction.UNREACHABLE);
+		w.write(Instruction.END);
+		w.write(Instruction.GET_LOCAL).writeUnsignedLeb128(0);
+		w.write(Instruction.I32_LOAD, 0x02, 0x00);
+		w.write(Instruction.SET_LOCAL).writeUnsignedLeb128(6);
+		for (int[] bound : new int[][] { { 2, 7 }, { 3, 8 } }) {
+			w.write(Instruction.GET_LOCAL).writeUnsignedLeb128(1);
+			w.write(Instruction.GET_LOCAL).writeUnsignedLeb128(bound[0]).write(Instruction.I32_WRAP_I64);
+			w.write(Instruction.CALL).writeUnsignedLeb128(byteOffsetIndex);
+			w.write(Instruction.SET_LOCAL).writeUnsignedLeb128(bound[1]);
+		}
+		w.write(Instruction.I32_CONST).writeSignedLeb128(-1);
+		w.write(Instruction.SET_LOCAL).writeUnsignedLeb128(11);
+		w.write(Instruction.GET_LOCAL).writeUnsignedLeb128(7);
+		w.write(Instruction.SET_LOCAL).writeUnsignedLeb128(9);
+		w.write(Instruction.BLOCK, 0x40); // done
+		w.write(Instruction.LOOP, 0x40); // each byte a match may start at
+		w.write(Instruction.GET_LOCAL).writeUnsignedLeb128(9);
+		w.write(Instruction.GET_LOCAL).writeUnsignedLeb128(6);
+		w.write(Instruction.I32_ADD);
+		w.write(Instruction.GET_LOCAL).writeUnsignedLeb128(8);
+		w.write(Instruction.I32_GT_U);
+		w.write(Instruction.BR_IF, 1);
+		w.write(Instruction.I32_CONST).writeSignedLeb128(0);
+		w.write(Instruction.SET_LOCAL).writeUnsignedLeb128(10);
+		w.write(Instruction.BLOCK, 0x40); // next
+		w.write(Instruction.LOOP, 0x40); // each byte of the needle
+		w.write(Instruction.GET_LOCAL).writeUnsignedLeb128(10);
+		w.write(Instruction.GET_LOCAL).writeUnsignedLeb128(6);
+		w.write(Instruction.I32_GE_U);
+		w.write(Instruction.IF, 0x40);
+		// a match: the first one is the answer, from the end the last
+		w.write(Instruction.GET_LOCAL).writeUnsignedLeb128(9);
+		w.write(Instruction.SET_LOCAL).writeUnsignedLeb128(11);
+		w.write(Instruction.GET_LOCAL).writeUnsignedLeb128(4);
+		w.write(Instruction.I32_EQZ);
+		w.write(Instruction.BR_IF, 4);
+		w.write(Instruction.BR, 2);
+		w.write(Instruction.END);
+		w.write(Instruction.GET_LOCAL).writeUnsignedLeb128(1);
+		w.write(Instruction.GET_LOCAL).writeUnsignedLeb128(9);
+		w.write(Instruction.I32_ADD);
+		w.write(Instruction.GET_LOCAL).writeUnsignedLeb128(10);
+		w.write(Instruction.I32_ADD);
+		w.write(Instruction.I32_LOAD8_U, 0x00, 0x04);
+		w.write(Instruction.GET_LOCAL).writeUnsignedLeb128(0);
+		w.write(Instruction.GET_LOCAL).writeUnsignedLeb128(10);
+		w.write(Instruction.I32_ADD);
+		w.write(Instruction.I32_LOAD8_U, 0x00, 0x04);
+		w.write(Instruction.I32_NE);
+		w.write(Instruction.BR_IF, 1);
+		w.write(Instruction.GET_LOCAL).writeUnsignedLeb128(10).write(Instruction.I32_CONST).writeSignedLeb128(1);
+		w.write(Instruction.I32_ADD).write(Instruction.SET_LOCAL).writeUnsignedLeb128(10);
+		w.write(Instruction.BR, 0);
+		w.write(Instruction.END); // loop (needle)
+		w.write(Instruction.END); // block (next)
+		w.write(Instruction.GET_LOCAL).writeUnsignedLeb128(9).write(Instruction.I32_CONST).writeSignedLeb128(1);
+		w.write(Instruction.I32_ADD).write(Instruction.SET_LOCAL).writeUnsignedLeb128(9);
+		w.write(Instruction.BR, 0);
+		w.write(Instruction.END); // loop (byte)
+		w.write(Instruction.END); // block (done)
+		w.write(Instruction.GET_LOCAL).writeUnsignedLeb128(11);
+		w.write(Instruction.I32_CONST).writeSignedLeb128(0);
+		w.write(Instruction.I32_LT_S);
+		w.write(Instruction.IF, Type.I64.code());
+		pushNil(w, Ty.NINT);
+		w.write(Instruction.ELSE);
+		// the start's index and the lead bytes from its byte to the match's
+		w.write(Instruction.GET_LOCAL).writeUnsignedLeb128(2).write(Instruction.I32_WRAP_I64);
+		w.write(Instruction.SET_LOCAL).writeUnsignedLeb128(12);
+		w.write(Instruction.GET_LOCAL).writeUnsignedLeb128(7);
+		w.write(Instruction.SET_LOCAL).writeUnsignedLeb128(9);
+		w.write(Instruction.BLOCK, 0x40);
+		w.write(Instruction.LOOP, 0x40);
+		w.write(Instruction.GET_LOCAL).writeUnsignedLeb128(9);
+		w.write(Instruction.GET_LOCAL).writeUnsignedLeb128(11);
+		w.write(Instruction.I32_GE_U);
+		w.write(Instruction.BR_IF, 1);
+		w.write(Instruction.GET_LOCAL).writeUnsignedLeb128(12);
+		w.write(Instruction.GET_LOCAL).writeUnsignedLeb128(1);
+		w.write(Instruction.GET_LOCAL).writeUnsignedLeb128(9);
+		w.write(Instruction.I32_ADD);
+		w.write(Instruction.I32_LOAD8_U, 0x00, 0x04);
+		w.write(Instruction.I32_CONST).writeSignedLeb128(0xC0);
+		w.write(Instruction.I32_AND);
+		w.write(Instruction.I32_CONST).writeSignedLeb128(0x80);
+		w.write(Instruction.I32_NE);
+		w.write(Instruction.I32_ADD);
+		w.write(Instruction.SET_LOCAL).writeUnsignedLeb128(12);
+		w.write(Instruction.GET_LOCAL).writeUnsignedLeb128(9).write(Instruction.I32_CONST).writeSignedLeb128(1);
+		w.write(Instruction.I32_ADD).write(Instruction.SET_LOCAL).writeUnsignedLeb128(9);
+		w.write(Instruction.BR, 0);
+		w.write(Instruction.END); // loop
+		w.write(Instruction.END); // block
+		w.write(Instruction.GET_LOCAL).writeUnsignedLeb128(12).write(Instruction.I64_EXTEND_U_I32);
+		w.write(Instruction.END); // if
+		w.write(Instruction.END); // function
+		return withLocals(b.toByteArray(),
+				List.of(Ty.STRING, Ty.STRING, Ty.STRING, Ty.STRING, Ty.STRING, Ty.STRING, Ty.STRING, Ty.STRING));
 	}
 
 	// __char_string(code i32) -> i32: a fresh one-character [len][bytes] string, the code
@@ -3980,8 +4445,9 @@ public final class NoGcWasmCompiler implements LispCompiler {
 
 	private static Type wasmType(Ty ty) {
 		return switch (ty) {
-			case VOID -> throw new IllegalStateException("--no-gc: VOID has no value type (it is not a value)");
-			case BOOL, INT, OPAQUE -> Type.I64;
+			case VOID, NEVER ->
+				throw new IllegalStateException("--no-gc: " + ty + " has no value type (it is not a value)");
+			case BOOL, INT, NINT, OPAQUE -> Type.I64;
 			case FLOAT -> Type.F64;
 			case STRING, F64VEC, F32VEC, F64MAT, F32MAT -> Type.I32;
 		};
@@ -3991,7 +4457,7 @@ public final class NoGcWasmCompiler implements LispCompiler {
 	// what makes a void function's signature `(...) -> ()` and lets a :void export name
 	// it directly.
 	private static Type[] wasmResultTypes(Ty ty) {
-		return ty == Ty.VOID ? new Type[0] : new Type[] { wasmType(ty) };
+		return ty.isVoid() ? new Type[0] : new Type[] { wasmType(ty) };
 	}
 
 	private static Ty returnTy(String name, Types types) {
@@ -4011,8 +4477,8 @@ public final class NoGcWasmCompiler implements LispCompiler {
 		}
 		fn.nextLocal = defun.params().size();
 
-		Ty bodyTy = compileExpr(progn(defun.body()), fn);
-		coerce(w, bodyTy, returnTy(name, types));
+		Ty bodyTy = compileExpr(progn(defun.body()), fn, this.exact && !this.valueUsed.contains(name));
+		coerce(fn, bodyTy, returnTy(name, types));
 		w.write(Instruction.END);
 		return withLocalsRaw(bodyStream.toByteArray(), fn.extraLocalTypes);
 	}
@@ -4049,7 +4515,7 @@ public final class NoGcWasmCompiler implements LispCompiler {
 		Ty ret = returnTy(decl.name(), types);
 		return (decl.returnType() == BoundaryType.S64 && (ret == Ty.INT || ret == Ty.BOOL))
 				|| (decl.returnType() == BoundaryType.FLOAT && ret == Ty.FLOAT)
-				|| (decl.returnType() == BoundaryType.VOID && ret == Ty.VOID);
+				|| (decl.returnType() == BoundaryType.VOID && ret.isVoid());
 	}
 
 	/**
@@ -4791,7 +5257,42 @@ public final class NoGcWasmCompiler implements LispCompiler {
 		w.write(Instruction.CALL).writeUnsignedLeb128(mem.funcIndex(targetIndex));
 		// Unbox the internal result (its inferred return type) back to the host type.
 		Ty ret = returnTy(name, types);
-		switch (decl.returnType()) {
+		BoundaryType answered = decl.returnType();
+		boolean converted = false;
+		if (ret.isVoid() && answered != BoundaryType.VOID && answered != BoundaryType.STRING) {
+			// An exact module's function that answers nil, or never returns, owes a host
+			// a number or a boolean: nil is false, and is no number, so that call traps.
+			if (answered == BoundaryType.BOOL && ret == Ty.VOID) {
+				w.write(Instruction.I32_CONST).writeSignedLeb128(0);
+			}
+			else {
+				w.write(Instruction.UNREACHABLE);
+			}
+			converted = true;
+		}
+		else if (ret == Ty.NINT) {
+			// Nil is no number: a call that answers it traps. A narrow type's range guard
+			// below traps on the value that holds nil already; :s64 and :float have none.
+			if (answered == BoundaryType.S64 || answered == BoundaryType.FLOAT) {
+				int r = nextLocal++;
+				wrapperLocals.add(Ty.INT);
+				w.write(Instruction.TEE_LOCAL).writeUnsignedLeb128(r);
+				w.write(Instruction.GET_LOCAL).writeUnsignedLeb128(r);
+				emitIsNilInt(w);
+				w.write(Instruction.IF, 0x40);
+				w.write(Instruction.UNREACHABLE);
+				w.write(Instruction.END);
+			}
+			else if (answered == BoundaryType.BOOL) {
+				i64Const(w, 1);
+				w.write(Instruction.I64_ROTL);
+				i64Const(w, 1);
+				w.write(Instruction.I64_NE);
+				converted = true;
+			}
+			ret = Ty.INT;
+		}
+		switch (converted ? BoundaryType.VOID : answered) {
 			// Every integer result is normalized to an i64 in the declared type's own
 			// signedness (a FLOAT body truncates through the trapping i64.trunc, which is
 			// also what rejects a negative for an unsigned type), range-checked against
@@ -4854,8 +5355,13 @@ public final class NoGcWasmCompiler implements LispCompiler {
 			}
 			// The host takes nothing. A body that answers a value still has to have it
 			// dropped; one that is itself VOID left nothing behind, which is what lets
-			// such an export reach isPassThroughExport at all.
-			case VOID -> coerce(w, ret, Ty.VOID);
+			// such an export reach isPassThroughExport at all. (Or the value is converted
+			// above already.)
+			case VOID -> {
+				if (!converted) {
+					coerce(w, ret, Ty.VOID);
+				}
+			}
 			case S_EXPR -> throw new UnsupportedOperationException("--no-gc does not support the export return type "
 					+ decl.returnType().designator() + " (it needs a cons/reader/printer runtime)");
 		}
@@ -5012,6 +5518,12 @@ public final class NoGcWasmCompiler implements LispCompiler {
 
 	// Emits the expression and returns the wasm type it left on the stack.
 	private Ty compileExpr(LispVal expr, Fn fn) {
+		return compileExpr(expr, fn, false);
+	}
+
+	// compileExpr of a form whose value nothing reads, or not: the flag typeOf's walk
+	// passes down the same forms (typeOf(LispVal, Map, TC, boolean)).
+	private Ty compileExpr(LispVal expr, Fn fn, boolean discard) {
 		switch (expr) {
 			case LispInteger i -> {
 				i64Const(fn.writer, i.value());
@@ -5080,7 +5592,7 @@ public final class NoGcWasmCompiler implements LispCompiler {
 				// the innermost located form around it (CompileWarnings).
 				LispCons enclosing = SourceProvenance.enterForm(cons);
 				try {
-					return compileCall(cons, fn);
+					return compileCall(cons, fn, discard);
 				}
 				catch (RuntimeException ex) {
 					// the innermost located form names where a refusal is
@@ -5097,6 +5609,11 @@ public final class NoGcWasmCompiler implements LispCompiler {
 
 	// Emits the expression, coercing its value to the requested type.
 	private void compileCoerced(LispVal expr, Fn fn, Ty target) {
+		compileCoerced(expr, fn, target, false);
+	}
+
+	// compileCoerced of a form whose value nothing reads, or not (compileExpr's discard).
+	private void compileCoerced(LispVal expr, Fn fn, Ty target, boolean discard) {
 		// nil in a string context is the empty string. Address 0 is a valid zero-length
 		// string header (the first 8 bytes of linear memory are always zero and the bump
 		// allocator never hands them out), so an absent if/cond branch or a nil fallback
@@ -5107,25 +5624,120 @@ public final class NoGcWasmCompiler implements LispCompiler {
 			fn.writer.write(Instruction.I32_CONST).writeSignedLeb128(0);
 			return;
 		}
-		coerce(fn.writer, compileExpr(expr, fn), target);
+		if (target == Ty.NINT && (expr instanceof LispNil || expr instanceof LispTrue)) {
+			// a literal's nil-or-integer is a constant: nil's, or t's 1 (as an INT reads
+			// it)
+			if (expr instanceof LispNil) {
+				pushNil(fn.writer, Ty.NINT);
+			}
+			else {
+				i64Const(fn.writer, 1);
+			}
+			return;
+		}
+		if (target == Ty.NINT && expr instanceof LispInteger literal) {
+			if (literal.value() == NIL_INT) {
+				throw new UnsupportedOperationException("--no-gc: '" + fn.fnName + "' puts the integer " + NIL_INT
+						+ " where nil may be too, and a value that is nil or an integer holds nil as that integer");
+			}
+			i64Const(fn.writer, literal.value());
+			return;
+		}
+		if (target == Ty.NINT && expr instanceof LispChar character) {
+			// a code point, never the nil's integer
+			i64Const(fn.writer, character.codePoint());
+			return;
+		}
+		coerce(fn, compileExpr(expr, fn, discard), target);
+	}
+
+	/**
+	 * {@link #coerce(WasmWriter, Ty, Ty)}, and the conversions of a nil-or-integer
+	 * ({@link Ty#NINT}), which test the value they convert: an integer entering one traps
+	 * on the integer its nil shadows; one read as an integer traps on nil, the type error
+	 * every other backend signals; read as a float, its nil is the 0.0 every float's is
+	 * here; a boolean entering one is its 1, nil its nil.
+	 * @param fn the function being compiled
+	 * @param from the type on the stack
+	 * @param to the type wanted
+	 */
+	private void coerce(Fn fn, Ty from, Ty to) {
+		if (from == to || (from != Ty.NINT && to != Ty.NINT) || from.isVoid() || to.isVoid()) {
+			coerce(fn.writer, from, to);
+			return;
+		}
+		WasmWriter w = fn.writer;
+		int scratch = fn.nilScratch();
+		if ((from == Ty.INT && to == Ty.NINT) || (from == Ty.NINT && to == Ty.INT)) {
+			// the one value that is both: no integer enters as nil, no nil leaves as one
+			w.write(Instruction.TEE_LOCAL).writeUnsignedLeb128(scratch);
+			w.write(Instruction.GET_LOCAL).writeUnsignedLeb128(scratch);
+			emitIsNilInt(w);
+			w.write(Instruction.IF, 0x40);
+			w.write(Instruction.UNREACHABLE);
+			w.write(Instruction.END);
+			return;
+		}
+		if (from == Ty.NINT && to == Ty.FLOAT) {
+			w.write(Instruction.TEE_LOCAL).writeUnsignedLeb128(scratch);
+			w.write(Instruction.F64_CONVERT_S_I64);
+			w.write(Instruction.F64_CONST).writeF64(0.0);
+			w.write(Instruction.GET_LOCAL).writeUnsignedLeb128(scratch);
+			emitIsNilInt(w);
+			w.write(Instruction.I32_EQZ);
+			w.write(Instruction.SELECT);
+			return;
+		}
+		if (from == Ty.NINT && to == Ty.BOOL) {
+			emitIsNilInt(w);
+			w.write(Instruction.I32_EQZ);
+			w.write(Instruction.I64_EXTEND_U_I32);
+			return;
+		}
+		if (from == Ty.BOOL && to == Ty.NINT) {
+			w.write(Instruction.SET_LOCAL).writeUnsignedLeb128(scratch);
+			i64Const(w, 1);
+			pushNil(w, Ty.NINT);
+			w.write(Instruction.GET_LOCAL).writeUnsignedLeb128(scratch);
+			w.write(Instruction.I32_WRAP_I64);
+			w.write(Instruction.SELECT);
+			return;
+		}
+		throw new UnsupportedOperationException("--no-gc: incompatible types " + from + " and " + to
+				+ " (a value that is nil or an integer is no float, string, float-vector or structure)");
+	}
+
+	// Leaves an i32 1 where the nil-or-integer on the stack is nil, 0 where it is an
+	// integer: Long.MIN_VALUE is the one i64 rotated left by one into 1.
+	private static void emitIsNilInt(WasmWriter w) {
+		i64Const(w, 1);
+		w.write(Instruction.I64_ROTL);
+		i64Const(w, 1);
+		w.write(Instruction.I64_EQ);
 	}
 
 	private static void coerce(WasmWriter w, Ty from, Ty to) {
 		if (from == to) {
 			return;
 		}
+		// A value used for its effect is dropped. This is the only place a DROP is
+		// decided, which is why a void statement costs nothing.
+		if (to.isVoid()) {
+			if (!from.isVoid()) {
+				w.write(Instruction.DROP);
+			}
+			return;
+		}
 		// A void form used for its value stands for nil, which is the zero of whatever
 		// representation the consumer reads -- so the materialization happens HERE, at
 		// the one join where a void meets a value, and nowhere along the way.
-		if (from == Ty.VOID) {
+		if (from.isVoid()) {
 			pushNil(w, to);
 			return;
 		}
-		// A value used for its effect is dropped. This is the only place a DROP is
-		// decided, which is why a void statement costs nothing.
-		if (to == Ty.VOID) {
-			w.write(Instruction.DROP);
-			return;
+		if (from == Ty.NINT || to == Ty.NINT) {
+			throw new IllegalStateException(
+					"--no-gc: a nil-or-integer converts with a scratch local: " + from + " to " + to);
 		}
 		// A boolean read as a string or a packed array: nil is address 0, and t is no
 		// sequence, the type error every backend signals -- here a trap.
@@ -5180,6 +5792,13 @@ public final class NoGcWasmCompiler implements LispCompiler {
 		switch (to) {
 			case BOOL, INT, OPAQUE -> i64Const(w, 0);
 			case FLOAT -> w.write(Instruction.F64_CONST).writeF64(0.0);
+			// Long.MIN_VALUE in five bytes where its constant takes eleven: 1 rotated
+			// right by one
+			case NINT -> {
+				i64Const(w, 1);
+				i64Const(w, 1);
+				w.write(Instruction.I64_ROTR);
+			}
 			default -> w.write(Instruction.I32_CONST).writeSignedLeb128(0);
 		}
 	}
@@ -5203,7 +5822,7 @@ public final class NoGcWasmCompiler implements LispCompiler {
 		return isSingleWidth(vecTy) ? 2 : 3;
 	}
 
-	private Ty compileCall(LispCons cons, Fn fn) {
+	private Ty compileCall(LispCons cons, Fn fn, boolean discard) {
 		if (!(cons.car() instanceof LispSymbol head)) {
 			throw new UnsupportedOperationException(
 					"--no-gc: cannot call a non-symbol / first-class function in '" + fn.fnName + "': " + cons.print());
@@ -5223,7 +5842,7 @@ public final class NoGcWasmCompiler implements LispCompiler {
 			for (int i = 0; i < slotWrites.size(); i++) {
 				Ty t = compileExpr(slotWrites.get(i), fn);
 				if (i < slotWrites.size() - 1) {
-					coerce(fn.writer, t, Ty.VOID);
+					coerce(fn, t, Ty.VOID);
 				}
 				last = t;
 			}
@@ -5232,7 +5851,7 @@ public final class NoGcWasmCompiler implements LispCompiler {
 
 		LispVal expanded = expandMacro(name, cons, args.size() - 1);
 		if (expanded != null) {
-			return compileExpr(expanded, fn);
+			return compileExpr(expanded, fn, discard);
 		}
 
 		if (isSimdCall(name)) {
@@ -5245,12 +5864,12 @@ public final class NoGcWasmCompiler implements LispCompiler {
 		// dispatchers -- see compiler/ClRedefinitionWarnings.
 		boolean redefinedClFunction = ClRedefinitionWarnings.redefinesClFunction(name, this.definedNames);
 		Ty result = switch (name) {
-			case LispNames.IF -> compileIf(args, fn);
-			case LispNames.PROGN -> compileProgn(args.subList(1, args.size()), fn);
-			case LispNames.LET -> compileLet(cons, fn);
+			case LispNames.IF -> compileIf(args, fn, discard);
+			case LispNames.PROGN -> compileProgn(args.subList(1, args.size()), fn, discard);
+			case LispNames.LET -> compileLet(cons, fn, discard);
 			case LispNames.SETQ -> compileSetq(args, fn);
 			case LispNames.WHILE -> compileWhile(args, fn);
-			case LispNames.BLOCK_INTERNAL, LispNames.BLOCK -> compileBlock(cons, args, fn);
+			case LispNames.BLOCK_INTERNAL, LispNames.BLOCK -> compileBlock(cons, args, fn, discard);
 			case LispNames.RETURN, LispNames.RETURN_FROM -> compileReturn(name, args, fn);
 			case LispNames.ERROR -> compileError(args, fn);
 			case LispNames.FUNCTION -> {
@@ -5321,6 +5940,7 @@ public final class NoGcWasmCompiler implements LispCompiler {
 			case LispNames.ASH -> compileAsh(args, fn);
 			case LispNames.MASK_SIGNED_FIELD -> compileMaskSignedField(cons, args, fn);
 			case LispNames.STRICT_MATH_INTERNAL -> compileStrictMath(args, fn);
+			case NoGcInternalForms.STRING_SEARCH -> compileStringSearch(args, fn);
 			case LispNames.SINGLE_FLOAT_INTERNAL -> {
 				// the binary32 nearest the float, as the float it is
 				requireArgc(args, 2, name, fn);
@@ -5512,7 +6132,7 @@ public final class NoGcWasmCompiler implements LispCompiler {
 		return returnTy(name, fn.types);
 	}
 
-	private Ty compileIf(List<LispVal> args, Fn fn) {
+	private Ty compileIf(List<LispVal> args, Fn fn, boolean discard) {
 		if (args.size() < 3) {
 			throw new UnsupportedOperationException("--no-gc: malformed if in '" + fn.fnName + "': " + args);
 		}
@@ -5520,56 +6140,99 @@ public final class NoGcWasmCompiler implements LispCompiler {
 		LispVal then = args.get(2);
 		// An ABSENT else is not an explicit nil: it produces nothing, which is VOID.
 		LispVal els = args.size() > 3 ? args.get(3) : null;
-		Ty thenTy = staticType(then, fn);
-		Ty elseTy = els == null ? Ty.VOID : staticType(els, fn);
+		// Each branch is typed and compiled with the variables the test shows not nil
+		// read as the integers they then are (typeOfCall's IF, narrowed).
+		Set<String> thenNonNil = nonNilWhenTrue(test, fn.localTypes);
+		Set<String> elseNonNil = els == null ? Set.of() : nonNilWhenFalse(test, fn.localTypes);
+		Map<String, Ty> outer = narrowLocals(fn, thenNonNil, then);
+		Ty thenTy = staticType(then, fn, discard);
+		fn.localTypes.putAll(outer);
+		outer = els == null ? Map.of() : narrowLocals(fn, elseNonNil, els);
+		Ty elseTy = els == null ? Ty.VOID : staticType(els, fn, discard);
+		fn.localTypes.putAll(outer);
 		// A constant test decides the branch here rather than at run time, and the
 		// branch it does not take contributes nothing to the type either. The macro
 		// expander's `cond` ends every chain in one (`(t ...)` becomes `(if t ... nil)`),
 		// so this is not a hand-written rarity -- and that trailing nil is exactly what
 		// would otherwise force an all-void chain to carry a zero in every arm.
 		if (test instanceof LispTrue) {
-			compileCoerced(then, fn, thenTy);
+			compileCoerced(then, fn, thenTy, discard);
 			return thenTy;
 		}
 		if (test instanceof LispNil) {
-			compileElse(els, fn, elseTy);
+			compileElse(els, fn, elseTy, discard);
 			return elseTy;
 		}
-		Ty result = thenTy.join(elseTy);
+		if (neverNil(staticType(test, fn))) {
+			// an exact module's integer is never nil: the test runs for what it does
+			if (!(test instanceof LispSymbol)) {
+				compileStatement(test, fn);
+			}
+			outer = narrowLocals(fn, thenNonNil, then);
+			compileCoerced(then, fn, thenTy, discard);
+			fn.localTypes.putAll(outer);
+			return thenTy;
+		}
+		Ty result = thenTy.join(elseTy, nilMeetsInt(test, then, thenTy, discard));
 		Ty testTy = compileExpr(test, fn);
 		if (!takeFlag(fn)) {
-			refuseNumberTest(testTy, fn);
-			emitTruthy(testTy, fn.writer); // -> i32 (1 if non-zero)
+			emitTest(fn, testTy, false); // -> i32 (1 if true)
 		}
 		fn.writer.write(Instruction.IF).write(result.blockType());
 		// The branches may contain a `return`, whose br depth counts this `if`.
 		fn.ctrlDepth++;
-		compileCoerced(then, fn, result);
+		outer = narrowLocals(fn, thenNonNil, then);
+		compileCoerced(then, fn, result, discard);
+		fn.localTypes.putAll(outer);
 		fn.writer.write(Instruction.ELSE);
-		compileElse(els, fn, result);
+		outer = els == null ? Map.of() : narrowLocals(fn, elseNonNil, els);
+		compileElse(els, fn, result, discard);
+		fn.localTypes.putAll(outer);
 		fn.writer.write(Instruction.END);
 		fn.ctrlDepth--;
 		return result;
 	}
 
+	/**
+	 * Reads, for a branch, each local a test shows not nil as the integer it then is,
+	 * where the branch assigns it nowhere ({@link #narrowed}, the type walk's twin).
+	 * @param fn the function being compiled
+	 * @param nonNil the locals the test shows not nil
+	 * @param branch the branch
+	 * @return the narrowed locals' own types, which the caller puts back after the branch
+	 */
+	private Map<String, Ty> narrowLocals(Fn fn, Set<String> nonNil, LispVal branch) {
+		Map<String, Ty> outer = new HashMap<>();
+		for (String name : nonNil) {
+			if (!assigns(branch, name)) {
+				outer.put(name, Objects.requireNonNull(fn.localTypes.put(name, Ty.INT)));
+			}
+		}
+		return outer;
+	}
+
 	// The else arm of an if: the written form, or -- when there is none -- the absent
 	// value itself, which costs nothing unless the join asked for one.
-	private void compileElse(@Nullable LispVal els, Fn fn, Ty result) {
+	private void compileElse(@Nullable LispVal els, Fn fn, Ty result, boolean discard) {
 		if (els == null) {
-			coerce(fn.writer, Ty.VOID, result);
+			coerce(fn, Ty.VOID, result);
 			return;
 		}
-		compileCoerced(els, fn, result);
+		compileCoerced(els, fn, result, discard);
 	}
 
 	private Ty compileProgn(List<LispVal> body, Fn fn) {
+		return compileProgn(body, fn, false);
+	}
+
+	private Ty compileProgn(List<LispVal> body, Fn fn, boolean discard) {
 		if (body.isEmpty()) {
 			return Ty.VOID;
 		}
 		for (int i = 0; i < body.size() - 1; i++) {
 			compileStatement(body.get(i), fn);
 		}
-		return compileExpr(body.getLast(), fn);
+		return compileExpr(body.getLast(), fn, discard);
 	}
 
 	// Compiles a form in STATEMENT position: evaluated for its effect, its value
@@ -5603,10 +6266,10 @@ public final class NoGcWasmCompiler implements LispCompiler {
 				return;
 			}
 		}
-		coerce(fn.writer, compileExpr(expr, fn), Ty.VOID);
+		coerce(fn, compileExpr(expr, fn, true), Ty.VOID);
 	}
 
-	private Ty compileLet(LispCons cons, Fn fn) {
+	private Ty compileLet(LispCons cons, Fn fn, boolean discard) {
 		List<LispVal> parts = cons.toList();
 		List<LispVal> bindings = parts.get(1) instanceof LispCons bc ? bc.toList() : List.of();
 		List<LispVal> body = parts.subList(2, parts.size());
@@ -5650,7 +6313,7 @@ public final class NoGcWasmCompiler implements LispCompiler {
 			shadowedTypes.put(names.get(i), fn.localTypes.get(names.get(i)));
 			fn.bind(names.get(i), slots.get(i), tys.get(i));
 		}
-		Ty result = compileProgn(body, fn);
+		Ty result = compileProgn(body, fn, discard);
 		for (String n : names) {
 			fn.restore(n, shadowedSlots.get(n), shadowedTypes.get(n));
 		}
@@ -5745,8 +6408,7 @@ public final class NoGcWasmCompiler implements LispCompiler {
 			w.write(Instruction.I32_EQZ); // the predicate's own flag, negated
 		}
 		else {
-			refuseNumberTest(testTy, fn);
-			emitFalsy(testTy, w); // -> i32 (1 if the test is zero/false)
+			emitTest(fn, testTy, true); // -> i32 (1 if the test is false)
 		}
 		w.write(Instruction.BR_IF, 1);
 		for (int i = 2; i < args.size(); i++) {
@@ -5764,22 +6426,22 @@ public final class NoGcWasmCompiler implements LispCompiler {
 	// wasm block whose result is the join of normal completion and every (return v)
 	// inside
 	// it. return (compileReturn) branches out carrying its value coerced to this type.
-	private Ty compileBlock(LispCons cons, List<LispVal> args, Fn fn) {
+	private Ty compileBlock(LispCons cons, List<LispVal> args, Fn fn, boolean discard) {
 		boolean named = LispNames.BLOCK.equals(((LispSymbol) args.get(0)).name());
 		int first = named ? 2 : 1;
-		Ty result = staticType(cons, fn);
+		Ty result = staticType(cons, fn, discard);
 		WasmWriter w = fn.writer;
 		w.write(Instruction.BLOCK, result.blockType());
 		fn.ctrlDepth++;
-		fn.blocks.push(new Block(named ? blockName(args.get(1)) : null, fn.ctrlDepth, result));
+		fn.blocks.push(new Block(named ? blockName(args.get(1)) : null, fn.ctrlDepth, result, discard));
 		if (args.size() <= first) {
-			coerce(w, Ty.VOID, result);
+			coerce(fn, Ty.VOID, result);
 		}
 		else {
 			for (int i = first; i < args.size() - 1; i++) {
 				compileStatement(args.get(i), fn);
 			}
-			compileCoerced(args.getLast(), fn, result);
+			compileCoerced(args.getLast(), fn, result, discard);
 		}
 		fn.blocks.pop();
 		fn.ctrlDepth--;
@@ -5805,13 +6467,15 @@ public final class NoGcWasmCompiler implements LispCompiler {
 		}
 		int value = named ? 2 : 1;
 		if (args.size() > value) {
-			compileCoerced(args.get(value), fn, block.result());
+			compileCoerced(args.get(value), fn, block.result(), block.discard());
 		}
 		else {
-			coerce(fn.writer, Ty.VOID, block.result());
+			coerce(fn, Ty.VOID, block.result());
 		}
 		fn.writer.write(Instruction.BR, fn.ctrlDepth - block.depth());
-		return block.result();
+		// Control does not come back: a nil-or-integer block's dead continuation reads
+		// as nothing rather than as a converted value.
+		return block.result() == Ty.NINT ? Ty.NEVER : block.result();
 	}
 
 	// (error ...): no condition exists here, so the call ends in a trap, as an error no
@@ -5819,10 +6483,10 @@ public final class NoGcWasmCompiler implements LispCompiler {
 	// that can do something have run, in order.
 	private Ty compileError(List<LispVal> args, Fn fn) {
 		for (LispVal arg : effectiveArguments(args)) {
-			coerce(fn.writer, compileExpr(arg, fn), Ty.VOID);
+			coerce(fn, compileExpr(arg, fn), Ty.VOID);
 		}
 		fn.writer.write(Instruction.UNREACHABLE);
-		return Ty.VOID;
+		return this.exact ? Ty.NEVER : Ty.VOID;
 	}
 
 	// (funcall #'(setf accessor) value instance) of a structure nothing reads: both
@@ -8103,16 +8767,18 @@ public final class NoGcWasmCompiler implements LispCompiler {
 		WasmWriter w = fn.writer;
 		Ty a = staticType(args.get(1), fn);
 		Ty b = staticType(args.get(2), fn);
-		a = a == Ty.VOID ? Ty.BOOL : a;
-		b = b == Ty.VOID ? Ty.BOOL : b;
+		a = a.isVoid() ? Ty.BOOL : a;
+		b = b.isVoid() ? Ty.BOOL : b;
 		if (a == Ty.OPAQUE || b == Ty.OPAQUE) {
 			throw new UnsupportedOperationException("--no-gc: " + name.toLowerCase(java.util.Locale.ROOT) + " in '"
 					+ fn.fnName + "' compares a structure or a function object, which the scalar backend makes only"
 					+ " where nothing reads it");
 		}
 		if (isIntLike(a) && isIntLike(b)) {
-			compileCoerced(args.get(1), fn, Ty.INT);
-			compileCoerced(args.get(2), fn, Ty.INT);
+			// a nil-or-integer compares as one: its nil is one value, and no integer
+			Ty both = a == Ty.NINT || b == Ty.NINT ? Ty.NINT : Ty.INT;
+			compileCoerced(args.get(1), fn, both);
+			compileCoerced(args.get(2), fn, both);
 			w.write(Instruction.I64_EQ);
 			return emitPredicate(fn, Instruction.I64_EXTEND_U_I32);
 		}
@@ -8162,6 +8828,31 @@ public final class NoGcWasmCompiler implements LispCompiler {
 		return Ty.BOOL;
 	}
 
+	// (%no-gc-search needle hay start end from-end): the __search helper's call, an
+	// exact module's search and position (NoGcInternalForms.STRING_SEARCH).
+	private Ty compileStringSearch(List<LispVal> args, Fn fn) {
+		requireArgc(args, 6, NoGcInternalForms.STRING_SEARCH, fn);
+		if (fn.mem.searchIndex() < 0) {
+			throw new IllegalStateException("--no-gc: a search without its __search helper in '" + fn.fnName + "'");
+		}
+		compileCoerced(args.get(1), fn, Ty.STRING);
+		compileCoerced(args.get(2), fn, Ty.STRING);
+		compileCoerced(args.get(3), fn, Ty.INT);
+		compileCoerced(args.get(4), fn, Ty.NINT);
+		LispVal fromEnd = args.get(5);
+		if (fromEnd instanceof LispNil || fromEnd instanceof LispTrue) {
+			fn.writer.write(Instruction.I32_CONST).writeSignedLeb128(fromEnd instanceof LispTrue ? 1 : 0);
+		}
+		else {
+			Ty t = compileExpr(fromEnd, fn);
+			if (!takeFlag(fn)) {
+				emitTest(fn, t, false);
+			}
+		}
+		fn.writer.write(Instruction.CALL).writeUnsignedLeb128(fn.mem.searchIndex());
+		return Ty.NINT;
+	}
+
 	// (string x): a string is itself; a character -- here its code point -- a fresh
 	// one-character string (__char_string).
 	private Ty compileString(List<LispVal> args, Fn fn) {
@@ -8176,6 +8867,7 @@ public final class NoGcWasmCompiler implements LispCompiler {
 			throw new UnsupportedOperationException("--no-gc: string of a " + t + " in '" + fn.fnName
 					+ "': only a string or a character names a string here");
 		}
+		coerce(fn, t, Ty.INT);
 		fn.writer.write(Instruction.I32_WRAP_I64);
 		fn.writer.write(Instruction.CALL).writeUnsignedLeb128(fn.mem.charStringIndex());
 		return Ty.STRING;
@@ -8282,6 +8974,22 @@ public final class NoGcWasmCompiler implements LispCompiler {
 			fn.writer.write(Instruction.END);
 			return Ty.STRING;
 		}
+		if (argTy == Ty.NINT) {
+			// NIL by name, an integer in its digits
+			int v = fn.allocLocal(Ty.INT);
+			compileCoerced(args.get(1), fn, Ty.NINT);
+			fn.writer.write(Instruction.TEE_LOCAL).writeUnsignedLeb128(v);
+			emitIsNilInt(fn.writer);
+			fn.writer.write(Instruction.IF).write(Type.I32.code());
+			fn.writer.write(Instruction.I32_CONST)
+				.writeSignedLeb128(Objects.requireNonNull(fn.mem.literals().get("NIL"),
+						() -> "--no-gc: princ-to-string without its NIL header in '" + fn.fnName + "'"));
+			fn.writer.write(Instruction.ELSE);
+			fn.writer.write(Instruction.GET_LOCAL).writeUnsignedLeb128(v);
+			fn.writer.write(Instruction.CALL).writeUnsignedLeb128(fn.mem.itoaIndex());
+			fn.writer.write(Instruction.END);
+			return Ty.STRING;
+		}
 		compileCoerced(args.get(1), fn, Ty.INT);
 		fn.writer.write(Instruction.CALL).writeUnsignedLeb128(fn.mem.itoaIndex());
 		return Ty.STRING;
@@ -8345,6 +9053,30 @@ public final class NoGcWasmCompiler implements LispCompiler {
 				w.write(Instruction.GET_LOCAL).writeUnsignedLeb128(mark).write(Instruction.SET_GLOBAL, 0x00);
 				w.write(Instruction.GET_LOCAL).writeUnsignedLeb128(v);
 				return t;
+			}
+			case NINT -> {
+				// NIL by name, an integer in its digits (the INT arm's bracket)
+				int v = fn.allocLocal(Ty.INT);
+				compileCoerced(arg, fn, Ty.NINT);
+				w.write(Instruction.TEE_LOCAL).writeUnsignedLeb128(v);
+				emitIsNilInt(w);
+				w.write(Instruction.IF, 0x40);
+				emitWriteLiteral(fn, "NIL");
+				w.write(Instruction.ELSE);
+				int mark = fn.allocLocal(Ty.STRING);
+				w.write(Instruction.GET_GLOBAL, 0x00).write(Instruction.SET_LOCAL).writeUnsignedLeb128(mark);
+				int s = fn.allocLocal(Ty.STRING);
+				w.write(Instruction.GET_LOCAL).writeUnsignedLeb128(v);
+				w.write(Instruction.CALL).writeUnsignedLeb128(fn.mem.itoaIndex());
+				w.write(Instruction.SET_LOCAL).writeUnsignedLeb128(s);
+				emitWriteString(fn, s);
+				w.write(Instruction.GET_LOCAL).writeUnsignedLeb128(mark).write(Instruction.SET_GLOBAL, 0x00);
+				w.write(Instruction.END);
+				if (print) {
+					emitWriteLiteral(fn, "\n");
+				}
+				w.write(Instruction.GET_LOCAL).writeUnsignedLeb128(v);
+				return Ty.NINT;
 			}
 			case STRING -> {
 				// A princ of a literal in VALUE position still writes its region as
@@ -8689,7 +9421,7 @@ public final class NoGcWasmCompiler implements LispCompiler {
 				throw new UnsupportedOperationException(
 						"--no-gc: %mask-signed-field of a float in '" + fn.fnName + "': " + cons.print());
 			}
-			coerce(w, t, Ty.INT);
+			coerce(fn, t, Ty.INT);
 		}
 		switch (size) {
 			case 64 -> {
@@ -8800,7 +9532,8 @@ public final class NoGcWasmCompiler implements LispCompiler {
 					+ " takes exactly one argument in '" + fn.fnName + "'");
 		}
 		Ty argTy = compileExpr(args.get(1), fn);
-		if (argTy == Ty.INT || argTy == Ty.BOOL) {
+		if (argTy == Ty.INT || argTy == Ty.BOOL || argTy == Ty.NINT) {
+			coerce(fn, argTy, Ty.INT);
 			return Ty.INT;
 		}
 		if (roundOp >= 0) {
@@ -8823,7 +9556,7 @@ public final class NoGcWasmCompiler implements LispCompiler {
 		}
 		Ty t1 = staticType(args.get(1), fn);
 		Ty t2 = staticType(args.get(2), fn);
-		Ty operand = t1.join(t2);
+		Ty operand = arith(t1).join(arith(t2));
 		if (operand == Ty.FLOAT && isIntLike(t1) != isIntLike(t2)) {
 			// A mixed integer/float pair compares exact values, like the interpreter:
 			// the float's exact binary value against the i64. Coercing
@@ -8861,9 +9594,16 @@ public final class NoGcWasmCompiler implements LispCompiler {
 	}
 
 	// Whether the static type rides the i64 representation (a BOOL 0/1 widens to INT
-	// for free, and a character IS its code point).
+	// for free, and a character IS its code point; a nil-or-integer is the integer, its
+	// nil a trap, where an operation reads it as one).
 	private static boolean isIntLike(Ty ty) {
-		return ty == Ty.INT || ty == Ty.BOOL;
+		return ty == Ty.INT || ty == Ty.BOOL || ty == Ty.NINT;
+	}
+
+	// The type an operand of an arithmetic operation or a comparison is read as: a
+	// nil-or-integer is the integer (coerce(Fn, Ty, Ty) traps on its nil).
+	private static Ty arith(Ty ty) {
+		return ty == Ty.NINT ? Ty.INT : ty;
 	}
 
 	// Mirrors an integer comparison opcode end for end, for a comparison whose INT
@@ -9194,8 +9934,7 @@ public final class NoGcWasmCompiler implements LispCompiler {
 			throw new UnsupportedOperationException("--no-gc: not takes exactly one argument in '" + fn.fnName + "'");
 		}
 		Ty tested = compileExpr(args.get(1), fn);
-		refuseNumberTest(tested, fn);
-		emitFalsy(tested, fn.writer); // i32: 1 if the value is 0
+		emitTest(fn, tested, true); // i32: 1 if the value is nil
 		return emitPredicate(fn, Instruction.I64_EXTEND_S_I32);
 	}
 
@@ -9238,13 +9977,46 @@ public final class NoGcWasmCompiler implements LispCompiler {
 	}
 
 	/**
-	 * Refuses a test of a number in an exact module ({@link Builder#exact}): nil and 0
-	 * are one value here, so the test cannot tell the two apart.
+	 * Converts the value on the stack into the i32 flag a branch takes: 1 where it is not
+	 * nil, or -- {@code falsy} -- where it is. A nil-or-integer is nil where it holds its
+	 * nil; an exact module's integer never is; in an exact module a float, whose nil is
+	 * its 0.0, is refused, and the dialect reads every number as nil where it is 0.
+	 * @param fn the function being compiled
+	 * @param ty the type of the value on the stack
+	 * @param falsy whether the flag says the value is nil
+	 */
+	private void emitTest(Fn fn, Ty ty, boolean falsy) {
+		WasmWriter w = fn.writer;
+		if (ty == Ty.NINT) {
+			i64Const(w, 1);
+			w.write(Instruction.I64_ROTL);
+			i64Const(w, 1);
+			w.write(falsy ? Instruction.I64_EQ : Instruction.I64_NE);
+			return;
+		}
+		if (neverNil(ty)) {
+			w.write(Instruction.DROP);
+			w.write(Instruction.I32_CONST).writeSignedLeb128(falsy ? 0 : 1);
+			return;
+		}
+		refuseNumberTest(ty, fn);
+		if (falsy) {
+			emitFalsy(ty, w);
+		}
+		else {
+			emitTruthy(ty, w);
+		}
+	}
+
+	/**
+	 * Refuses a test of a float in an exact module ({@link Builder#exact}): nil and 0.0
+	 * are one value there, so the test cannot tell the two apart. (Its integer is never
+	 * nil, and nil and an integer meeting are a nil-or-integer.)
 	 * @param ty the tested value's type
 	 * @param fn the function the test is in
 	 */
 	private void refuseNumberTest(Ty ty, Fn fn) {
-		if (this.exact && (ty == Ty.INT || ty == Ty.FLOAT)) {
+		if (this.exact && ty == Ty.FLOAT) {
 			throw new UnsupportedOperationException("--no-gc: '" + fn.fnName + "' tests a number for nil, and the"
 					+ " scalar backend's nil is the number 0: the program is written for Common Lisp's nil, under"
 					+ " which no number is false, so the test is refused rather than read as zero-is-false");
@@ -9254,7 +10026,7 @@ public final class NoGcWasmCompiler implements LispCompiler {
 	// Converts the top-of-stack value into an i32 truthiness flag: true (1) iff it is not
 	// zero. (Scalar mode treats numeric 0 as false; see the class doc.)
 	private static void emitTruthy(Ty ty, WasmWriter w) {
-		if (ty == Ty.VOID) {
+		if (ty.isVoid()) {
 			// Nothing was pushed and nil is false: the flag IS the constant.
 			w.write(Instruction.I32_CONST).writeSignedLeb128(0);
 			return;
@@ -9273,7 +10045,7 @@ public final class NoGcWasmCompiler implements LispCompiler {
 	// Converts the top-of-stack value into an i32 "is false" flag: 1 iff it is zero. Used
 	// by while to br out of the loop when the test fails.
 	private static void emitFalsy(Ty ty, WasmWriter w) {
-		if (ty == Ty.VOID) {
+		if (ty.isVoid()) {
 			w.write(Instruction.I32_CONST).writeSignedLeb128(1);
 			return;
 		}
@@ -10074,8 +10846,9 @@ public final class NoGcWasmCompiler implements LispCompiler {
 	 * @param depth the control depth at the block, from which a {@code br} depth is
 	 * counted
 	 * @param result its result type
+	 * @param discard whether nothing reads its value
 	 */
-	private record Block(@Nullable String name, int depth, Ty result) {
+	private record Block(@Nullable String name, int depth, Ty result, boolean discard) {
 	}
 
 	private static final class Fn {
@@ -10128,6 +10901,10 @@ public final class NoGcWasmCompiler implements LispCompiler {
 
 		int exactExp = -1;
 
+		// The i64 a nil-or-integer conversion tests its value in (coerce(Fn, Ty, Ty)),
+		// shared the same way: each use is a tee and a get with no code between.
+		private int nilScratch = -1;
+
 		// The body offset just past a predicate's widening byte (emitPredicate). When it
 		// still equals the body size, that byte is the last thing written and the i32
 		// flag under it is intact -- which is what takeFlag tests.
@@ -10162,6 +10939,13 @@ public final class NoGcWasmCompiler implements LispCompiler {
 		int allocLocal(Ty ty) {
 			this.extraLocalTypes.add(ty.valType());
 			return this.nextLocal++;
+		}
+
+		int nilScratch() {
+			if (this.nilScratch < 0) {
+				this.nilScratch = allocLocal(Ty.INT);
+			}
+			return this.nilScratch;
 		}
 
 		// Allocates a v128 (0x7B) local -- used by the simd reductions to carry the

@@ -152,8 +152,12 @@ from the GC backend: `/` is floating-point division (no `1/3` ratios), and a
 value is false in a boolean context exactly when it is zero (Common Lisp
 treats only `nil` as false). `(truncate a b)` of two integers is the exact
 `i64` quotient. A program lowered from another language (a Java class, for
-instance) is compiled with Common Lisp's meaning instead: a test of a number is
-refused, since it cannot tell `nil` from `0` here. The **boundary** designators stay host-width —
+instance) is compiled with Common Lisp's meaning instead: a value that is either
+`nil` or an integer keeps `nil` apart from `0` (it holds `nil` as
+`-9223372036854775808`, so storing that one integer in such a value traps, as
+reading `nil` as a number does), an integer tests true, and `position`, `search`
+and `digit-char-p` compile; a test of a float is refused, its `nil` being `0.0`
+here. The **boundary** designators stay host-width —
 `:int`/`:bool` cross as a 32-bit `i32` (as in the GC backend), so a returned
 value outside the 32-bit range TRAPS rather than arriving wrapped (the
 boundary carries the value exactly or traps -- see below); the wide `i64`
