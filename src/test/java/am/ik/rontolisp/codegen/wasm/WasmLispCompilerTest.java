@@ -1730,7 +1730,7 @@ class WasmLispCompilerTest {
 	}
 
 	@Test
-	void aLiteralLookupTableCostsItsOwnBytesAndNotThreeTimesThem() {
+	void anElementOfALiteralTableOrAVectorCallCostsItsOwnBytes() {
 		// A literal (unsigned-byte N) table is baked into the module's static data at the
 		// element width, so one more element costs w/8 bytes -- not the ~11.8 the cons
 		// list of the (coerce '(...) '(vector ...)) spelling used to cost, nor the ~12 an
@@ -1738,6 +1738,20 @@ class WasmLispCompilerTest {
 		assertThat(marginalBytesPerTableElement("(unsigned-byte 32)", 0xF0F0F0F0L)).isLessThanOrEqualTo(4);
 		assertThat(marginalBytesPerTableElement("(unsigned-byte 16)", 0xF0F0L)).isLessThanOrEqualTo(2);
 		assertThat(marginalBytesPerTableElement("(unsigned-byte 8)", 0xF0L)).isLessThanOrEqualTo(1);
+		// A vector call's element is its own push (a global.get, 2 bytes) and its share
+		// of a run's array.new_fixed and _vec_put call -- not the aset of each element it
+		// was,
+		// some 110 bytes. Measured 2.9.
+		assertThat((compileWithVectorCall(512).length - compileWithVectorCall(256).length) / 256.0)
+			.isLessThanOrEqualTo(3.0);
+	}
+
+	private static byte[] compileWithVectorCall(int count) {
+		String elements = " *x*".repeat(count);
+		return WasmLispCompiler.builder()
+			.optimize(OptimizeLevel.DEFAULT)
+			.build()
+			.compile(LispReader.readAllFromString("(defvar *x* 7)\n(print (vector" + elements + "))"));
 	}
 
 	// The bytes one more element adds to a literal table of 256, i.e. the per-element

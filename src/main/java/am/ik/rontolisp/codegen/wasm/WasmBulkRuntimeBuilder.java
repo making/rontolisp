@@ -57,7 +57,21 @@ final class WasmBulkRuntimeBuilder {
 	 */
 	static final int STR_DECODE = LIT_INIT_MORE + LIT_INIT_PARTS - 1;
 
-	static final int FUNC_COUNT = STR_DECODE + 1;
+	/**
+	 * {@code _vec_of (data) -> vector}: the general rank-1 array over a storage array
+	 * already filled, as {@code make-array} builds it -- what a {@code vector} call
+	 * compiles to ({@link WasmArrayCompiler#compileVector}).
+	 */
+	static final int VEC_OF = STR_DECODE + 1;
+
+	/**
+	 * {@code _vec_put (data, start, run) -> data}: the elements of RUN copied into DATA
+	 * from START on -- one run of a long {@code vector} call's
+	 * ({@link WasmArrayCompiler#compileVector}).
+	 */
+	static final int VEC_PUT = VEC_OF + 1;
+
+	static final int FUNC_COUNT = VEC_PUT + 1;
 
 	/**
 	 * Which of {@code _lit_init}'s parts the block's function at an offset is.
@@ -116,8 +130,8 @@ final class WasmBulkRuntimeBuilder {
 	 */
 	static int typeIndexOf(int i) {
 		return switch (i) {
-			case SPLIT -> WasmLispCompiler.TYPE_CALLABLE_BASE + 2;
-			case STR_DECODE -> WasmLispCompiler.TYPE_CALLABLE_BASE;
+			case SPLIT, VEC_PUT -> WasmLispCompiler.TYPE_CALLABLE_BASE + 2;
+			case STR_DECODE, VEC_OF -> WasmLispCompiler.TYPE_CALLABLE_BASE;
 			case JOIN -> WasmLispCompiler.TYPE_CALLABLE_BASE + 1;
 			case SORT, CAT, COUNT -> WasmLispCompiler.TYPE_CALLABLE_BASE + 3;
 			default -> throw new IllegalArgumentException("no bulk runtime function " + i);
@@ -138,8 +152,36 @@ final class WasmBulkRuntimeBuilder {
 			case CAT -> buildCat(flags.pairsJoined());
 			case COUNT -> buildCount();
 			case STR_DECODE -> WasmStringRuntimeBuilder.buildStrDecodeBody();
+			case VEC_OF -> buildVecOf(flags);
+			case VEC_PUT -> buildVecPut();
 			default -> throw new IllegalArgumentException("no bulk runtime function " + i);
 		};
+	}
+
+	// _vec_of (data): (dims . ((nil . (nil . 0)) . data)) and _vec_sync, the general
+	// vector of no fill pointer that (make-array n) builds, over the storage it is given.
+	private static byte[] buildVecOf(Flags flags) {
+		Asm a = new Asm(1);
+		a.get(0).refCast(ARR).arrayLen().i31().arrayNewFixed(ARR, 1);
+		a.refNull().refNull().i32(0).i31();
+		WasmEmitHelper.emitNewCons(a.w, flags.identityHash());
+		WasmEmitHelper.emitNewCons(a.w, flags.identityHash());
+		a.get(0);
+		WasmEmitHelper.emitNewCons(a.w, flags.identityHash());
+		WasmEmitHelper.emitNewCons(a.w, flags.identityHash());
+		WasmEmitHelper.emitNewArrayCell(a.w, flags.identityHash());
+		return a.finish();
+	}
+
+	// _vec_put (data, start, run): array.copy of the whole run to data[start ..], then
+	// data.
+	private static byte[] buildVecPut() {
+		Asm a = new Asm(3);
+		int run = a.local(Kind.ARR);
+		a.get(2).refCast(ARR).set(run);
+		a.get(0).refCast(ARR).get(1).unI31().get(run).i32(0).get(run).arrayLen().arrayCopy(ARR, ARR);
+		a.get(0);
+		return a.finish();
 	}
 
 	// The framed bytes of the immutable string in a local, into bytes; a branch to fail

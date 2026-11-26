@@ -299,6 +299,23 @@ the site knows all three at compile time; a Lisp-level helper taxes a tight
 allocation loop. Wasm-specific: `WasmArrayCompiler.compileMake` emits inline at every site,
 where the JVM's is an `invokestatic` on a body emitted once.
 
+## A `vector` call (wasm-GC)
+`(vector e...)` is `WasmArrayCompiler.compileVector`: the elements' pushes, `array.new_fixed`, and
+`_vec_of` (`WasmBulkRuntimeBuilder.VEC_OF`), which wraps the storage as `(make-array n)` does. Past
+`QUOTED_RUN` (16) elements the storage is `array.new_default` and each run of 16 is
+`array.new_fixed` handed to `_vec_put`, so the stack holds a run at most across the elements'
+calls ([quoted-data.md](quoted-data.md), "A long list is built in runs"). An await among the
+arguments is hoisted before the call (`WasmAwaitNormalizer`), so no element suspends with
+operands on the stack. The interpreter and the JVM keep `expandVector` (`make-array` and an `aset`
+an element, some 30 B an element on the JVM).
+
+Measured 2026-11-26 (defvars as elements, best case a `global.get` of 2 B): an element ~110 -> 2.9 B
+(the list made a vector ~13 with these globals). 3,000 elements of `(cons i "s")`: 402,697 ->
+75,670 B, `wasmtime compile` 5.8-9.5 -> 1.7 s. Java examples, component: the shiori 3,514,498 ->
+3,345,787, mustache 586,985 -> 570,493. A module with no `vector` site is byte-identical. Pinned by
+`WasmLispCompilerTest#anElementOfALiteralTableOrAVectorCallCostsItsOwnBytes` and
+`WasmLispCompilerIntegrationTest#componentAsyncLambdaCapturesAndArgumentHoistAcrossSuspension`.
+
 ## Tests
 ci-spec `array-literal-freshness-cross-backend`, `rank-zero-arrays-cross-backend`,
 `character-element-type-above-rank-one`, `general-array-remembers-its-element-type`,

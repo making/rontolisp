@@ -9711,7 +9711,7 @@ final class JavaLowering implements JavaEmitter.Context {
 				named.add(Objects.requireNonNull(made.get(placed)));
 			}
 			forms.add(list(cl("defvar"), JDK_TYPES, NIL));
-			inits.add(call("setq", JDK_TYPES, classVector(named)));
+			inits.add(call("setq", JDK_TYPES, form(cl("vector"), named)));
 		}
 
 		if (this.classes.arraysOfClasses) {
@@ -14009,8 +14009,8 @@ final class JavaLowering implements JavaEmitter.Context {
 		LispVal object = form(JavaNames.creator(constructor),
 				List.of(string(name), string(simple), canonical, integer(kind),
 						above ? classObject(superclass, reached, made, inits, forms) : NIL,
-						around ? classVector(implemented) : NIL, classObject(component, reached, made, inits, forms),
-						test, constants));
+						around ? form(cl("vector"), implemented) : NIL,
+						classObject(component, reached, made, inits, forms), test, constants));
 		if (this.session != null) {
 			// an earlier buffer's object is the class's
 			forms.add(list(cl("defvar"), variable, NIL));
@@ -14021,16 +14021,6 @@ final class JavaLowering implements JavaEmitter.Context {
 			inits.add(call("setq", variable, object));
 		}
 		return variable;
-	}
-
-	/**
-	 * A new vector of class objects, made where the program starts: of a list where there
-	 * are any -- a {@code vector} call's every element is a store of its own on wasm,
-	 * some 130 B against a list's 6, and the shiori's class objects list 528 interfaces.
-	 */
-	private static LispVal classVector(List<LispVal> elements) {
-		return elements.isEmpty() ? call("vector")
-				: call("coerce", form(cl("list"), elements), quote(cl("simple-vector")));
 	}
 
 	/**
