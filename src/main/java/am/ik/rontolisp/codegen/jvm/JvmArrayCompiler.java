@@ -98,6 +98,30 @@ final class JvmArrayCompiler {
 		ctx.body.invokestatic(javaSites.direct().arrayGuard());
 	}
 
+	/**
+	 * Compiles {@code (vector e...)}: an {@code Object[]} of the elements, evaluated left
+	 * to right into it, handed to {@code _vectorOf}. An element costs its own push, the
+	 * index and a store -- not the boxed index, rank check and {@code _aset1} call a
+	 * {@code make-array} and an {@code aset} per element cost. An element holding a loop
+	 * spills the array under it ({@code .kb/jvm-osr-backedges.md}).
+	 * @param cons the {@code vector} call
+	 * @param ctx the compilation context
+	 * @param className the class being generated
+	 */
+	static void compileVector(LispCons cons, JvmLispCompiler.Ctx ctx, String className) {
+		List<LispVal> parts = cons.toList();
+		List<LispVal> elements = parts.subList(1, parts.size());
+		JvmEmitHelper.emitIntConst(ctx, elements.size());
+		ctx.body.anewarray(ctx.objectClass);
+		for (int i = 0; i < elements.size(); i++) {
+			ctx.body.dup();
+			JvmEmitHelper.emitIntConst(ctx, i);
+			JvmExprCompiler.compileExpr(elements.get(i), ctx, className);
+			ctx.body.aastore();
+		}
+		invokeHelper(ctx, className, JvmArrayRuntimeBuilder.VECTOR_OF, JvmArrayRuntimeBuilder.VECTOR_OF_DESC);
+	}
+
 	static void compileMake(LispCons cons, JvmLispCompiler.Ctx ctx, String className) {
 		List<LispVal> args = cons.toList();
 		if (args.size() < 2) {
