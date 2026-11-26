@@ -128,14 +128,18 @@ $T -o cart-tests-comp.wasm --component && \
 
 | アノテーション | 実行されるもの |
 | --- | --- |
-| `@Test` | `@TempDir` 以外のパラメータのないメソッド |
-| `@ParameterizedTest` | ソースが与える行ごとに 1 回ずつメソッドを実行し、そのあと `AutoCloseable` である引数を最後のものから閉じます (`autoCloseArguments = false` なら閉じません)。ソースは `@ValueSource` (`classes` 以外の全要素)、`@CsvSource` (`value`、`textBlock`、`delimiter`、`delimiterString`、`quoteCharacter`、`emptyValue`、`nullValues`、`ignoreLeadingAndTrailingWhitespace`)、`@MethodSource` (文字列リテラルで名前を書いたそのクラスの static メソッド、または名前を省いてテストと同名のもの。戻り値は `Arguments`・配列・単一の引数の、`Stream`、`Iterable`、配列、`IntStream`、`LongStream`、`DoubleStream`)、`@EnumSource` (`value`、`names`、`mode`)、`@NullSource`、`@EmptySource`、`@NullAndEmptySource` です。文字列は、プリミティブ型・そのボックス・enum のパラメータに変換され、数値は拡大変換されます |
-| `@BeforeEach`、`@AfterEach` | 各テストの前後に、そのインスタンスで実行します。上位クラスのものはテストの前では先に、後では最後に実行し、`@Nested` クラスを囲むクラスのものは内側のクラスのものの外側で実行します |
-| `@BeforeAll`、`@AfterAll` | static メソッドで、そのクラスとその `@Nested` クラスのテスト全体の前後に実行します。例外を投げるとクラスのエラーになり、そのクラスのテストは実行されません |
+| `@Test` | `@TempDir` と `TestInfo` 以外のパラメータのないメソッド |
+| `@RepeatedTest` | メソッドを `value` 回実行します。各回には `RepetitionInfo` を与え、`name` (`{displayName}`、`{currentRepetition}`、`{totalRepetitions}`) で名前を付けます。失敗が `failureThreshold` 回に達すると残りはスキップします。JUnit と同じく、スキップする回にもインスタンスは作ります。`value` が正でない、しきい値が範囲外、名前が空白のときはテストのエラーです |
+| `@ParameterizedTest` | ソースが与える行ごとに 1 回ずつメソッドを実行し、そのあと `AutoCloseable` である引数を最後のものから閉じます (`autoCloseArguments = false` なら閉じません)。ソースは `@ValueSource` (`classes` 以外の全要素)、`@CsvSource` (`value`、`textBlock`、`delimiter`、`delimiterString`、`quoteCharacter`、`emptyValue`、`nullValues`、`ignoreLeadingAndTrailingWhitespace`)、`@MethodSource` (文字列リテラルで名前を書いたそのクラスの static メソッドか、`@TestInstance(PER_CLASS)` なら共有インスタンスのメソッド、または名前を省いてテストと同名のもの。戻り値は `Arguments`・配列・単一の引数の、`Stream`、`Iterable`、配列、`IntStream`、`LongStream`、`DoubleStream`)、`@EnumSource` (`value`、`names`、`mode`)、`@NullSource`、`@EmptySource`、`@NullAndEmptySource` です。文字列は、プリミティブ型・そのボックス・enum のパラメータに変換され、数値は拡大変換されます |
+| `@BeforeEach`、`@AfterEach` | 各テストの前後に、そのインスタンスで実行します。テストの `TestInfo` を与え、前後で実行するテストがすべて繰り返しテストなら `RepetitionInfo` も与えます。インタフェースと上位クラスのものはテストの前では先に、後では最後に実行し、`@Nested` クラスを囲むクラスのものは内側のクラスのものの外側で実行します |
+| `@BeforeAll`、`@AfterAll` | static メソッド (`@TestInstance(PER_CLASS)` なら任意のメソッド) で、クラスの `TestInfo` を与え、そのクラスとその `@Nested` クラスのテスト全体の前後に実行します。例外を投げるとクラスのエラーになり、そのクラスのテストは実行されません |
+| `@TestInstance` | `PER_CLASS` なら、クラスのテスト全体で 1 つのインスタンスを使います。`@BeforeAll` の前に作り、作れなければそのクラスは何も実行しません |
+| `@TestMethodOrder`、`@Order` | クラスのテストを `MethodOrderer.OrderAnnotation` (`@Order` の順。付いていないテストは `Order.DEFAULT`)、`MethodName`、`DisplayName` (名前が同じならパラメータの型の順) の順序で実行します |
+| `@Tag`、`@Tags` | `TestInfo.getTags()` が返すタグ。テストのもの、次にクラスのもの (上位クラス、各インタフェース、自身の順)、次に囲むクラスのもので、前後の空白を除き、不正なタグは除きます。タグでテストを選ぶ実行はありません |
 | `@Nested` | 内部クラスのテスト。テストごとに、囲むクラスのインスタンスの中に作ったインスタンスで実行します |
 | `@Disabled` | テストをスキップとして数えます。クラスなら、そのテストと `@Nested` クラスをそれぞれ数えます |
 | `@TempDir` | 型が `Path` か `File` のフィールドまたはパラメータ。それぞれに専用のディレクトリを `/tmp` に作ります。static フィールドのものはそのクラスのテスト全体の前後、ほかは各テストの前後で、終わると中身ごと削除します |
-| `@DisplayName` | テストに付けたもの。失敗したときにテスト名の後ろに書かれます |
+| `@DisplayName` | テストに付けたものは、失敗したときにテスト名の後ろに書かれます。テストやクラスに付けたものは `TestInfo` の表示名になります |
 
 同じソースを複数回書いたときは、JUnit と同じ順で行を与えます。同じ種類のソースをまとめて、
 そのうち最初のものを書いた位置で使います。`Named` の引数は、その中身を渡します。
@@ -145,9 +149,11 @@ $T -o cart-tests-comp.wasm --component && \
 出します。JUnit Jupiter 6.0.3 のうち、テストが呼んだ箇所でサブセットが拒否するのは
 `assertTimeoutPreemptively` (スレッドのスタックを読みます) です。
 
-クラスは、プログラムの上位クラスのテストを継承します。アノテーションなしでオーバーライド
-したメソッドはテストではありません。クラスのテストは宣言順に実行されます。JUnit は独自の
-順序で実行します。
+クラスは、プログラムの上位クラスと実装するインタフェースのテストを継承します (インタフェースの
+default メソッドと、static の `@BeforeAll`・`@AfterAll`)。アノテーションなしでオーバーライド
+したメソッドはテストではありません。`@TestInstance` と `@TestMethodOrder` は、クラス、その
+インタフェース、上位クラスの順に探し、`@Nested` クラスは囲むクラスの順序付けを引き継ぎます。
+順序付けがなければクラスのテストは宣言順に実行されます。JUnit は独自の順序で実行します。
 
 ## AssertJ のうちあるもの
 
@@ -183,19 +189,20 @@ JUnit のアノテーションのうちテストの実行が扱わないもの�
 
 ```console
 $ rontolisp test --java-source-dep org.junit.jupiter:junit-jupiter-api:6.0.3 \
-    src/test/java/shop/RepeatTest.java
-error: src/test/java/shop/RepeatTest.java:13:5: the annotation org.junit.jupiter.api.RepeatedTest is not supported by the experimental Java subset yet
+    src/test/java/shop/SlowTest.java
+error: src/test/java/shop/SlowTest.java:13:5: the annotation org.junit.jupiter.api.Timeout is not supported by the experimental Java subset yet
 ```
 
-ないものの例は次のとおりです。`@RepeatedTest`、`@TestFactory`、`@TestInstance`、`@Timeout`、
-`@Tag`、`@Order`、エクステンション、アノテーション型に付けた JUnit のアノテーション (合成
-アノテーション)、インタフェースが宣言するテスト、上の表にない要素 (`@ValueSource` の
+ないものの例は次のとおりです。`@TestFactory`、`@Timeout`、`@TestClassOrder`、
+`MethodOrderer.Random` と独自の順序付け、エクステンション、アノテーション型に付けた JUnit の
+アノテーション (合成アノテーション)、上の表にない要素 (`@ValueSource` の
 `classes`、`@EnumSource` の `from` と `to`、`@TempDir` の `cleanup` と `factory`)、`@TempDir`
-でない `@Test` メソッドのパラメータ、型が JUnit のものであるパラメータ化テストのパラメータ
-(`ArgumentsAccessor`、`TestInfo`)。AssertJ では、リフレクションでクラスのフィールドを読む検査
+でも `TestInfo` でもない `@Test` メソッドのパラメータ、型が JUnit のものであるパラメータ化
+テストのパラメータ (`ArgumentsAccessor`、引数を表示名に含む `TestInfo`)、繰り返しでないテストの
+前後で与える `RepetitionInfo`。AssertJ では、リフレクションでクラスのフィールドを読む検査
 (`usingRecursiveComparison`、`hasFieldOrPropertyWithValue`、名前を取る `extracting`)、ソフト
-アサーション、日付・ファイル・フューチャーのアサーション。テストクラスのインスタンスはパラメータの
-ないコンストラクタで作ります。テストクラスの中の `static` クラスは、ファイル直下のクラスとして
+アサーション、日付・ファイル・フューチャーのアサーション。テストクラスのコンストラクタは 1 つで、
+パラメータは `TestInfo` と `@TempDir` のディレクトリにできます。テストクラスの中の `static` クラスは、ファイル直下のクラスとして
 書いたときだけ実行されます。
 
 `rontolisp format` は `.java` ファイルを拒否します。このコマンドが整形するのは S 式です。

@@ -75,6 +75,58 @@ public final class TestRun {
         }
     }
 
+    // Runs one run of a repeated test, named by its place among the runs, and answers
+    // whether it failed: an assumption that did not hold is no failure. A method of its
+    // own, so that a run with no repeated test holds none of it.
+    public boolean repetition(String name, String displayName, Body body) {
+        running.run++;
+        try {
+            body.run();
+            return false;
+        }
+        catch (Throwable thrown) {
+            failed(name, displayName, thrown);
+            return !(thrown instanceof TestAbortedException);
+        }
+    }
+
+    // A test of a class whose tests run in an order of its own: what it is sorted by, and
+    // what runs it.
+    public static final class Ordered {
+
+        final int order;
+
+        final String name;
+
+        final String parameters;
+
+        final Runnable body;
+
+        // order: its @Order, for MethodOrderer.OrderAnnotation; name: its method's name,
+        // or its display name for MethodOrderer.DisplayName; parameters: its parameters'
+        // types, what equal names are sorted by.
+        public Ordered(int order, String name, String parameters, Runnable body) {
+            this.order = order;
+            this.name = name;
+            this.parameters = parameters;
+            this.body = body;
+        }
+    }
+
+    // Runs the tests of a class in the order a MethodOrderer of JUnit's gives: by their
+    // @Order, equal ones in the order declared, or by their names, then by their
+    // parameters. byOrder: whether by their @Order.
+    public static void ordered(java.util.List<Ordered> tests, boolean byOrder) {
+        java.util.List<Ordered> sorted = new java.util.ArrayList<>(tests);
+        sorted.sort(byOrder ? (a, b) -> Integer.compare(a.order, b.order) : (a, b) -> {
+            int names = a.name.compareTo(b.name);
+            return names != 0 ? names : a.parameters.compareTo(b.parameters);
+        });
+        for (Ordered each : sorted) {
+            each.body.run();
+        }
+    }
+
     // Runs what a class runs before or after all its tests: what it throws is an error
     // of the class, and an assumption that does not hold skips the tests it was to run
     // around, each test and each nested class one, as surefire counts them.

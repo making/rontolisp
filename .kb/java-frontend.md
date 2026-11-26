@@ -1526,9 +1526,10 @@ JDK in the front end's semantics, the library and the host.
   run: an annotation of a package under `org.junit.` that `JavaTests.RAN` does not hold
   (JUnit 4's included), an element of one it holds that the run does not read, one on an
   annotation type (a composed annotation, whose methods JUnit runs), a parameterized test's
-  parameter of JUnit's type (`ArgumentsAccessor`, `TestInfo`, `Named`), which JUnit makes,
-  and a test or lifecycle method an interface declares (JUnit runs it on the implementing
-  class; the runner walks superclasses only).
+  parameter of JUnit's type (`ArgumentsAccessor`, `TestInfo`, `Named`), which JUnit makes
+  (a `TestInfo`'s display name would show the arguments), an orderer other than
+  `OrderAnnotation`/`MethodName`/`DisplayName`, a `RepetitionInfo` given around a test that
+  is not repeated (JUnit: a `ParameterResolutionException` of that test).
 - **JUnit's rules for a source written twice and a `Named` argument**
   (`doc/en/java/testing.md`), pinned by `p.FifthTest` of the corpus case: measured,
   `@CsvSource("a") @ValueSource("b") @CsvSource("c")` runs a, c, b (javac's container;
@@ -1573,10 +1574,45 @@ JDK in the front end's semantics, the library and the host.
 - **The tree's suites that run** (`JavaSpecE2eTest#theSuitesOfTheTreesModulesRunUnchanged`,
   four backends): `SqlTest`, `ScramTest`, `TargetTest` of `jdbc-postgresql` and
   `UrlCodecTest` of `servlet-httpserver` (65 runs), green as they are, none failing under
-  rontolisp only; the six others need a server, a container or the checks by reflection
-  (`.todo/m33`). A program that is no run of tests holds none of it: the lowering changes
+  rontolisp only. **The six others stop at the library or the host, not the runner**
+  (measured 2026-11-26): `ServletHttpServerTest` at `java.lang.Process` (`ss` for the accept
+  backlog), then `URLClassLoader` and TLS (`SSLContext`, `KeyStore`); `ServletContainerTest`
+  and `DiscoveryTest` at Tomcat's and Jetty's classes (`Container.java`) and `javax.tools`;
+  `PostgresDriverTest` at Testcontainers; `ConformanceTest` (webmvc-fn-lite) at
+  `javax.tools.JavaCompiler`; `KeyValueSessionStoreTest` (with `servlet-httpserver` and
+  `rontolisp-java-api` on the source path) at `KeyValueStore.Bucket` not found from the test
+  file, then the recursive comparison, and on Preview 1 the `@WitImport` store
+  (`.todo/m61`, `.todo/m62`). A program that is no run of tests holds none of it: the lowering changes
   only where `javaTests` is set or a test package of the library's is named
   (`examples/java/shop` 323,921 B, byte-identical across l87).
+- **Past one instance a test and the order declared: measured** (JUnit 6.0.3, 2026-11-26;
+  pinned by the corpus case's `q/LifecycleTest.java`, four backends against the oracle).
+  The class's members are read level by level from the top (`JavaTests.levels`): for each
+  class from the class above all down, its interfaces not yet seen (each after those it
+  extends), then the class -- so an interface's `@BeforeEach` runs before its implementing
+  class's, a superclass's interface's before the superclass's. A method a later class (or
+  a subinterface) redeclares is no test. An interface's static `@BeforeAll` runs.
+  `@TestInstance` and `@TestMethodOrder` are found on the class, then its interfaces in the
+  order named (depth first), then the class above (`inherited`); a `@Nested` class takes the
+  enclosing class's orderer but not its lifecycle. Tags (`TestInfo.getTags`): the method's,
+  then the class's (the class above's, each interface's, own, in the order written), then
+  the enclosing class's, trimmed, invalid ones (`@Tag`'s documented syntax) dropped, first
+  kept. A method's display name is `name(SimpleTypes)`, a class's its simple name. Ordering
+  happens at run time (`TestRun.ordered`): `@Order`'s value is an expression of the holder;
+  `Order.DEFAULT` for none; equal names by the parameters' qualified types (consistent with
+  every probe). `PER_CLASS`: the instance made before `@BeforeAll` (its fields' `@TempDir`
+  still per test); a constructor that throws is the class's error and NO `@AfterAll` runs,
+  static ones neither; a non-static `@MethodSource` runs on it. `@RepeatedTest`: checks in
+  the order value, threshold (`Integer.MAX_VALUE`, the default, or `0 < t < value`), blank
+  name, each a `PreconditionViolationException` of the test naming the method as
+  `Method.toString` does; a run past the threshold still MAKES the instance (its constructor
+  runs, and one that throws is that run's error), then is skipped; an abort is no failure;
+  `{displayName}` is replaced first. Refused instead of matched: a constructor `@TempDir`
+  under `PER_CLASS` or of a repeated test with a threshold (unprobed). Cost (wasm, one test):
+  `TestInfo` +6.0 KB (the tag set made in `getTags`, else a `LinkedHashSet` +49 KB;
+  `getTestMethod` costs only where called), `@RepeatedTest` +11.1 KB; a run with none of it,
+  the two tree suites and `examples/java/shop` byte-identical (`TestRun.repetition` is a
+  method of its own for that).
 - **Skips, `@TempDir`, closed arguments: measured** (JUnit 6.0.3, surefire 3.6.0, 2026-11-25).
   Surefire counts a skipped CLASS as its direct children (each test, a parameterized test
   one, each `@Nested` class one): `@Disabled` on a class of two tests is `Tests run: 2,
