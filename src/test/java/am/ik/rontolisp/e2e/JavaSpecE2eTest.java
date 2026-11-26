@@ -654,8 +654,10 @@ class JavaSpecE2eTest {
 	 * never skipped, with JUnit Jupiter itself on the source path: an annotation of
 	 * JUnit's the runner has not, wherever it is written; an element of one it has that
 	 * it does not read; one written on an annotation type, whose methods JUnit would run;
-	 * a test an interface declares, which JUnit runs on the classes implementing it; a
-	 * parameter of a parameterized test that JUnit would make of its own.
+	 * an orderer of tests other than JUnit's by order, name or display name; a
+	 * RepetitionInfo given around a test that is not repeated; a parameter of a
+	 * parameterized test that JUnit would make of its own, or whose TestInfo would name
+	 * its arguments.
 	 */
 	@TestFactory
 	Stream<DynamicNode> whatARunOfTestsDoesNotRunIsRefusedByName() {
@@ -663,13 +665,19 @@ class JavaSpecE2eTest {
 				{ "import java.nio.file.Path; import org.junit.jupiter.api.Test; import org.junit.jupiter.api.io.*; "
 						+ "class T { @TempDir(cleanup = CleanupMode.NEVER) Path dir; @Test void t() { } }", "@TempDir",
 						"the element cleanup of @TempDir" },
-				{ "import org.junit.jupiter.api.Test; interface Shared { @Test default void t() { } } "
-						+ "class T implements Shared { }", "t() {",
-						"a test, or what runs around tests, declared by an" + " interface" },
-				{ "import org.junit.jupiter.api.RepeatedTest; class T { @RepeatedTest(2) void t() { } }",
-						"@RepeatedTest", "the annotation org.junit.jupiter.api.RepeatedTest" },
-				{ "import org.junit.jupiter.api.Tag; import org.junit.jupiter.api.Test; @Tag(\"slow\") class T { "
-						+ "@Test void t() { } }", "@Tag", "the annotation org.junit.jupiter.api.Tag" },
+				{ "import org.junit.jupiter.api.*; @TestMethodOrder(MethodOrderer.Random.class) class T { "
+						+ "@Test void t() { } }", "@TestMethodOrder",
+						"the method orderer org.junit.jupiter.api.MethodOrderer.Random" },
+				{ "import org.junit.jupiter.api.*; class T { @BeforeEach void b(RepetitionInfo r) { } "
+						+ "@Test void t() { } }", "b(",
+						"a RepetitionInfo given to what runs around a test that is not a @RepeatedTest" },
+				{ "import org.junit.jupiter.api.Timeout; import org.junit.jupiter.api.Test; class T { "
+						+ "@Test @Timeout(1) void t() { } }", "@Timeout",
+						"the annotation org.junit.jupiter.api.Timeout" },
+				{ "import org.junit.jupiter.api.TestInfo; import org.junit.jupiter.params.ParameterizedTest; "
+						+ "import org.junit.jupiter.params.provider.ValueSource; class T { @ParameterizedTest "
+						+ "@ValueSource(ints = 1) void t(int i, TestInfo info) { } }", "info)",
+						"a TestInfo parameter of a @ParameterizedTest method" },
 				{ "import org.junit.jupiter.params.ParameterizedTest; import org.junit.jupiter.params.provider.ValueSource; "
 						+ "class T { @ParameterizedTest @ValueSource(classes = String.class) void t(Class<?> c) { } }",
 						"@ValueSource", "the element classes of @ValueSource" },

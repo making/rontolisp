@@ -54,6 +54,10 @@ final class JavaTests {
 
 	private static final String TEMP_DIR = API + "io.TempDir";
 
+	private static final String INFORMATION = "rontolisp.internal.TestInformation";
+
+	private static final String REPETITION = "rontolisp.internal.TestRepetition";
+
 	/**
 	 * The annotations of JUnit's that a run of tests runs, each with the elements of it
 	 * that the run reads; {@code name} of a parameterized test only names its runs. Any
@@ -65,6 +69,10 @@ final class JavaTests {
 			Map.entry(API + "BeforeEach", Set.of()), Map.entry(API + "AfterEach", Set.of()),
 			Map.entry(API + "Nested", Set.of()), Map.entry(API + "Disabled", Set.of("value")),
 			Map.entry(API + "DisplayName", Set.of("value")), Map.entry(API + "io.TempDir", Set.of()),
+			Map.entry(API + "RepeatedTest", Set.of("value", "name", "failureThreshold")),
+			Map.entry(API + "Tag", Set.of("value")), Map.entry(API + "Tags", Set.of("value")),
+			Map.entry(API + "TestInstance", Set.of("value")), Map.entry(API + "TestMethodOrder", Set.of("value")),
+			Map.entry(API + "Order", Set.of("value")),
 			Map.entry(PARAMS + "ParameterizedTest", Set.of("name", "autoCloseArguments")),
 			Map.entry(PROVIDER + "ValueSource",
 					Set.of("shorts", "bytes", "ints", "longs", "floats", "doubles", "chars", "booleans", "strings")),
@@ -150,6 +158,30 @@ final class JavaTests {
 
 	}
 
+	/** An annotation a class inherits, and the class it is written on. */
+	private record Inherited(JavaClass type, Annotation annotation) {
+
+	}
+
+	/**
+	 * What JUnit gives a parameter of a test, of what runs around tests, or of a class.
+	 */
+	private enum Given {
+
+		/** A temporary directory, of {@code @TempDir}. */
+		DIRECTORY,
+
+		/** The {@code TestInfo} of the test or of the class. */
+		INFO,
+
+		/** The {@code RepetitionInfo} of a run of a {@code @RepeatedTest}. */
+		REPETITION,
+
+		/** An argument of a parameterized test's row. */
+		ROW
+
+	}
+
 	/**
 	 * Refuses, in a file of the program whose classes a run of tests runs, what the run
 	 * does not run, each where it is written: an annotation of a package of JUnit's that
@@ -214,6 +246,9 @@ final class JavaTests {
 
 		final JavaClass type;
 
+		/** The class's suite whose {@code @Nested} class this is, or {@code null}. */
+		final @Nullable Suite around;
+
 		final List<Annotated> tests = new ArrayList<>();
 
 		final List<Method> beforeAll = new ArrayList<>();
@@ -233,10 +268,37 @@ final class JavaTests {
 		/** The {@code @Nested} classes with tests in it, which run inside its run. */
 		final List<Suite> nested = new ArrayList<>();
 
+		/** What the class's constructor is given, one for each of its parameters. */
+		final List<Given> constructor = new ArrayList<>();
+
+		/**
+		 * The tags of the class, as expressions in the order JUnit gives them: the class
+		 * above's, each interface's, its own, then the class around it's.
+		 */
+		final List<String> tags = new ArrayList<>();
+
+		/** The class's display name, as an expression. */
+		String displayName = "";
+
 		boolean disabled;
 
-		Suite(JavaClass type) {
+		/** Whether one instance of the class runs all its tests: PER_CLASS. */
+		boolean perClass;
+
+		/**
+		 * How the tests are ordered: {@code null} as declared, else the name of a
+		 * {@code MethodOrderer} of JUnit's.
+		 */
+		@Nullable String orderer;
+
+		/**
+		 * What runs around each test and is given its RepetitionInfo, or {@code null}.
+		 */
+		@Nullable Method repetitionGiven;
+
+		Suite(JavaClass type, @Nullable Suite around) {
 			this.type = type;
+			this.around = around;
 		}
 
 		/**
@@ -247,6 +309,20 @@ final class JavaTests {
 			return this.tests.size() + this.nested.size();
 		}
 
+		/** The suites from the outermost class in, this one last. */
+		List<Suite> nest() {
+			List<Suite> nest = new ArrayList<>();
+			for (Suite each = this; each != null; each = each.around) {
+				nest.add(0, each);
+			}
+			return nest;
+		}
+
+		/** Where the class is in its nest: 0 for a top-level class. */
+		int depth() {
+			return this.around == null ? 0 : this.around.depth() + 1;
+		}
+
 	}
 
 	/**
@@ -255,7 +331,7 @@ final class JavaTests {
 	 * @return its qualified name, or {@code null} for a class with no test
 	 */
 	private @Nullable String holder(JavaClass top) {
-		Suite suite = suite(top);
+		Suite suite = suite(top, null);
 		if (suite == null) {
 			return null;
 		}
@@ -285,11 +361,11 @@ final class JavaTests {
 	 * What a class runs with the {@code @Nested} classes it holds, or {@code null} for a
 	 * class that runs nothing: one with no test in it, an abstract class, an interface.
 	 */
-	private @Nullable Suite suite(JavaClass type) {
+	private @Nullable Suite suite(JavaClass type, @Nullable Suite around) {
 		if (type.isAbstract || type.isInterface) {
 			return null;
 		}
-		Suite suite = collect(type);
+		Suite suite = collect(type, around);
 		for (JavaClass member : type.members.values()) {
 			if (member.declaration == null
 					|| !annotations(member, member.declaration.annotations(), type).containsKey(API + "Nested")) {
@@ -299,12 +375,39 @@ final class JavaTests {
 				throw JavaClasses.error(this.classes.unit(member).source(), member.declaration.pos(),
 						"a @Nested test class must not be static");
 			}
-			Suite nested = suite(member);
+			Suite nested = suite(member, suite);
 			if (nested != null) {
 				suite.nested.add(nested);
 			}
 		}
-		return suite.tests.isEmpty() && suite.nested.isEmpty() ? null : suite;
+		if (suite.tests.isEmpty() && suite.nested.isEmpty()) {
+			return null;
+		}
+		if (around == null) {
+			repetitions(suite, null);
+		}
+		return suite;
+	}
+
+	/**
+	 * Refuses a RepetitionInfo given to what runs around a test that is not repeated,
+	 * which JUnit has none for.
+	 * @param given what runs around the tests of the classes around and gives one
+	 */
+	private void repetitions(Suite suite, @Nullable Method given) {
+		Method giving = given != null ? given : suite.repetitionGiven;
+		if (giving != null) {
+			for (Annotated test : suite.tests) {
+				if (!test.is(API + "RepeatedTest")) {
+					throw JavaClasses.unsupported(this.classes.unit(giving.owner).source(),
+							java.util.Objects.requireNonNull(giving.declaration).pos(),
+							"a RepetitionInfo given to what runs around a test that is not a @RepeatedTest");
+				}
+			}
+		}
+		for (Suite nested : suite.nested) {
+			repetitions(nested, giving);
+		}
 	}
 
 	/**
@@ -329,26 +432,143 @@ final class JavaTests {
 				owner);
 	}
 
+	/** The annotations written on a class, by type. */
+	private Map<String, List<Annotation>> annotations(JavaClass type) {
+		return type.declaration == null ? Map.of()
+				: annotations(type, type.declaration.annotations(), type.outer == null ? type : type.outer);
+	}
+
+	/** Whether a class is one of the program's, whose declarations the run reads. */
+	private static boolean isProgram(JavaClass type) {
+		return !type.intrinsic && type.source != null && !type.source.library();
+	}
+
 	/**
-	 * What a class runs: its methods and the ones it inherits from the classes of the
-	 * program above it, a class above first, each in the order declared.
+	 * An annotation of a class as JUnit finds one it inherits: written on the class, else
+	 * on its interfaces in the order named, each before the interfaces it extends, else
+	 * on the class above, found the same way. Measured: the class's own before an
+	 * interface's, an interface's before the class above's.
+	 * @return the class it is written on and the annotation, or {@code null}
 	 */
-	private Suite collect(JavaClass type) {
-		Suite suite = new Suite(type);
-		if (type.declaration != null) {
-			suite.disabled = annotations(type, type.declaration.annotations(), type.outer == null ? type : type.outer)
-				.containsKey(API + "Disabled");
+	private @Nullable Inherited inherited(@Nullable JavaClass type, String annotation) {
+		if (type == null || !isProgram(type)) {
+			return null;
 		}
+		List<Annotation> own = annotations(type).get(annotation);
+		if (own != null) {
+			return new Inherited(type, own.get(0));
+		}
+		for (JavaClass each : type.interfaces) {
+			Inherited found = inherited(each, annotation);
+			if (found != null) {
+				return found;
+			}
+		}
+		return type.isInterface ? null : inherited(type.superclass, annotation);
+	}
+
+	/**
+	 * The tags of a class as expressions, in the order JUnit gives them (measured): the
+	 * class above's, each interface's in the order named, then the class's own in the
+	 * order written. An interface's are those of the interfaces it extends, then its own.
+	 */
+	private void tags(@Nullable JavaClass type, List<String> into) {
+		if (type == null || !isProgram(type)) {
+			return;
+		}
+		if (!type.isInterface) {
+			tags(type.superclass, into);
+		}
+		for (JavaClass each : type.interfaces) {
+			tags(each, into);
+		}
+		tags(type, annotations(type), into);
+	}
+
+	/** The tags of {@code @Tag} and {@code @Tags} among annotations, as expressions. */
+	private void tags(JavaClass owner, Map<String, List<Annotation>> annotations, List<String> into) {
+		Unit unit = this.classes.unit(owner);
+		for (Map.Entry<String, List<Annotation>> each : annotations.entrySet()) {
+			for (Annotation written : each.getValue()) {
+				if (each.getKey().equals(API + "Tag")) {
+					for (String text : texts(written, "value", unit)) {
+						into.add("(" + text + ")");
+					}
+				}
+				else if (each.getKey().equals(API + "Tags")) {
+					for (JavaSyntax.ElementPair pair : written.pairs()) {
+						List<JavaSyntax.ElementValue> values = pair.value() instanceof JavaSyntax.ElementArray array
+								? array.values() : List.of(pair.value());
+						for (JavaSyntax.ElementValue value : values) {
+							if (!(value instanceof Annotation tag)) {
+								throw JavaClasses.unsupported(unit.source(), written.pos(),
+										"a @Tags whose tags are not written in it");
+							}
+							for (String text : texts(tag, "value", unit)) {
+								into.add("(" + text + ")");
+							}
+						}
+					}
+				}
+			}
+		}
+	}
+
+	/**
+	 * The classes whose members a class's run reads, from the top: for each class from
+	 * the class above all down, the interfaces it names that no class above it does, each
+	 * after the interfaces it extends, then the class. Measured: what runs before each
+	 * test runs in this order.
+	 */
+	private static List<JavaClass> levels(JavaClass type) {
 		List<JavaClass> chain = new ArrayList<>();
-		for (JavaClass above = type; above != null && !above.intrinsic && above.source != null
-				&& !above.source.library(); above = above.superclass) {
+		for (JavaClass above = type; above != null && isProgram(above); above = above.superclass) {
 			chain.add(0, above);
 		}
+		List<JavaClass> levels = new ArrayList<>();
+		Set<JavaClass> seen = new HashSet<>();
 		for (JavaClass declaring : chain) {
-			interfaces(declaring.interfaces, new HashSet<>());
+			interfaceLevels(declaring.interfaces, seen, levels);
+			levels.add(declaring);
 		}
-		for (int i = 0; i < chain.size(); i++) {
-			JavaClass declaring = chain.get(i);
+		return levels;
+	}
+
+	private static void interfaceLevels(List<JavaClass> interfaces, Set<JavaClass> seen, List<JavaClass> into) {
+		for (JavaClass each : interfaces) {
+			if (isProgram(each) && seen.add(each)) {
+				interfaceLevels(each.interfaces, seen, into);
+				into.add(each);
+			}
+		}
+	}
+
+	/**
+	 * What a class runs: its methods and the ones it inherits from the classes and the
+	 * interfaces of the program above it, in the order of {@link #levels}, each in the
+	 * order declared.
+	 */
+	private Suite collect(JavaClass type, @Nullable Suite around) {
+		Suite suite = new Suite(type, around);
+		Map<String, List<Annotation>> own = annotations(type);
+		suite.disabled = own.containsKey(API + "Disabled");
+		Inherited lifecycle = inherited(type, API + "TestInstance");
+		if (lifecycle != null) {
+			List<String> value = texts(lifecycle.annotation(), "value", this.classes.unit(lifecycle.type()));
+			suite.perClass = !value.isEmpty() && value.get(0).endsWith("PER_CLASS");
+		}
+		suite.orderer = orderer(type, around);
+		tags(type, suite.tags);
+		if (around != null) {
+			suite.tags.addAll(around.tags);
+		}
+		List<Annotation> displayed = own.getOrDefault(API + "DisplayName", List.of());
+		suite.displayName = displayed.isEmpty() ? literal(type.simpleName())
+				: "(" + texts(displayed.get(0), "value", this.classes.unit(type)).get(0) + ")";
+		constructor(suite);
+		List<JavaClass> levels = levels(type);
+		for (int i = 0; i < levels.size(); i++) {
+			JavaClass declaring = levels.get(i);
 			check(this.classes.unit(declaring));
 			for (JavaClass.Field field : declaring.fields) {
 				JavaSyntax.Field declaration = field.declaration;
@@ -367,26 +587,24 @@ final class JavaTests {
 			for (Method method : declaring.methods) {
 				JavaSyntax.Method declaration = method.declaration;
 				if (method.owner != declaring || declaration == null || method.name.equals("<init>")
-						|| overridden(method, chain.subList(i + 1, chain.size()))) {
+						|| overridden(method, levels.subList(i + 1, levels.size()))) {
 					continue;
 				}
 				Annotated annotated = new Annotated(method, annotations(declaring, declaration.pos()));
 				JavaClass.Source source = this.classes.unit(declaring).source();
-				if (annotated.is(API + "Test") || annotated.is(PARAMS + "ParameterizedTest")) {
+				boolean repeated = annotated.is(API + "RepeatedTest");
+				if (annotated.is(API + "Test") || annotated.is(PARAMS + "ParameterizedTest") || repeated) {
 					if (method.isPrivate || method.isStatic || method.returnType != Primitive.VOID) {
 						throw JavaClasses.error(source, declaration.pos(),
 								"the test method " + method.name + " must not be " + (method.isPrivate ? "private"
 										: method.isStatic ? "static" : "one that returns a value"));
 					}
-					boolean parameterized = annotated.is(PARAMS + "ParameterizedTest");
-					int directories = directories(declaring, method, parameterized ? null : "a @Test method");
-					for (int p = 0; p < method.parameters.size() - directories; p++) {
-						// what JUnit would make of its own rather than take from a row
-						if (method.parameters.get(p) instanceof ClassType named
-								&& named.declaration().name.startsWith(JUNIT)) {
-							throw JavaClasses.unsupported(source, declaration.parameters().get(p).pos(),
-									"a parameter of the type " + named.declaration().name);
-						}
+					if (annotated.is(PARAMS + "ParameterizedTest")) {
+						givens(declaring, method, null);
+					}
+					else {
+						givens(declaring, method, repeated ? "a @RepeatedTest method" : "a @Test method",
+								Given.DIRECTORY, Given.INFO, repeated ? Given.REPETITION : Given.INFO);
 					}
 					suite.tests.add(annotated);
 				}
@@ -395,12 +613,16 @@ final class JavaTests {
 						continue;
 					}
 					boolean all = each.endsWith("All");
-					if (all != method.isStatic || method.isPrivate) {
+					if (all && !method.isStatic && !suite.perClass || !all && method.isStatic || method.isPrivate) {
 						throw JavaClasses.error(source, declaration.pos(),
 								"the @" + each + " method " + method.name + " must "
 										+ (method.isPrivate ? "not be private" : all ? "be static" : "not be static"));
 					}
-					directories(declaring, method, "a @" + each + " method");
+					List<Given> givens = givens(declaring, method, "a @" + each + " method", Given.DIRECTORY,
+							Given.INFO, all ? Given.INFO : Given.REPETITION);
+					if (givens.contains(Given.REPETITION) && suite.repetitionGiven == null) {
+						suite.repetitionGiven = method;
+					}
 					(switch (each) {
 						case "BeforeAll" -> suite.beforeAll;
 						case "AfterAll" -> suite.afterAll;
@@ -414,58 +636,113 @@ final class JavaTests {
 	}
 
 	/**
-	 * Refuses what an interface of the program declares that JUnit would run on a class
-	 * implementing it: a test, or what runs around tests.
+	 * The {@code MethodOrderer} of JUnit's a class's tests run in, inherited as
+	 * {@link #inherited} finds it, else the class around it's (measured), or {@code null}
+	 * for the order declared.
 	 */
-	private void interfaces(List<JavaClass> implemented, Set<JavaClass> seen) {
-		for (JavaClass type : implemented) {
-			if (type.intrinsic || type.source == null || type.source.library() || !seen.add(type)) {
+	private @Nullable String orderer(JavaClass type, @Nullable Suite around) {
+		Inherited found = inherited(type, API + "TestMethodOrder");
+		if (found == null) {
+			return around == null ? null : around.orderer;
+		}
+		Unit unit = this.classes.unit(found.type());
+		List<String> value = texts(found.annotation(), "value", unit);
+		String named = value.isEmpty() || !value.get(0).endsWith(".class") ? ""
+				: value.get(0).substring(0, value.get(0).length() - ".class".length()).strip();
+		JavaClass orderer;
+		try {
+			orderer = this.classes.find(named, found.type(), unit, found.annotation().pos());
+		}
+		catch (LispReadException | JavaClass.Absent ex) {
+			orderer = null;
+		}
+		String name = orderer == null ? named : orderer.name;
+		return switch (name) {
+			case API + "MethodOrderer.OrderAnnotation" -> "OrderAnnotation";
+			case API + "MethodOrderer.MethodName" -> "MethodName";
+			case API + "MethodOrderer.DisplayName" -> "DisplayName";
+			default ->
+				throw JavaClasses.unsupported(unit.source(), found.annotation().pos(), "the method orderer " + name);
+		};
+	}
+
+	/**
+	 * Reads what a class's one constructor is given: a temporary directory, the TestInfo.
+	 */
+	private void constructor(Suite suite) {
+		JavaClass type = suite.type;
+		Method constructor = null;
+		for (Method method : type.methods) {
+			if (method.owner != type || !method.name.equals("<init>") || method.declaration == null) {
 				continue;
 			}
-			for (Method method : type.methods) {
-				JavaSyntax.Method declaration = method.declaration;
-				if (method.owner != type || declaration == null) {
-					continue;
-				}
-				for (String annotation : annotations(type, declaration.pos()).keySet()) {
-					if (Set
-						.of(API + "Test", PARAMS + "ParameterizedTest", API + "BeforeAll", API + "AfterAll",
-								API + "BeforeEach", API + "AfterEach")
-						.contains(annotation)) {
-						throw JavaClasses.unsupported(this.classes.unit(type).source(), declaration.pos(),
-								"a test, or what runs around tests, declared by an interface");
-					}
-				}
+			if (constructor != null) {
+				throw JavaClasses.unsupported(this.classes.unit(type).source(), method.declaration.pos(),
+						"a test class declaring more than one constructor");
 			}
-			interfaces(type.interfaces, seen);
+			constructor = method;
+		}
+		if (constructor == null) {
+			return;
+		}
+		suite.constructor.addAll(givens(type, constructor, "a test class's constructor", Given.DIRECTORY, Given.INFO));
+		if (suite.perClass && suite.constructor.contains(Given.DIRECTORY)) {
+			throw JavaClasses.unsupported(this.classes.unit(type).source(),
+					java.util.Objects.requireNonNull(constructor.declaration).pos(),
+					"a @TempDir parameter of the constructor of a class of @TestInstance(PER_CLASS)");
 		}
 	}
 
 	/**
-	 * How many of a method's parameters are given a temporary directory: its last ones,
-	 * after those a parameterized test's rows give.
-	 * @param others what the method is where every parameter is to be one, or
-	 * {@code null} for a parameterized test
+	 * What JUnit gives each of a method's parameters, each refused where the run gives it
+	 * none: a parameterized test's rows give its first parameters, temporary directories
+	 * its last ones.
+	 * @param what what the method is, where JUnit gives each parameter, or {@code null}
+	 * for a parameterized test
+	 * @param given what the method's parameters may be given
 	 */
-	private int directories(JavaClass declaring, Method method, @Nullable String others) {
+	private List<Given> givens(JavaClass declaring, Method method, @Nullable String what, Given... given) {
 		JavaSyntax.Method declaration = java.util.Objects.requireNonNull(method.declaration);
 		JavaClass.Source source = this.classes.unit(declaring).source();
-		int directories = 0;
+		List<Given> givens = new ArrayList<>();
 		for (int p = 0; p < method.parameters.size(); p++) {
 			JavaSyntax.Parameter parameter = declaration.parameters().get(p);
-			if (isDirectory(declaring, parameter)) {
-				directory(method.parameters.get(p), "parameter " + parameter.name(), source, parameter.pos());
-				directories++;
+			JavaType type = method.parameters.get(p);
+			Given kind = given(declaring, parameter, type);
+			if (kind == Given.DIRECTORY) {
+				directory(type, "parameter " + parameter.name(), source, parameter.pos());
 			}
-			else if (others != null) {
-				throw JavaClasses.unsupported(source, parameter.pos(), "a parameter of " + others);
+			if (what == null) {
+				if (kind == Given.INFO) {
+					throw JavaClasses.unsupported(source, parameter.pos(),
+							"a TestInfo parameter of a @ParameterizedTest method");
+				}
+				if (kind != Given.DIRECTORY && givens.contains(Given.DIRECTORY)) {
+					throw JavaClasses.unsupported(source, parameter.pos(),
+							"a parameter given by a row after a @TempDir parameter");
+				}
+				// what JUnit would make of its own rather than take from a row
+				if (kind == Given.ROW && type instanceof ClassType named
+						&& named.declaration().name.startsWith(JUNIT)) {
+					throw JavaClasses.unsupported(source, parameter.pos(),
+							"a parameter of the type " + named.declaration().name);
+				}
 			}
-			else if (directories > 0) {
-				throw JavaClasses.unsupported(source, parameter.pos(),
-						"a parameter given by a row after a @TempDir parameter");
+			else if (!List.of(given).contains(kind)) {
+				throw JavaClasses.unsupported(source, parameter.pos(), "a parameter of " + what);
 			}
+			givens.add(kind);
 		}
-		return directories;
+		return givens;
+	}
+
+	private Given given(JavaClass declaring, JavaSyntax.Parameter parameter, JavaType type) {
+		if (isDirectory(declaring, parameter)) {
+			return Given.DIRECTORY;
+		}
+		String name = type instanceof ClassType named ? named.declaration().name : "";
+		return name.equals(API + "TestInfo") ? Given.INFO
+				: name.equals(API + "RepetitionInfo") ? Given.REPETITION : Given.ROW;
 	}
 
 	private boolean isDirectory(JavaClass declaring, JavaSyntax.Parameter parameter) {
@@ -490,9 +767,15 @@ final class JavaTests {
 				: made;
 	}
 
-	/** Whether a class below declares the method again. */
+	/**
+	 * Whether a class or interface below declares the method again: a class below every
+	 * class and interface above it, an interface below those it extends.
+	 */
 	private static boolean overridden(Method method, List<JavaClass> below) {
 		for (JavaClass each : below) {
+			if (each.isInterface && !extendsInterface(each, method.owner)) {
+				continue;
+			}
 			for (Method other : each.methods) {
 				if (other.owner == each && other.name.equals(method.name)
 						&& other.parameters.equals(method.parameters)) {
@@ -501,6 +784,44 @@ final class JavaTests {
 			}
 		}
 		return false;
+	}
+
+	private static boolean extendsInterface(JavaClass type, JavaClass above) {
+		for (JavaClass each : type.interfaces) {
+			if (each == above || extendsInterface(each, above)) {
+				return true;
+			}
+		}
+		return false;
+	}
+
+	/**
+	 * The parameters through which the method of a class's run, or of one of its tests,
+	 * is given the instances shared by the tests of the classes around it and of its own:
+	 * those of {@code @TestInstance(PER_CLASS)}.
+	 * @param own whether the class's own instance is among them
+	 */
+	private static String sharedParameters(Suite suite, boolean own) {
+		StringBuilder parameters = new StringBuilder();
+		List<Suite> nest = suite.nest();
+		for (int i = 0; i < nest.size(); i++) {
+			if (nest.get(i).perClass && (own || i < nest.size() - 1)) {
+				parameters.append(", ").append(nest.get(i).type.name).append(" shared$").append(i);
+			}
+		}
+		return parameters.toString();
+	}
+
+	/** The arguments of {@link #sharedParameters}. */
+	private static String sharedArguments(Suite suite, boolean own) {
+		StringBuilder arguments = new StringBuilder();
+		List<Suite> nest = suite.nest();
+		for (int i = 0; i < nest.size(); i++) {
+			if (nest.get(i).perClass && (own || i < nest.size() - 1)) {
+				arguments.append(", shared$").append(i);
+			}
+		}
+		return arguments.toString();
 	}
 
 	/**
@@ -521,18 +842,57 @@ final class JavaTests {
 		}
 		else {
 			StringBuilder tests = new StringBuilder();
+			List<String> each = new ArrayList<>();
 			for (Annotated test : suite.tests) {
-				tests.append(test(suite, test));
+				each.add(test(suite, test));
+			}
+			if (suite.orderer == null) {
+				each.forEach(tests::append);
+			}
+			else {
+				tests.append("        java.util.List<" + RUN + ".Ordered> ordered = new java.util.ArrayList<>();\n");
+				for (int i = 0; i < suite.tests.size(); i++) {
+					tests.append("        ordered.add(new " + RUN + ".Ordered(")
+						.append(orderKeys(suite, suite.tests.get(i)))
+						.append(", () -> {\n")
+						.append(each.get(i))
+						.append("        }));\n");
+				}
+				tests.append("        " + RUN + ".ordered(ordered, ")
+					.append(suite.orderer.equals("OrderAnnotation"))
+					.append(");\n");
 			}
 			for (Suite nested : suite.nested) {
-				tests.append("        ").append(run(nested)).append("(run);\n");
+				tests.append("        ")
+					.append(run(nested))
+					.append("(run")
+					.append(sharedArguments(nested, false))
+					.append(");\n");
+			}
+			boolean classInfo = false;
+			if (suite.perClass) {
+				for (Suite level : suite.nest()) {
+					classInfo |= level.constructor.contains(Given.INFO) && (level == suite || !level.perClass);
+				}
+			}
+			for (Method method : suite.beforeAll) {
+				classInfo |= gives(method, Given.INFO);
+			}
+			for (Method method : suite.afterAll) {
+				classInfo |= gives(method, Given.INFO);
+			}
+			if (classInfo) {
+				body.append("        " + INFORMATION + " classInfo = ").append(information(suite, null)).append(";\n");
 			}
 			boolean around = !suite.beforeAll.isEmpty() || !suite.afterAll.isEmpty()
-					|| !suite.staticDirectories.isEmpty();
+					|| !suite.staticDirectories.isEmpty() || suite.perClass;
 			if (around) {
+				Slots statics = new Slots("statics");
+				// one instance for all the tests, made before what runs before all:
+				// where it cannot be made, nothing of the class runs (measured)
+				String made = suite.perClass ? instances(suite, false, statics, "classInfo", "            ") : "";
 				// the static fields' directories, then what runs before all, each
 				// parameter of it given a directory of its own
-				Slots statics = new Slots("statics");
 				StringBuilder before = new StringBuilder();
 				for (JavaClass.Field field : suite.staticDirectories) {
 					before.append("            ")
@@ -544,11 +904,15 @@ final class JavaTests {
 						.append(";\n");
 				}
 				for (Method method : suite.beforeAll) {
-					before.append("            ").append(call(method.owner.name, method, statics)).append(";\n");
+					before.append("            ")
+						.append(call(method.isStatic ? method.owner.name : "self[0]", method, statics, "classInfo"))
+						.append(";\n");
 				}
 				StringBuilder after = new StringBuilder("            Throwable thrown = null;\n");
 				for (Method method : suite.afterAll.reversed()) {
-					after.append(guarded(call(method.owner.name, method, statics), "            "));
+					after.append(
+							guarded(call(method.isStatic ? method.owner.name : "self[0]", method, statics, "classInfo"),
+									"            "));
 				}
 				after
 					.append(statics.count == 0 ? ""
@@ -559,6 +923,19 @@ final class JavaTests {
 						.append(statics.count)
 						.append("];\n");
 				}
+				if (suite.perClass) {
+					String type = suite.type.name;
+					body.append("        ")
+						.append(type)
+						.append("[] self = new ")
+						.append(type)
+						.append("[1];\n        if (run.around(() -> {\n")
+						.append(made)
+						.append("        }, ")
+						.append(suite.skipped())
+						.append(")) {\n");
+					tests.insert(0, "        " + type + " shared$" + suite.depth() + " = self[0];\n");
+				}
 				body.append("        if (run.around(() -> {\n")
 					.append(before)
 					.append("        }, ")
@@ -568,6 +945,9 @@ final class JavaTests {
 					.append("        }\n        run.around(() -> {\n")
 					.append(after)
 					.append("        }, 0);\n");
+				if (suite.perClass) {
+					body.append("        }\n");
+				}
 			}
 			else {
 				body.append(tests);
@@ -576,10 +956,136 @@ final class JavaTests {
 		body.append("        run.finished();\n");
 		this.members.append("    private static void ")
 			.append(name)
-			.append("(" + RUN + " run) {\n")
+			.append("(" + RUN + " run")
+			.append(sharedParameters(suite, false))
+			.append(") {\n")
 			.append(body)
 			.append("    }\n");
 		return name;
+	}
+
+	/** Whether JUnit gives one of a method's parameters something of a kind. */
+	private boolean gives(Method method, Given kind) {
+		JavaSyntax.Method declaration = java.util.Objects.requireNonNull(method.declaration);
+		for (int p = 0; p < method.parameters.size(); p++) {
+			if (given(method.owner, declaration.parameters().get(p), method.parameters.get(p)) == kind) {
+				return true;
+			}
+		}
+		return false;
+	}
+
+	/**
+	 * What a test is sorted by among its class's: its {@code @Order}, its name or display
+	 * name, and its parameters' types.
+	 */
+	private String orderKeys(Suite suite, Annotated test) {
+		Method method = test.method();
+		Unit unit = this.classes.unit(method.owner);
+		String order = "org.junit.jupiter.api.Order.DEFAULT";
+		List<Annotation> ordered = test.annotations().getOrDefault(API + "Order", List.of());
+		if (!ordered.isEmpty()) {
+			order = "(" + texts(ordered.get(0), "value", unit).get(0) + ")";
+		}
+		StringBuilder parameters = new StringBuilder();
+		for (JavaType each : method.parameters) {
+			parameters.append(parameters.isEmpty() ? "" : ", ").append(typeName(each));
+		}
+		String name = java.util.Objects.equals(suite.orderer, "DisplayName") ? displayName(test) : literal(method.name);
+		return order + ", " + name + ", " + literal(parameters.toString());
+	}
+
+	/**
+	 * A test's display name as an expression: its {@code @DisplayName}, else its name and
+	 * the simple names of its parameters' types.
+	 */
+	private String displayName(Annotated test) {
+		String shown = shown(test);
+		if (shown != null) {
+			return shown;
+		}
+		StringBuilder name = new StringBuilder(test.method().name).append('(');
+		for (int i = 0; i < test.method().parameters.size(); i++) {
+			name.append(i == 0 ? "" : ", ").append(simpleName(test.method().parameters.get(i)));
+		}
+		return literal(name.append(')').toString());
+	}
+
+	/** A test's {@code @DisplayName} as an expression, or {@code null}. */
+	private @Nullable String shown(Annotated test) {
+		List<Annotation> displayed = test.annotations().getOrDefault(API + "DisplayName", List.of());
+		if (!displayed.isEmpty() && !displayed.get(0).pairs().isEmpty()
+				&& displayed.get(0).pairs().get(0).value() instanceof JavaSyntax.ElementText text) {
+			return "(" + this.classes.unit(test.method().owner).source().text().substring(text.from(), text.to()) + ")";
+		}
+		return null;
+	}
+
+	/** A type as a class's simple name writes it. */
+	private static String simpleName(JavaType type) {
+		return switch (type) {
+			case ArrayType array -> simpleName(array.element()) + "[]";
+			case ClassType named -> named.declaration().simpleName();
+			case JavaType.Variable variable ->
+				variable.parameter().bounds.isEmpty() ? "Object" : simpleName(variable.parameter().bounds.get(0));
+			default -> type.toString();
+		};
+	}
+
+	/** A type as a class's name writes it: a nested class's with {@code $}. */
+	private static String typeName(JavaType type) {
+		return switch (type) {
+			case ArrayType array -> typeName(array.element()) + "[]";
+			case ClassType named -> named.declaration().binaryName;
+			case JavaType.Variable variable -> variable.parameter().bounds.isEmpty() ? "java.lang.Object"
+					: typeName(variable.parameter().bounds.get(0));
+			default -> type.toString();
+		};
+	}
+
+	/** A type as a class literal names it. */
+	private static String classLiteral(JavaType type) {
+		return switch (type) {
+			case ArrayType array -> classLiteral(array.element()) + "[]";
+			case ClassType named -> named.declaration().name;
+			case JavaType.Variable variable -> variable.parameter().bounds.isEmpty() ? "java.lang.Object"
+					: classLiteral(variable.parameter().bounds.get(0));
+			default -> type.toString();
+		};
+	}
+
+	/**
+	 * The expression making the TestInfo of a test, or of a class where {@code test} is
+	 * {@code null}.
+	 * @param display the test's display name, as an expression
+	 */
+	private String information(Suite suite, @Nullable Annotated test, String display) {
+		StringBuilder tags = new StringBuilder();
+		if (test != null) {
+			List<String> own = new ArrayList<>();
+			tags(test.method().owner, test.annotations(), own);
+			own.forEach(each -> tags.append(tags.isEmpty() ? "" : ", ").append(each));
+		}
+		suite.tags.forEach(each -> tags.append(tags.isEmpty() ? "" : ", ").append(each));
+		StringBuilder made = new StringBuilder("new " + INFORMATION + "(").append(display)
+			.append(", new String[] {")
+			.append(tags)
+			.append("}, ")
+			.append(suite.type.name)
+			.append(".class, ");
+		if (test == null) {
+			return made.append("null, null, null)").toString();
+		}
+		Method method = test.method();
+		made.append(method.owner.name).append(".class, ").append(literal(method.name)).append(", new Class<?>[] {");
+		for (int i = 0; i < method.parameters.size(); i++) {
+			made.append(i == 0 ? "" : ", ").append(classLiteral(method.parameters.get(i))).append(".class");
+		}
+		return made.append("})").toString();
+	}
+
+	private String information(Suite suite, @Nullable Annotated test) {
+		return information(suite, test, suite.displayName);
 	}
 
 	/**
@@ -599,15 +1105,33 @@ final class JavaTests {
 	}
 
 	/**
-	 * A call of what runs before or after tests, each of its parameters, which are all
-	 * temporary directories, given one of its own.
+	 * A call of what runs before or after tests, each of its parameters given what JUnit
+	 * gives it: a temporary directory of its own, the TestInfo, the RepetitionInfo.
 	 */
-	private static String call(String target, Method method, Slots slots) {
+	private String call(String target, Method method, Slots slots, String info) {
 		StringBuilder call = new StringBuilder(target).append('.').append(method.name).append('(');
-		for (int p = 0; p < method.parameters.size(); p++) {
-			call.append(p == 0 ? "" : ", ").append(directory(method.parameters.get(p), slots.array, slots.count++));
-		}
+		call.append(arguments(method, slots, info, null));
 		return call.append(')').toString();
+	}
+
+	/**
+	 * The arguments of a method JUnit calls, each given what JUnit gives it.
+	 * @param row what gives a row's arguments, or {@code null} where none is given
+	 */
+	private String arguments(Method method, Slots slots, String info, @Nullable String row) {
+		JavaSyntax.Method declaration = java.util.Objects.requireNonNull(method.declaration);
+		StringBuilder arguments = new StringBuilder();
+		for (int p = 0; p < method.parameters.size(); p++) {
+			JavaType type = method.parameters.get(p);
+			arguments.append(p == 0 ? "" : ", ")
+				.append(switch (given(method.owner, declaration.parameters().get(p), type)) {
+					case DIRECTORY -> directory(type, slots.array, slots.count++);
+					case INFO -> info;
+					case REPETITION -> "repetition";
+					case ROW -> argument(type, p);
+				});
+		}
+		return arguments.toString();
 	}
 
 	/**
@@ -625,16 +1149,15 @@ final class JavaTests {
 		Method method = test.method();
 		JavaSyntax.Method declaration = java.util.Objects.requireNonNull(method.declaration);
 		Unit unit = this.classes.unit(method.owner);
-		String shown = "null";
-		List<Annotation> displayed = test.annotations().getOrDefault(API + "DisplayName", List.of());
-		if (!displayed.isEmpty() && !displayed.get(0).pairs().isEmpty()
-				&& displayed.get(0).pairs().get(0).value() instanceof JavaSyntax.ElementText text) {
-			shown = "(" + unit.source().text().substring(text.from(), text.to()) + ")";
+		String shown = shown(test);
+		if (shown == null) {
+			shown = "null";
 		}
 		if (test.is(API + "Disabled")) {
 			return "        run.skipped(1);\n";
 		}
 		boolean parameterized = test.is(PARAMS + "ParameterizedTest");
+		boolean repeated = test.is(API + "RepeatedTest");
 		boolean closing = parameterized;
 		for (Annotation written : test.annotations().getOrDefault(PARAMS + "ParameterizedTest", List.of())) {
 			for (String text : texts(written, "autoCloseArguments", unit)) {
@@ -646,13 +1169,77 @@ final class JavaTests {
 			}
 		}
 		String invoked = "test$" + (this.methods++);
+		String shared = sharedArguments(suite, true);
 		this.members.append("    private static void ")
 			.append(invoked)
-			.append(parameterized ? "(Object[] row) throws Throwable {\n" : "() throws Throwable {\n")
-			.append(invocation(suite, method, closing))
+			.append("(")
+			.append(sharedParameters(suite, true).replaceFirst("^, ", ""))
+			.append(parameterized ? (shared.isEmpty() ? "" : ", ") + "Object[] row"
+					: repeated ? (shared.isEmpty() ? "" : ", ") + REPETITION + " repetition" : "")
+			.append(") throws Throwable {\n")
+			.append(invocation(suite, test, closing))
 			.append("    }\n");
+		String named = literal(method.name);
+		if (repeated) {
+			Annotation written = test.annotations().getOrDefault(API + "RepeatedTest", List.of()).get(0);
+			List<String> value = texts(written, "value", unit);
+			List<String> pattern = texts(written, "name", unit);
+			List<String> threshold = texts(written, "failureThreshold", unit);
+			StringBuilder signature = new StringBuilder("void ").append(method.owner.binaryName)
+				.append('.')
+				.append(method.name)
+				.append('(');
+			for (int i = 0; i < method.parameters.size(); i++) {
+				signature.append(i == 0 ? "" : ",").append(typeName(method.parameters.get(i)));
+			}
+			String made = made(suite, test);
+			String repeat = "repeat$" + (this.methods++);
+			this.members.append("    private static void ")
+				.append(repeat)
+				.append("(" + RUN + " run")
+				.append(sharedParameters(suite, true))
+				.append(") {\n        int total = (")
+				.append(value.isEmpty() ? "0" : value.get(0))
+				.append(");\n        String pattern = (")
+				.append(pattern.isEmpty() ? API + "RepeatedTest.SHORT_DISPLAY_NAME" : pattern.get(0))
+				.append(");\n        int threshold = (")
+				.append(threshold.isEmpty() ? "Integer.MAX_VALUE" : threshold.get(0))
+				.append(");\n        Throwable wrong = " + REPETITION + ".check(total, pattern, threshold, ")
+				.append(literal(signature.append(')').toString()))
+				.append(");\n        if (wrong != null) {\n            run.broken(")
+				.append(named)
+				.append(", ")
+				.append(shown)
+				.append(", wrong);\n            return;\n        }\n        int failures = 0;\n")
+				.append("        for (int i = 1; i <= total; i++) {\n")
+				.append("            " + REPETITION + " repetition = new ")
+				.append(REPETITION + "(i, total, failures, threshold, pattern, ")
+				.append(displayName(test))
+				.append(");\n            if (failures >= threshold) {\n")
+				.append("                run.repetition(")
+				.append(named)
+				.append(" + \"[\" + i + \"]\", ")
+				.append(shown)
+				.append(", () -> ")
+				.append(made)
+				.append("(")
+				.append(shared.replaceFirst("^, ", ""))
+				.append(shared.isEmpty() ? "" : ", ")
+				.append("repetition));\n                continue;\n            }\n            if (run.repetition(")
+				.append(named)
+				.append(" + \"[\" + i + \"]\", ")
+				.append(shown)
+				.append(", () -> ")
+				.append(invoked)
+				.append("(")
+				.append(shared.replaceFirst("^, ", ""))
+				.append(shared.isEmpty() ? "" : ", ")
+				.append("repetition))) {\n                failures++;\n            }\n        }\n    }\n");
+			return "        " + repeat + "(run" + shared + ");\n";
+		}
 		if (!parameterized) {
-			return "        run.test(" + literal(method.name) + ", " + shown + ", () -> " + invoked + "());\n";
+			return "        run.test(" + named + ", " + shown + ", () -> " + invoked + "("
+					+ shared.replaceFirst("^, ", "") + "));\n";
 		}
 		StringBuilder sources = new StringBuilder();
 		for (Map.Entry<String, List<Annotation>> each : test.annotations().entrySet()) {
@@ -665,10 +1252,11 @@ final class JavaTests {
 					+ " names no source of arguments the experimental Java subset has");
 		}
 		String rows = "rows$" + (this.methods++);
-		String named = literal(method.name);
 		this.members.append("    private static void ")
 			.append(rows)
-			.append("(" + RUN + " run) {\n        java.util.List<Object[]> rows = new java.util.ArrayList<>();\n")
+			.append("(" + RUN + " run")
+			.append(sharedParameters(suite, true))
+			.append(") {\n        java.util.List<Object[]> rows = new java.util.ArrayList<>();\n")
 			.append("        try {\n")
 			.append(sources)
 			.append("            if (rows.isEmpty()) {\n                throw new IllegalStateException(\"Configuration")
@@ -685,8 +1273,87 @@ final class JavaTests {
 			.append(shown)
 			.append(", () -> ")
 			.append(invoked)
-			.append("(row));\n        }\n    }\n");
-		return "        " + rows + "(run);\n";
+			.append("(")
+			.append(shared.replaceFirst("^, ", ""))
+			.append(shared.isEmpty() ? "" : ", ")
+			.append("row));\n        }\n    }\n");
+		return "        " + rows + "(run" + shared + ");\n";
+	}
+
+	/**
+	 * Writes the method standing for a run of a repeated test that is skipped, the
+	 * failures having reached the threshold: the instances are made, then the run is
+	 * skipped, as JUnit does (measured: a constructor throwing is the run's error).
+	 * @return its name
+	 */
+	private String made(Suite suite, Annotated test) {
+		String name = "made$" + (this.methods++);
+		boolean info = false;
+		for (Suite level : suite.nest()) {
+			info |= level.constructor.contains(Given.INFO) && !level.perClass;
+			if (level.constructor.contains(Given.DIRECTORY) && !level.perClass) {
+				JavaSyntax.Method declaration = java.util.Objects.requireNonNull(test.method().declaration);
+				throw JavaClasses.unsupported(this.classes.unit(test.method().owner).source(), declaration.pos(),
+						"a @RepeatedTest with a failureThreshold of a class whose constructor takes a @TempDir");
+			}
+		}
+		this.members.append("    private static void ")
+			.append(name)
+			.append("(")
+			.append(sharedParameters(suite, true).replaceFirst("^, ", ""))
+			.append(sharedParameters(suite, true).isEmpty() ? "" : ", ")
+			.append(REPETITION + " repetition) throws Throwable {\n");
+		if (info) {
+			this.members.append("        " + INFORMATION + " info = ")
+				.append(information(suite, test, "repetition.displayName()"))
+				.append(";\n");
+		}
+		this.members.append(instances(suite, true, new Slots("directories"), "info", "        "))
+			.append("        throw new org.opentest4j.TestAbortedException();\n    }\n");
+		return name;
+	}
+
+	/**
+	 * The statements making the instances of a class's nest, from the outermost class in:
+	 * one shared by the tests of a class of {@code @TestInstance(PER_CLASS)}, else a new
+	 * one, its constructor given what JUnit gives it. The innermost is {@code instance}
+	 * in a test's run, {@code self[0]} where a class's shared one is made.
+	 * @param test whether they are a test's, else the class's shared instance
+	 */
+	private String instances(Suite suite, boolean test, Slots slots, String info, String indent) {
+		List<Suite> nest = suite.nest();
+		StringBuilder body = new StringBuilder();
+		for (int i = 0; i < nest.size(); i++) {
+			Suite level = nest.get(i);
+			boolean last = i == nest.size() - 1;
+			String variable = last ? test ? "instance" : "self[0]" : "outer" + i;
+			body.append(indent);
+			if (!last || test) {
+				body.append(level.type.name).append(' ');
+			}
+			body.append(variable).append(" = ");
+			if (level.perClass && (test || !last)) {
+				body.append("shared$").append(i);
+			}
+			else {
+				String arguments = constructorArguments(level, slots, info);
+				body.append(i == 0 ? "new " + level.type.name + "(" + arguments + ")"
+						: "outer" + (i - 1) + ".new " + level.type.simpleName() + "(" + arguments + ")");
+			}
+			body.append(";\n");
+		}
+		return body.toString();
+	}
+
+	/** The arguments of a class's constructor, each given what JUnit gives it. */
+	private String constructorArguments(Suite level, Slots slots, String info) {
+		Method constructor = null;
+		for (Method method : level.type.methods) {
+			if (method.owner == level.type && method.name.equals("<init>") && method.declaration != null) {
+				constructor = method;
+			}
+		}
+		return constructor == null || level.constructor.isEmpty() ? "" : arguments(constructor, slots, info, null);
 	}
 
 	/**
@@ -698,47 +1365,46 @@ final class JavaTests {
 	 * @param closing whether the arguments of a row that are {@code AutoCloseable} are
 	 * closed
 	 */
-	private String invocation(Suite suite, Method method, boolean closing) {
-		List<JavaClass> nest = new ArrayList<>();
-		for (JavaClass around = suite.type; around != null; around = around.outer) {
-			nest.add(0, around);
+	private String invocation(Suite suite, Annotated test, boolean closing) {
+		Method method = test.method();
+		List<Suite> nest = suite.nest();
+		Slots slots = new Slots("directories");
+		boolean info = gives(method, Given.INFO);
+		for (Suite level : nest) {
+			info |= level.constructor.contains(Given.INFO) && !level.perClass;
+			for (Method each : level.beforeEach) {
+				info |= gives(each, Given.INFO);
+			}
+			for (Method each : level.afterEach) {
+				info |= gives(each, Given.INFO);
+			}
 		}
 		StringBuilder body = new StringBuilder();
-		Slots slots = new Slots("directories");
+		if (info) {
+			body.append("        " + INFORMATION + " info = ")
+				.append(information(suite, test,
+						test.is(API + "RepeatedTest") ? "repetition.displayName()" : displayName(test)))
+				.append(";\n");
+		}
+		body.append(instances(suite, true, slots, "info", "        "));
 		List<String> before = new ArrayList<>();
 		List<String> after = new ArrayList<>();
 		for (int i = 0; i < nest.size(); i++) {
-			JavaClass level = nest.get(i);
+			Suite own = nest.get(i);
 			String variable = i == nest.size() - 1 ? "instance" : "outer" + i;
-			body.append("        ")
-				.append(level.name)
-				.append(' ')
-				.append(variable)
-				.append(" = ")
-				.append(i == 0 ? "new " + level.name + "()" : "outer" + (i - 1) + ".new " + level.simpleName() + "()")
-				.append(";\n");
-			Suite own = level == suite.type ? suite : collect(level);
 			for (JavaClass.Field field : own.directories) {
 				// a field of a class above, which one of the level's may hide
-				String target = field.owner == level ? variable : "((" + field.owner.name + ") " + variable + ")";
+				String target = field.owner == own.type ? variable : "((" + field.owner.name + ") " + variable + ")";
 				before.add(target + "." + field.name + " = " + directory(field.type, slots.array, slots.count++));
 			}
 			for (Method each : own.beforeEach) {
-				before.add(call(variable, each, slots));
+				before.add(call(variable, each, slots, "info"));
 			}
 			for (Method each : own.afterEach) {
-				after.add(0, call(variable, each, slots));
+				after.add(0, call(variable, each, slots, "info"));
 			}
 		}
-		StringBuilder arguments = new StringBuilder();
-		for (int i = 0; i < method.parameters.size(); i++) {
-			JavaSyntax.Parameter parameter = java.util.Objects.requireNonNull(method.declaration).parameters().get(i);
-			arguments.append(i == 0 ? "" : ", ")
-				.append(isDirectory(method.owner, parameter)
-						? directory(method.parameters.get(i), slots.array, slots.count++)
-						: argument(method.parameters.get(i), i));
-		}
-		String call = "instance." + method.name + "(" + arguments + ")";
+		String call = "instance." + method.name + "(" + arguments(method, slots, "info", "row") + ")";
 		if (before.isEmpty() && after.isEmpty() && slots.count == 0 && !closing) {
 			return body.append("        ").append(call).append(";\n").toString();
 		}
@@ -851,7 +1517,7 @@ final class JavaTests {
 				for (String name : names) {
 					calls.append(indent)
 						.append(SOURCES + ".rows(rows, ")
-						.append(suite.type.name)
+						.append(factory(suite, name, unit, written))
 						.append('.')
 						.append(name)
 						.append("());\n");
@@ -880,6 +1546,31 @@ final class JavaTests {
 			default:
 				return "";
 		}
+	}
+
+	/**
+	 * What a {@code @MethodSource} method of a test's class is called on: the class for a
+	 * static one, the instance its tests share for one that is not, which JUnit calls
+	 * only where the class is of {@code @TestInstance(PER_CLASS)}.
+	 */
+	private String factory(Suite suite, String name, Unit unit, Annotation written) {
+		for (JavaClass level : levels(suite.type).reversed()) {
+			for (Method method : level.methods) {
+				if (method.owner != level || !method.name.equals(name) || !method.parameters.isEmpty()) {
+					continue;
+				}
+				if (!method.isStatic) {
+					if (!suite.perClass) {
+						throw JavaClasses.unsupported(unit.source(), written.pos(),
+								"a @MethodSource method that is not static, of a class that is not of "
+										+ "@TestInstance(PER_CLASS)");
+					}
+					return "shared$" + suite.depth();
+				}
+				return suite.type.name;
+			}
+		}
+		return suite.type.name;
 	}
 
 	/**

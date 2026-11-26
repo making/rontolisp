@@ -125,14 +125,18 @@ names, and fails the build with the name of a failed test.
 
 | Annotation | What runs |
 | --- | --- |
-| `@Test` | A method of no parameter but a `@TempDir` |
-| `@ParameterizedTest` | The method once for each row of its sources, then each argument that is `AutoCloseable` closed, the last first (not with `autoCloseArguments = false`): `@ValueSource` (every element but `classes`), `@CsvSource` (`value`, `textBlock`, `delimiter`, `delimiterString`, `quoteCharacter`, `emptyValue`, `nullValues`, `ignoreLeadingAndTrailingWhitespace`), `@MethodSource` (static methods of the class named by string literals, or the one named as the test: a `Stream`, an `Iterable`, an array, an `IntStream`, a `LongStream` or a `DoubleStream`, of `Arguments`, of arrays or of single arguments), `@EnumSource` (`value`, `names`, `mode`), `@NullSource`, `@EmptySource`, `@NullAndEmptySource`. A text is converted to a parameter of a primitive type, of its box or of an enum, and a number widens |
-| `@BeforeEach`, `@AfterEach` | Around each test, on its instance: those of a class above first before a test and last after it, those of the class around a `@Nested` class outside its own |
-| `@BeforeAll`, `@AfterAll` | Static methods, around the tests of the class and of its `@Nested` classes. One that throws is an error of the class, whose tests then do not run |
+| `@Test` | A method of no parameter but a `@TempDir` and the `TestInfo` |
+| `@RepeatedTest` | The method `value` times, each run given its `RepetitionInfo` and named by `name` (`{displayName}`, `{currentRepetition}`, `{totalRepetitions}`); once `failureThreshold` runs failed, the rest are skipped, an instance still made for each as JUnit does. A `value` that is not positive, a threshold out of range or a blank name is an error of the test |
+| `@ParameterizedTest` | The method once for each row of its sources, then each argument that is `AutoCloseable` closed, the last first (not with `autoCloseArguments = false`): `@ValueSource` (every element but `classes`), `@CsvSource` (`value`, `textBlock`, `delimiter`, `delimiterString`, `quoteCharacter`, `emptyValue`, `nullValues`, `ignoreLeadingAndTrailingWhitespace`), `@MethodSource` (static methods of the class named by string literals, or methods of its shared instance under `@TestInstance(PER_CLASS)`, or the one named as the test: a `Stream`, an `Iterable`, an array, an `IntStream`, a `LongStream` or a `DoubleStream`, of `Arguments`, of arrays or of single arguments), `@EnumSource` (`value`, `names`, `mode`), `@NullSource`, `@EmptySource`, `@NullAndEmptySource`. A text is converted to a parameter of a primitive type, of its box or of an enum, and a number widens |
+| `@BeforeEach`, `@AfterEach` | Around each test, on its instance, given its `TestInfo`, and its `RepetitionInfo` where every test they run around is repeated: those of an interface and of a class above first before a test and last after it, those of the class around a `@Nested` class outside its own |
+| `@BeforeAll`, `@AfterAll` | Static methods, or any method under `@TestInstance(PER_CLASS)`, given the class's `TestInfo`, around the tests of the class and of its `@Nested` classes. One that throws is an error of the class, whose tests then do not run |
+| `@TestInstance` | `PER_CLASS`: one instance for all the tests of the class, made before its `@BeforeAll`; where it cannot be made, nothing of the class runs |
+| `@TestMethodOrder`, `@Order` | The tests of the class in the order of `MethodOrderer.OrderAnnotation` (by `@Order`, a test without one `Order.DEFAULT`), `MethodName` or `DisplayName` (equal names by their parameters' types) |
+| `@Tag`, `@Tags` | The tags `TestInfo.getTags()` answers: the test's, then its class's (the class above's, each interface's, its own), then the class around's, trimmed, an invalid one left out. No run selects tests by tag |
 | `@Nested` | The tests of an inner class, each on an instance made in an instance of the class around it |
 | `@Disabled` | A test counted as skipped, or a class: each of its tests and `@Nested` classes |
 | `@TempDir` | A field or a parameter of type `Path` or `File`: a directory of its own in `/tmp` for each, a static field's around the tests of its class, the others' around each test, deleted with what it holds after it |
-| `@DisplayName` | Of a test: written after the test's name where it fails |
+| `@DisplayName` | Of a test: written after the test's name where it fails; of a test or a class: the `TestInfo`'s display name |
 
 A source written more than once gives its rows as JUnit gives them: the sources of one kind
 together, where the first of them is written. A `Named` argument is its payload.
@@ -142,9 +146,12 @@ compiled from its sources, so a failed assertion says what that version of JUnit
 JUnit Jupiter 6.0.3, the subset refuses `assertTimeoutPreemptively` where a test calls it
 (it reads a thread's stack).
 
-A class inherits the tests of the classes of the program above it; a method overridden
-with no annotation is no test. The tests of a class run in the order declared, where JUnit
-runs them in an order of its own.
+A class inherits the tests of the classes of the program above it and of the interfaces it
+implements (their default methods, and an interface's static `@BeforeAll` and `@AfterAll`);
+a method overridden with no annotation is no test. `@TestInstance` and `@TestMethodOrder`
+are found on the class, then on its interfaces, then on the classes above, and a `@Nested`
+class takes the orderer of the class around it. With no orderer the tests of a class run in
+the order declared, where JUnit runs them in an order of its own.
 
 ## What there is of AssertJ
 
@@ -179,19 +186,21 @@ compiled, never skipped:
 
 ```console
 $ rontolisp test --java-source-dep org.junit.jupiter:junit-jupiter-api:6.0.3 \
-    src/test/java/shop/RepeatTest.java
-error: src/test/java/shop/RepeatTest.java:13:5: the annotation org.junit.jupiter.api.RepeatedTest is not supported by the experimental Java subset yet
+    src/test/java/shop/SlowTest.java
+error: src/test/java/shop/SlowTest.java:13:5: the annotation org.junit.jupiter.api.Timeout is not supported by the experimental Java subset yet
 ```
 
-Among them: `@RepeatedTest`, `@TestFactory`, `@TestInstance`, `@Timeout`, `@Tag`, `@Order`,
-extensions, an annotation of JUnit's on an annotation type (a composed annotation), a test
-an interface declares, the elements the table above does not name (`classes` of
+Among them: `@TestFactory`, `@Timeout`, `@TestClassOrder`, `MethodOrderer.Random` and an
+orderer of one's own, extensions, an annotation of JUnit's on an annotation type (a composed
+annotation), the elements the table above does not name (`classes` of
 `@ValueSource`, `from` and `to` of `@EnumSource`, `cleanup` and `factory` of `@TempDir`), a
-parameter of a `@Test` method that is no `@TempDir` and a parameter of a parameterized test
-whose type is JUnit's (`ArgumentsAccessor`, `TestInfo`); the checks
+parameter of a `@Test` method that is no `@TempDir` or `TestInfo`, a parameter of a
+parameterized test whose type is JUnit's (`ArgumentsAccessor`, `TestInfo`, whose display
+name would show the arguments), a `RepetitionInfo` given around a test that is not repeated;
+the checks
 of AssertJ that read a class's fields by reflection (`usingRecursiveComparison`,
 `hasFieldOrPropertyWithValue`, `extracting` by a name), soft assertions and the
-assertions of dates, files and futures. A test class is made with its constructor of no
-parameter, and a `static` class in a test class is run only as a file's own class is.
+assertions of dates, files and futures. A test class has one constructor, whose parameters
+may be the `TestInfo` and `@TempDir` directories, and a `static` class in a test class is run only as a file's own class is.
 
 `rontolisp format` refuses a `.java` file: it re-indents S-expressions.
