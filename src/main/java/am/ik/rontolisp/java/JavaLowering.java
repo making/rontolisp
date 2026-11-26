@@ -11433,9 +11433,10 @@ final class JavaLowering implements JavaEmitter.Context {
 	/**
 	 * The function the field names of a class ask ({@code Introspected.fieldNames0}, a
 	 * recursive comparison's walk): for each class object made of a class whose members
-	 * the program keeps ({@link #reflected}), a vector of the names of the instance fields
-	 * it declares, in the order declared; {@code NIL} for any other class. Names alone: no member of the class is made, so no
-	 * member table ({@link #memberTables}) is, which listing the fields would make.
+	 * the program keeps ({@link #reflected}), a vector of the names of the instance
+	 * fields it declares, in the order declared; {@code NIL} for any other class. Names
+	 * alone: no member of the class is made, so no member table ({@link #memberTables})
+	 * is, which listing the fields would make.
 	 */
 	private LispVal classFieldNamesFunction(Making making) {
 		List<LispVal> arms = new ArrayList<>(List.of(cl("cond")));
