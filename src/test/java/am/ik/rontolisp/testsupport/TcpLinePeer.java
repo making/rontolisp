@@ -9,29 +9,43 @@ import java.net.ServerSocket;
 import java.net.Socket;
 import java.nio.charset.StandardCharsets;
 
+import javax.net.ssl.SSLSocket;
+
+import am.ik.rontolisp.TlsTestSupport;
+
 /**
  * A TCP peer on the loopback for a program whose sockets only connect -- a
  * {@code --no-wasi} module's, whose host has no listener to be its own peer with. It
  * answers a connection's lines: {@code echo TEXT} with the text, {@code later MILLIS}
  * with {@code late} after that long, {@code octets} with the 256 octets,
- * {@code big COUNT} with that many octets and its end, {@code bye} with its end, any
+ * {@code big COUNT} with that many octets and its end, {@code bye} with its end,
+ * {@code starttls} with {@code go} and then the server's side of a TLS handshake
+ * ({@link TlsTestSupport#serverContext()}), after which the lines go on over TLS, any
  * other line with nothing; and ends a connection when its client does.
  */
 public final class TcpLinePeer implements AutoCloseable {
 
 	/**
-	 * {@code connect()} of {@code cloudflare:sockets} over {@code node:net}, as the
-	 * JavaScript a {@code node} host of a test hands the generated glue: a hostname and a
-	 * port in; the two streams, the promise of the connection and a close out.
+	 * {@code connect()} of {@code cloudflare:sockets} over {@code node:net} and
+	 * {@code node:tls}, as the JavaScript a {@code node} host of a test hands the
+	 * generated glue: a hostname, a port and the options in; the two streams, the promise
+	 * of the connection, a close and, for a socket made {@code "starttls"},
+	 * {@code startTls} out. A TLS peer is trusted by the certificates of the PEM file the
+	 * environment variable {@code RONTOLISP_TEST_CA} names, else by node's own.
 	 */
 	public static final String NODE_CONNECT = """
-			import { connect as dial } from "node:net";
-			import { Duplex } from "node:stream";
+			import { connect as dial, isIP } from "node:net";
+			import { connect as seal } from "node:tls";
+			import { readFileSync as readTrusted } from "node:fs";
 
-			const connect = ({ hostname, port }) => {
-			  const socket = dial({ host: hostname, port, allowHalfOpen: true });
+			const ca = process.env.RONTOLISP_TEST_CA ? readTrusted(process.env.RONTOLISP_TEST_CA) : undefined;
+
+			// A node socket as the platform's, open once `ready` has fired. Its readable
+			// takes a chunk per read; letting go of it (a cancel, or startTls) leaves the
+			// connection, which the platform's startTls() takes over.
+			const wrap = (socket, ready, upgrade) => {
 			  const opened = new Promise((resolve, reject) => {
-			    socket.once("connect", () =>
+			    socket.once(ready, () =>
 			      resolve({
 			        remoteAddress: socket.remoteAddress + ":" + socket.remotePort,
 			        localAddress: socket.localAddress + ":" + socket.localPort,
@@ -40,8 +54,51 @@ public final class TcpLinePeer implements AutoCloseable {
 			    socket.once("error", reject);
 			  });
 			  opened.catch(() => {});
-			  const { readable, writable } = Duplex.toWeb(socket);
-			  return { readable, writable, opened, close: async () => socket.destroy() };
+			  socket.on("error", () => {});
+			  let detach = () => {};
+			  const readable = new ReadableStream(
+			    {
+			      start(controller) {
+			        socket.pause();
+			        const data = (chunk) => {
+			          socket.pause();
+			          controller.enqueue(new Uint8Array(chunk));
+			        };
+			        const end = () => controller.close();
+			        const error = (e) => controller.error(e);
+			        socket.on("data", data).on("end", end).on("error", error);
+			        detach = () => socket.off("data", data).off("end", end).off("error", error).pause();
+			      },
+			      pull() {
+			        socket.resume();
+			      },
+			      cancel() {
+			        detach();
+			      },
+			    },
+			    { highWaterMark: 0 },
+			  );
+			  const writable = new WritableStream({
+			    write: (chunk) =>
+			      new Promise((resolve, reject) => socket.write(chunk, (e) => (e ? reject(e) : resolve()))),
+			    close: () => new Promise((resolve) => socket.end(resolve)),
+			    abort: () => void socket.destroy(),
+			  });
+			  const startTls = (options = {}) => {
+			    if (upgrade === undefined) {
+			      throw new TypeError("The `secureTransport` socket option must be set to 'starttls' for startTls to be used.");
+			    }
+			    detach();
+			    return upgrade(options);
+			  };
+			  return { readable, writable, opened, close: async () => socket.destroy(), startTls };
+			};
+
+			const connect = ({ hostname, port }, options = {}) => {
+			  const socket = dial({ host: hostname, port, allowHalfOpen: true });
+			  const upgrade = ({ expectedServerHostname: name = hostname }) =>
+			    wrap(seal({ socket, host: name, servername: isIP(name) ? undefined : name, ca }), "secureConnect");
+			  return wrap(socket, "connect", options.secureTransport === "starttls" ? upgrade : undefined);
 			};
 			""";
 
@@ -121,6 +178,16 @@ public final class TcpLinePeer implements AutoCloseable {
 				}
 				else if (said.equals("bye")) {
 					return;
+				}
+				else if (said.equals("starttls")) {
+					out.write("go\n".getBytes(StandardCharsets.UTF_8));
+					out.flush();
+					SSLSocket sealed = (SSLSocket) TlsTestSupport.serverContext()
+						.getSocketFactory()
+						.createSocket(client, null, client.getPort(), true);
+					sealed.setUseClientMode(false);
+					in = sealed.getInputStream();
+					out = sealed.getOutputStream();
 				}
 				out.flush();
 			}

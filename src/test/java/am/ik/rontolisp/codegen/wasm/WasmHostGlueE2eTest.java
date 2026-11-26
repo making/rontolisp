@@ -705,6 +705,23 @@ class WasmHostGlueE2eTest {
 			(defun again ()
 			  (refusal (lambda () (said *kept* "echo again"))))
 			(rontolisp:wasm-export 'again :returns :string)
+
+			(defun secure (port tls-port)
+			  (format nil "~a|~a|~a|~a|~a"
+			          (let* ((peer (rontolisp:tcp-connect "127.0.0.1" port))
+			                 (go (said peer "starttls"))
+			                 (up (rontolisp:tls-upgrade peer "localhost")))
+			            (prog1 (list go (eq up peer) (said up "echo sealed"))
+			              (close up)))
+			          (let ((peer (rontolisp:tls-connect "127.0.0.1" tls-port)))
+			            (prog1 (said peer "over tls") (close peer)))
+			          (let ((peer (rontolisp:tcp-connect "127.0.0.1" port)))
+			            (said peer "starttls")
+			            (prog1 (refusal (lambda () (rontolisp:tls-upgrade peer "elsewhere.test")))
+			              (close peer)))
+			          (refusal (lambda () (rontolisp:tls-connect "127.0.0.1" tls-port :insecure t)))
+			          (refusal (lambda () (rontolisp:tls-connect "127.0.0.1" 0)))))
+			(rontolisp:wasm-export 'secure :params '(:s32 :s32) :returns :string)
 			""";
 
 	private static final String SOCKETS_DRIVER = TcpLinePeer.NODE_CONNECT + """
@@ -719,6 +736,7 @@ class WasmHostGlueE2eTest {
 			console.log(await lisp.keep(port));
 			sockets.expire("Socket closed: gone");
 			console.log(await lisp.again());
+			for (const part of (await lisp.secure(port, Number(process.argv[3]))).split("|")) console.log(part);
 			""";
 
 	@Test
@@ -729,10 +747,13 @@ class WasmHostGlueE2eTest {
 				"--host-sockets", "--emit-js-glue");
 		Path driver = this.tempDir.resolve("sockets.mjs");
 		Files.writeString(driver, SOCKETS_DRIVER, StandardCharsets.UTF_8);
-		try (TcpLinePeer peer = new TcpLinePeer()) {
-			Process process = new ProcessBuilder("node", JSPI_FLAG, driver.toString(), Integer.toString(peer.port()))
-				.redirectErrorStream(false)
-				.start();
+		try (TcpLinePeer peer = new TcpLinePeer();
+				javax.net.ssl.SSLServerSocket sealed = am.ik.rontolisp.TlsTestSupport.newServerSocket()) {
+			am.ik.rontolisp.TlsTestSupport.startOneShotEchoServer(sealed);
+			ProcessBuilder builder = new ProcessBuilder("node", JSPI_FLAG, driver.toString(),
+					Integer.toString(peer.port()), Integer.toString(sealed.getLocalPort()));
+			builder.environment().put("RONTOLISP_TEST_CA", am.ik.rontolisp.TlsTestSupport.pemFiles()[0].toString());
+			Process process = builder.redirectErrorStream(false).start();
 			String stdout = new String(process.getInputStream().readAllBytes(), StandardCharsets.UTF_8);
 			String stderr = new String(process.getErrorStream().readAllBytes(), StandardCharsets.UTF_8);
 			assertThat(process.waitFor()).as("node exit code, stderr: %s", stderr).isZero();
@@ -751,7 +772,18 @@ class WasmHostGlueE2eTest {
 				.startsWith("(tcp-listen: cannot listen on *:0: the host of a --no-wasi module only connects"
 						+ " (--host-sockets) tcp-connect: cannot connect to 127.0.0.1:0: ");
 			// a socket the host ended
-			assertThat(lines.subList(9, lines.size())).containsExactly("kept", "write-line: Socket closed: gone");
+			assertThat(lines.subList(9, 11)).containsExactly("kept", "write-line: Socket closed: gone");
+			// TLS: a connection made to speak it where it is, the same stream; one made
+			// with it; a certificate not for the name, :insecure and a connect nothing
+			// takes, each said by name
+			assertThat(lines.subList(11, 13)).containsExactly("(go T sealed)", "over tls");
+			assertThat(lines.get(13)).startsWith(
+					"tls-upgrade: cannot upgrade the stream to TLS against elsewhere.test: Hostname/IP does not match");
+			assertThat(lines.get(14)).isEqualTo("rontolisp:tls-connect: :insecure is not supported on a --no-wasi"
+					+ " module's host sockets (the host verifies every certificate)");
+			assertThat(lines.subList(15, lines.size())).singleElement()
+				.asString()
+				.startsWith("tls-connect: cannot connect to 127.0.0.1:0: ");
 		}
 	}
 

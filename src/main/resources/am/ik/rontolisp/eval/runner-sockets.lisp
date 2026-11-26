@@ -182,9 +182,10 @@
 ;; lastError, over a host that only connects and answers by suspending the module.
 ;; socket makes a socket not connected yet; begin starts its connect and answers 0,
 ;; which wait answers for once the connect has ended and end then finishes (-1: it
-;; failed); read answers at most that many of the octets that have come, none at
-;; the peer's close and where the socket failed, lastError then holding why (empty
-;; at the close); write hands the octets to the host, which flush answers for once
+;; failed); upgrade begins the TLS handshake of a connected socket against a name,
+;; which wait answers for and end finishes the same way; read answers at most that
+;; many of the octets that have come, none at the peer's close and where the socket
+;; failed, lastError then holding why (empty at the close); write hands the octets to the host, which flush answers for once
 ;; they are sent; poll answers the index of the first socket of the host numbers
 ;; that has something for a read or whose connect has ended -- octets, the peer's
 ;; close, a failure -- or -1, with no wait; wait the same once one has, or -1 after
@@ -206,6 +207,12 @@
                        :from "tcp"
                        :as "end"
                        :params '(:s32)
+                       :returns :s32)
+#+rontolisp-host-sockets
+(rontolisp:wasm-import 'rontolisp::%rltcp-upgrade
+                       :from "tcp"
+                       :as "upgrade"
+                       :params '(:s32 :string)
                        :returns :s32)
 #+rontolisp-host-sockets
 (rontolisp:wasm-import 'rontolisp::%rltcp-shutdown
@@ -448,9 +455,7 @@
 ;; A --no-wasi module's host: a socket made, its connect begun, waited for in the
 ;; host and ended; a connect that failed leaves no socket.
 #+rontolisp-host-sockets
-(defun rontolisp:tcp-connect (host port)
-  (rontolisp::%sock-check-host "tcp-connect" host)
-  (rontolisp::%sock-check-port "tcp-connect" port)
+(defun rontolisp::%sock-host-connect (op host port)
   (let* ((fd (rontolisp::%tcp-socket nil nil))
          (e (rontolisp::%sock-entry fd))
          (h (rontolisp::%sock-e-host e)))
@@ -463,9 +468,88 @@
           fd)
         (let ((why (rontolisp::%rltcp-last-error)))
           (rontolisp::%io-close fd)
-          (rontolisp::%sock-connect-fail host port why)))))
+          (rontolisp::%sock-fail
+           (concatenate 'string op ": cannot connect to " host ":"
+                        (rontolisp::%sock-decimal port) ": " why))))))
+
+#+rontolisp-host-sockets
+(defun rontolisp:tcp-connect (host port)
+  (rontolisp::%sock-check-host "tcp-connect" host)
+  (rontolisp::%sock-check-port "tcp-connect" port)
+  (rontolisp::%sock-host-connect "tcp-connect" host port))
 
 (defun rontolisp::%tcp-connect-f (host port) (rontolisp:tcp-connect host port))
+
+;;; --- TLS over a --no-wasi module's host: the connection under a connected
+;;; socket made to speak TLS in place, so tls-upgrade answers the stream it was
+;;; given, as on the component (the interpreter and the JVM answer a new one), and
+;;; tls-connect is tcp-connect + tls-upgrade. The host verifies the certificate
+;;; against the name with its own trust anchors and has no knob to skip that, so
+;;; :insecure is refused by name. Errors signal with the interpreter's texts. ---
+
+#+rontolisp-host-sockets
+(defun rontolisp::%sock-tls-check (op name opt value)
+  (when opt
+    (unless (eq opt :insecure)
+      (rontolisp::%sock-fail
+       (concatenate 'string op " expects :insecure, got: "
+                    (prin1-to-string opt))))
+    (when value
+      (rontolisp::%sock-fail
+       (concatenate 'string name
+        ": :insecure is not supported on a --no-wasi module's host sockets"
+        " (the host verifies every certificate)")))))
+
+;; The handshake of the connected entry E against HOST, waited for MILLIS at most
+;; (-1: no limit): nil once the connection speaks TLS, else why not. What came in
+;; the clear and was not read is dropped, as the interpreter drops its input.
+#+rontolisp-host-sockets
+(defun rontolisp::%sock-tls-handshake (e host millis)
+  (let ((h (rontolisp::%sock-e-host e)))
+    (rontolisp::%sock-set-buf e 0 0)
+    (cond
+     ((< (rontolisp::%rltcp-upgrade h host) 0) (rontolisp::%rltcp-last-error))
+     ((< (rontolisp::%sock-host-wait (rontolisp::%sock-hosts (list h))
+                                     (rontolisp::%sock-millis millis)) 0)
+      "Read timed out")
+     ((< (rontolisp::%rltcp-end h) 0) (rontolisp::%rltcp-last-error))
+     (t nil))))
+
+;; The handshake waits as long as the socket's read deadline allows.
+#+rontolisp-host-sockets
+(defun rontolisp:tls-upgrade (stream host &optional opt value)
+  (let ((e (rontolisp::%sock-connected "TLS-UPGRADE" stream)))
+    (rontolisp::%sock-check-host "tls-upgrade" host)
+    (rontolisp::%sock-tls-check "TLS-UPGRADE" "rontolisp:tls-upgrade" opt value)
+    (let* ((deadline (rontolisp::%sock-e-deadline e))
+           (why
+            (rontolisp::%sock-tls-handshake e host (if deadline deadline -1))))
+      (if why
+          (rontolisp::%sock-fail
+           (concatenate 'string
+                        "tls-upgrade: cannot upgrade the stream to TLS against "
+                        host ": " why))
+          stream))))
+
+;; Under the interpreter's bound (LispNames.TLS_CONNECT_HANDSHAKE_TIMEOUT_MS): the
+;; caller has no handle to set a deadline on first. A failed handshake closes the
+;; socket.
+#+rontolisp-host-sockets
+(defun rontolisp:tls-connect (host port &optional opt value)
+  (rontolisp::%sock-check-host "tls-connect" host)
+  (rontolisp::%sock-check-port "tls-connect" port)
+  (rontolisp::%sock-tls-check "TLS-CONNECT" "rontolisp:tls-connect" opt value)
+  (let* ((fd (rontolisp::%sock-host-connect "tls-connect" host port))
+         (why
+          (rontolisp::%sock-tls-handshake (rontolisp::%sock-entry fd) host
+                                          10000)))
+    (if why
+        (progn
+          (rontolisp::%io-close fd)
+          (rontolisp::%sock-fail
+           (concatenate 'string "tls-connect: cannot connect to " host ":"
+                        (rontolisp::%sock-decimal port) ": " why)))
+        fd)))
 
 #+rontolisp-host-sockets
 (defun rontolisp:tcp-listen (port &optional host)

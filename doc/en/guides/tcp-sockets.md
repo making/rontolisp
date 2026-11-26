@@ -73,7 +73,7 @@ take a socket; render with `(format nil ...)` and send the result with
 > and
 > [`rontolisp:tls-upgrade`](../reference/functions/rontolisp-tls-upgrade.md))
 > run on the interpreter, the JVM and the WASM `--component` backend (add
-> `-S tls=y` to the flags above); the TLS *server* functions
+> `-S tls=y` to the flags above), and over the host's sockets of `--host-sockets`; the TLS *server* functions
 > ([`rontolisp:tls-listen`](../reference/functions/rontolisp-tls-listen.md)
 > and
 > [`rontolisp:tls-listen-pem`](../reference/functions/rontolisp-tls-listen-pem.md))
@@ -466,7 +466,10 @@ WASM `--component` backend, over wasmtime's experimental
 `wasi:tls@0.3.0-draft` interface — add `-S tls=y` to the socket run flags;
 failures answer `nil` there, `:insecure` signals (the draft exposes no
 verification knob), and `tls-upgrade` upgrades the handle **in place** (it
-answers the same handle, and requires that nothing was written to it yet). On a
+answers the same handle, and requires that nothing was written to it yet). A
+`--no-wasi` module built with `--host-sockets` has them over its host's sockets
+(a Worker's `startTls()`): they signal there, upgrade in place too, and refuse
+`:insecure`. On a
 plain Preview 1 `.wasm` and in a [native executable](../compiling/native.md#tcp-sockets)
 a client call signals an error when it runs, so a program whose `https://`
 branch is never taken still compiles there. The

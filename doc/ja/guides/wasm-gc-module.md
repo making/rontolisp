@@ -129,11 +129,12 @@ rontolisp app.lisp --no-wasi --host-output --emit-js-glue -o app.wasm
 rontolisp app.lisp --no-wasi --host-sockets --emit-js-glue -o app.wasm
 ```
 
-- **ホストにできるのは接続だけです。** `tcp-listen` と `tcp-accept` は、その旨のエラーをシグナルします。TLS にはまだ対応していません。`tls-connect` と `tls-upgrade` はシグナルします。
+- **ホストにできるのは接続だけです。** `tcp-listen` と `tcp-accept` は、その旨のエラーをシグナルします。
+- **TLS はホストのものです。** `tls-upgrade` は接続をその場で TLS に切り替え、渡されたストリームをそのまま返します(インタプリタと JVM は新しいストリームを返します)。`tls-connect` は `tcp-connect` の後に `tls-upgrade` を行います。証明書はホストが自分の信頼アンカーで名前に対して検証するので、`:insecure` はシグナルします。ハンドシェイクの失敗はプラットフォームの言葉で伝わります。Worker では `internal error; reference = ...` で、理由はログにあります。
 - **待つのはホストの中です。** 読むものがまだ届いていない読み込み、接続、`force-output` は、モジュールをホストの中でサスペンドします(JSPI)。そのため、すべてのエクスポートは `WebAssembly.promising` を通して呼ばれ、呼び出しは直列化されます。モジュールのロード中はソケットを待てません(`--host-timer` も付けたビルドでは待てます)。`tcp-set-timeout` は読み込みに期限を与えます。モジュールの時計は、サスペンドから戻るたびに書き直されます。
 - **`worker()` の下では、ソケットはリクエストと一緒に終わります。** Worker のソケットは、それを開いたリクエストより長くは使えません。そのため、呼び出しが開いたままにしたソケットは呼び出しの終わりに閉じられ、次に使うと `Socket closed: the request that opened it has ended` をシグナルします。接続は、それを使うリクエストの中で開いてください。
 
-`worker(module, { connect })` には、同じ形(`({ hostname, port }) => { opened, readable, writable, close() }`)の別の `connect` を渡せます。Worker 以外のホストは、これでソケットを用意します。`instantiate` を自分で呼ぶホストは `defaultHost(hostSockets(connect))` を渡します。このフラグは `--no-wasi` を必要とし、`--component`(ソケットは `wasi:sockets`)、`--no-gc`、`--reentrant` とは組み合わせられません。
+`worker(module, { connect })` には、同じ形(`({ hostname, port }, options) => { opened, readable, writable, close(), startTls() }`。ソケットはすべて `secureTransport: "starttls"` で求めます)の別の `connect` を渡せます。Worker 以外のホストは、これでソケットを用意します。`instantiate` を自分で呼ぶホストは `defaultHost(hostSockets(connect))` を渡します。このフラグは `--no-wasi` を必要とし、`--component`(ソケットは `wasi:sockets`)、`--no-gc`、`--reentrant` とは組み合わせられません。
 
 ### ホストでの待機(`--host-timer`)
 

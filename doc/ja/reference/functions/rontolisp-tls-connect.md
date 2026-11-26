@@ -74,6 +74,12 @@
   代わりに `nil` を返します。返されるハンドルには読み取り期限がありません。
   その書き込みは [`tls-upgrade`](rontolisp-tls-upgrade.md#backend-support)
   と同じくバッファされます。
+- **WASM `--no-wasi --host-sockets`**: ホストのソケット(Cloudflare Worker の
+  `connect()` と `startTls()`)上でサポート
+  ([ホストのソケット](../../guides/wasm-gc-module.md#sockets-from-the-host---host-sockets))。
+  失敗はインタプリタと同じテキストとプラットフォームの言葉でシグナルします。証明書は
+  ホストが自分の信頼アンカーで検証するので、`nil` でない `:insecure` はシグナルします。
+  ハンドシェイクには同じ 10 秒の上限があります。
 - **WASM Preview 1** ([ネイティブ実行ファイル](../../compiling/native.md#tcp-sockets)を含む):
   非サポート — 呼び出しは**実行時にエラーを通知**します(Preview 1 には TLS の
   ホスト API が存在しません)。そのため、その呼び出しに到達しないプログラムは

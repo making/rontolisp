@@ -144,6 +144,21 @@ public final class TlsTestSupport {
 	 */
 	public static SSLServerSocket newServerSocket() {
 		try {
+			return (SSLServerSocket) serverContext().getServerSocketFactory()
+				.createServerSocket(0, 1, java.net.InetAddress.getByName("127.0.0.1"));
+		}
+		catch (IOException ex) {
+			throw new UncheckedIOException(ex);
+		}
+	}
+
+	/**
+	 * A TLS context serving the shared self-signed certificate: a server's side, of a
+	 * listener or of a connection a peer upgrades.
+	 * @return the context
+	 */
+	public static SSLContext serverContext() {
+		try {
 			KeyStore ks = KeyStore.getInstance("PKCS12");
 			try (var in = Files.newInputStream(keyStore())) {
 				ks.load(in, STORE_PASSWORD.toCharArray());
@@ -152,9 +167,7 @@ public final class TlsTestSupport {
 			kmf.init(ks, STORE_PASSWORD.toCharArray());
 			SSLContext context = SSLContext.getInstance("TLS");
 			context.init(kmf.getKeyManagers(), null, null);
-			SSLServerSocket server = (SSLServerSocket) context.getServerSocketFactory()
-				.createServerSocket(0, 1, java.net.InetAddress.getByName("127.0.0.1"));
-			return server;
+			return context;
 		}
 		catch (IOException ex) {
 			throw new UncheckedIOException(ex);

@@ -769,8 +769,10 @@ public final class HostGlueEmitter {
 				 * The module's sockets (--host-sockets): outbound TCP connections made by
 				 * `connect` -- connect() of cloudflare:sockets where none is given, or anything
 				 * shaped like it: `({ hostname, port }, options)` in; `opened`, `readable`,
-				 * `writable` and `close()` out. The host only connects: the module refuses a
-				 * bind, a listen and an accept itself.
+				 * `writable`, `close()` and `startTls({ expectedServerHostname })` out. The
+				 * host only connects: the module refuses a bind, a listen and an accept itself.
+				 * Every socket is made `secureTransport: "starttls"`, the one way a connection
+				 * can be made to speak TLS later, and `upgrade` makes it so.
 				 *
 				 * What comes of a socket comes while the module is suspended, so every wait of
 				 * the module's is `wait` below -- for the octets of a read, the peer's close, a
@@ -829,9 +831,12 @@ public final class HostGlueEmitter {
 				    if (entry.reading || entry.chunks.length > 0 || entry.eof || entry.failed !== null) return;
 				    entry.reading = true;
 				    // A socket that is over -- closed, or ended with its request -- wakes
-				    // nobody: what comes of it then comes to a call that is not its own.
-				    entry.reader.read().then(
+				    // nobody: what comes of it then comes to a call that is not its own. A
+				    // read of a connection upgraded since is nobody's either.
+				    const reader = entry.reader;
+				    reader.read().then(
 				      ({ value, done }) => {
+				        if (entry.reader !== reader) return;
 				        entry.reading = false;
 				        if (entry.over) return;
 				        if (done) entry.eof = true;
@@ -840,12 +845,29 @@ public final class HostGlueEmitter {
 				        rang();
 				      },
 				      (error) => {
+				        if (entry.reader !== reader) return;
 				        entry.reading = false;
 				        if (entry.over) return;
 				        entry.failed ??= words(error);
 				        rang();
 				      },
 				    );
+				  };
+				  // The streams of a socket the module can use, once it is open or upgraded.
+				  const ready = async (entry, socket) => {
+				    entry.socket = socket;
+				    entry.info = await socket.opened;
+				    // over meanwhile: nobody is left to use it
+				    if (entry.over) return socket.close();
+				    entry.reader = socket.readable.getReader();
+				    entry.writer = socket.writable.getWriter();
+				    entry.state = "connected";
+				    rang();
+				  };
+				  const failed = (entry) => (error) => {
+				    if (entry.over) return;
+				    entry.failed ??= words(error);
+				    rang();
 				  };
 				  // The connected socket a call is about, or null with the reason said.
 				  const open = (h) => {
@@ -891,21 +913,31 @@ public final class HostGlueEmitter {
 				        // a socket's does everywhere else.
 				        const socket = (await connector())(
 				          { hostname, port },
-				          { secureTransport: "off", allowHalfOpen: true },
+				          { secureTransport: "starttls", allowHalfOpen: true },
 				        );
-				        entry.socket = socket;
-				        entry.info = await socket.opened;
-				        // over meanwhile: nobody is left to use it
-				        if (entry.over) return socket.close();
-				        entry.reader = socket.readable.getReader();
-				        entry.writer = socket.writable.getWriter();
-				        entry.state = "connected";
-				        rang();
-				      })().catch((error) => {
-				        if (entry.over) return;
-				        entry.failed ??= words(error);
-				        rang();
-				      });
+				        await ready(entry, socket);
+				      })().catch(failed(entry));
+				      return 0;
+				    },
+				    // The handshake only BEGINS here, as a connect does, and `end` says how it
+				    // ended. startTls() wants both streams let go of, and a reader cannot be
+				    // while a read is in flight: the read ahead is cancelled, which leaves the
+				    // connection. What came in the clear and was not read is dropped.
+				    upgrade: (h, hostname) => {
+				      const entry = open(h);
+				      if (entry === null) return -1;
+				      const { socket, reader, writer, reading } = entry;
+				      entry.state = "upgrading";
+				      entry.reader = entry.writer = undefined;
+				      entry.reading = false;
+				      entry.chunks.length = 0;
+				      (async () => {
+				        await entry.sent;
+				        if (reading) await reader.cancel().catch(() => {});
+				        reader.releaseLock();
+				        writer.releaseLock();
+				        await ready(entry, socket.startTls({ expectedServerHostname: hostname }));
+				      })().catch(failed(entry));
 				      return 0;
 				    },
 				    end: (h) => {
