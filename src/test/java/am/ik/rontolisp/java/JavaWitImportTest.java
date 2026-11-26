@@ -591,10 +591,10 @@ class JavaWitImportTest {
 	 * {@code main} is refused there and on a module. The class is checked against its
 	 * world on every target, the interpreter's included. On {@code --no-gc} a class of
 	 * scalar values is the scalar component of the world, an uncaught exception its bare
-	 * trap, an {@code async func} lifted async as on the GC one. A world of compound types
-	 * crosses too: a record a member record, a variant a sealed interface, a list a
-	 * {@code List}, a result a {@code WitResult} or its ok arm with a {@code WitException}
-	 * thrown.
+	 * trap, an {@code async func} lifted async as on the GC one. A world of compound
+	 * types crosses too: a record a member record, a variant a sealed interface, a list a
+	 * {@code List}, a result a {@code WitResult} or its ok arm with a
+	 * {@code WitException} thrown.
 	 */
 	@Test
 	void aClassImplementsTheWorldAComponentExports() throws Exception {
