@@ -86,9 +86,11 @@ final class SpinPostgresConnection extends UnsupportedConnection {
 	 * transaction JDBC keeps when the connection does not commit each statement.
 	 * @param rows whether its rows are asked for, or its count
 	 * @param begins whether it starts a transaction itself
+	 * @param streamed whether its rows are read in pieces, as the host reads them from
+	 * the server ({@code query-async}), rather than handed over together
 	 */
-	Result run(String text, List<Postgres.ParameterValue> parameters, boolean rows, int timeoutSeconds, boolean begins)
-			throws SQLException {
+	Result run(String text, List<Postgres.ParameterValue> parameters, boolean rows, int timeoutSeconds, boolean begins,
+			boolean streamed) throws SQLException {
 		synchronized (this) {
 			Postgres.Connection open = host();
 			try {
@@ -103,12 +105,24 @@ final class SpinPostgresConnection extends UnsupportedConnection {
 					this.refused = false;
 				}
 				this.begun |= begins;
-				return rows ? new Result(open.query(text, parameters)) : new Result(open.execute(text, parameters));
+				return streamed ? new Result(open.queryAsync(text, parameters))
+						: rows ? new Result(open.query(text, parameters)) : new Result(open.execute(text, parameters));
 			}
 			catch (WitException ex) {
-				this.refused |= this.transaction && Failures.server(ex);
-				throw Failures.of(ex, timeoutSeconds > 0);
+				throw refused(ex, timeoutSeconds > 0);
 			}
+		}
+	}
+
+	/**
+	 * A refusal of a statement of the program's, the run's or the end of rows read in
+	 * pieces: a refusal of the server's inside a transaction aborts it.
+	 * @param timed whether the statement ran under a limit on its time
+	 */
+	SQLException refused(WitException ex, boolean timed) {
+		synchronized (this) {
+			this.refused |= this.transaction && Failures.server(ex);
+			return Failures.of(ex, timed);
 		}
 	}
 

@@ -149,14 +149,32 @@ too, whose e2e job compiles it as a library and serves it under Spin.
   `timestamptz` cast to text answer as they do over a socket.
 - **The interface is package-private** (`Postgres`): a program that wants the host's
   interface itself declares its own.
-- **A result is read whole.** `query-async` answers a `stream<row>` and a `future`, an
-  `async func` that `@WitImport` refuses
-  (`src/main/java/am/ik/rontolisp/java/JavaWitImports.java`), so a cursor in pieces waits on
-  that. Spin 4.3.0 is still the newest release on 2026-11-26 (canary 4.4.0-pre0
+- **A result is read whole, or in pieces under a fetch size** (m55, 2026-11-26).
+  `setFetchSize(n > 0)` on a statement whose result sets move forward only runs the statement
+  through `query-async` (`Result.streamed`): the result set reads at most `n` rows a read
+  (`more`), reads ahead one piece to tell `isLast` / `isBeforeFirst`, stops at `setMaxRows`, and
+  reads the future where the rows run out -- its error arm is the statement's refusal
+  (`SpinPostgresConnection.refused`: a server's aborts the transaction, as at the call). A
+  result set closed early, or cut by the most rows, drops the stream and the future unread: the
+  host's future then answers `query-failed(text("async error: channel closed"))`, which nobody
+  asked for. A command asked for rows reads its end at once (its count 0). A result set that
+  scrolls, `RETURNING` and generated keys stay whole. The default stays whole: it is the faster
+  one on Spin (below). Spin 4.3.0 is the newest release on 2026-11-26 (canary 4.4.0-pre0
   b8f889f answers as 4.3.0).
 
 ## What the host does (measured, Spin 4.3.0; 4.1.0 and canary 4.4.0-pre0 alike)
 
+- **`query-async`** (m55, Spin 4.3.0 and 4.4.0-pre0): lowered synchronously, the call
+  answers the columns, the stream and the future (1-3 ms for any size); a statement refused at
+  Parse or Bind is the call's error arm, as for `query`. The rows come ONE A READ whatever a
+  read asks (10,000 rows: 10,000 reads of 100 asked), each read waiting on the host. One
+  refused while its rows are read (`1/(g-2)`): the rows before it, then the future's
+  `query-failed(db-error(..))` with its fields (22012) -- `query` hands that over as text. A
+  `timestamptz` column: the columns (`datetime`), no row, the future's
+  `query-failed(text("error deserializing column 0 .."))`. Another statement on the connection
+  while the stream is open answers, and the stream goes on. A stream dropped after one row of
+  100,000: the future's `text("async error: channel closed")`, the connection still answering
+  (the request 45 ms).
 - **`PREPARE` and `pg_prepared_statements` work through `execute` and `query`** (m26): the
   host's own statements are there too (`s4`, `from_sql` false, `parameter_types` empty);
   a `PREPARE` of `select $2` with no `$1` is `42P18`; `parameter_types::text[]` is the SQL
@@ -245,8 +263,32 @@ A `GET /` of the example (two statements, each on a connection out of the host's
 the median of 30: 5.4 ms in the clear, 6.0 ms over TLS (the interface itself, m13: 4.8 and
 5.7).
 
+**A whole result against one read in pieces** (m55, 2026-11-26, Spin 4.3.0, `select g,
+md5(g::text) from generate_series(1, n) g`, load 40-70). Before the served component's
+allocator took the core's heap (`.kb/wasi-component.md`, "Shared-memory map"), a whole result
+past ~320 KB lowered overwrote the component's static data and past 1 MiB trapped: 2,000 rows
+answered, 4,000 and 6,000 read a garbled refusal, 8,000 and more `realloc return: beyond end
+of memory`. After it:
+
+| | first row | last row | Spin's peak, 100,000 rows |
+|---|---|---|---|
+| Lisp, `query` (whole), 10,000 | 34-52 ms | 35-52 ms | +63 MB, 356 ms |
+| Lisp, `query-async`, 10,000, reads of 100 | 2.4-3.4 ms | 148-158 ms | +5 MB, 1,989 ms |
+| JDBC, whole, 10,000 | 43-77 ms | 62-100 ms | +105 MB, 1,053 ms |
+| JDBC, fetch size 100, 10,000 | 3.6-3.8 ms | 262-305 ms | +11 MB, 2,521 ms |
+
+A read costs ~15 us on Lisp, ~27 us through JDBC (the binding's classes and the driver's
+values), against ~4 and ~6-10 us a row whole: the host's one row a write makes every read a
+round trip, so the pieces trade the whole result's time for its memory and its first row.
+Measured per read (`%nano-time` around each): every one of 9,999 waited on the host.
+
 ## Tests
 
+- Read in pieces: `SpinPostgresDriverTest#aProgramReadsAndWritesThroughTheHost` (the cursor,
+  the most rows, the refusal where the rows run out, the early close) and
+  `#aTransactionIsTheStatementsTheConnectionSends` (that refusal aborts the transaction); the
+  stand-in hands over no row before a refusal, Spin the rows before it. The example reads its
+  notes in pieces of 50 (`Notes.find`), so the Spin leg below runs `query-async`.
 - `jdbc-spin-postgres/src/test/java/am/ik/jdbc/spin/postgres/`: `SpinPostgresDriverTest`
   under a JDK against PostgreSQL 17 in Docker, the host a stand-in (`SocketPostgres`, the
   provider `src/test/resources` lists; the drivers registered in class-path order before

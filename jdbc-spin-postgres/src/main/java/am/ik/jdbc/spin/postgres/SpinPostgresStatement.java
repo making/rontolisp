@@ -140,7 +140,29 @@ class SpinPostgresStatement extends UnsupportedStatement {
 		Sql sql = keyColumns != null ? written.answering(keyColumns) : written;
 		boolean answering = sql != written;
 		boolean rows = answering || asked == ROWS || (asked == EITHER && sql.rows());
-		Result answered = this.connection.run(sql.text(types), parameters, rows, this.timeoutSeconds, written.begins());
+		// a fetch size reads the rows of a result that moves forward only in pieces, as
+		// the host reads them from the server
+		boolean streamed = rows && !answering && this.fetchSize > 0
+				&& this.resultSetType == ResultSet.TYPE_FORWARD_ONLY;
+		Result answered = this.connection.run(sql.text(types), parameters, rows, this.timeoutSeconds, written.begins(),
+				streamed);
+		Postgres.QueryAsync source = answered.streamed;
+		if (source != null) {
+			SpinPostgresResultSet read = new SpinPostgresResultSet(this, source, this.fetchSize, this.maxRows,
+					this.timeoutSeconds > 0);
+			if (source.columns().isEmpty()) {
+				// The statement answers no rows, and the host told no count: its end
+				// tells whether the server refused it.
+				read.next();
+				read.close();
+				this.result = new Result(0);
+			}
+			else {
+				this.result = answered;
+				this.resultSet = read;
+			}
+			return this.result.isRows();
+		}
 		Postgres.RowSet set = answered.rows;
 		if (set == null) {
 			this.result = answered;
@@ -158,7 +180,7 @@ class SpinPostgresStatement extends UnsupportedStatement {
 			this.result = new Result(this.maxRows > 0 && set.rows().size() > this.maxRows
 					? new Postgres.RowSet(set.columns(), set.rows().subList(0, this.maxRows)) : set);
 		}
-		return this.result.rows != null;
+		return this.result.isRows();
 	}
 
 	/** The rows the last run wrote, when they were asked for. */
@@ -214,6 +236,10 @@ class SpinPostgresStatement extends UnsupportedStatement {
 	@Override
 	public @Nullable ResultSet getResultSet() throws SQLException {
 		open();
+		if (this.result != null && this.result.streamed != null) {
+			// made with the run, which owns what the host still reads
+			return this.resultSet;
+		}
 		Postgres.RowSet rows = this.result != null ? this.result.rows : null;
 		if (rows == null) {
 			return null;
@@ -233,7 +259,7 @@ class SpinPostgresStatement extends UnsupportedStatement {
 	public long getLargeUpdateCount() throws SQLException {
 		open();
 		Result answered = this.result;
-		return answered == null || answered.rows != null ? -1 : answered.count;
+		return answered == null || answered.isRows() ? -1 : answered.count;
 	}
 
 	@Override

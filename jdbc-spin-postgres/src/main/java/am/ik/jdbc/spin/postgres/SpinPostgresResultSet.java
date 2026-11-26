@@ -21,12 +21,16 @@ import java.util.HashMap;
 import java.util.List;
 import java.util.Locale;
 import java.util.Map;
+import java.util.Objects;
 
+import am.ik.rontolisp.wit.WitException;
 import org.jspecify.annotations.Nullable;
 
 /**
- * The rows a statement answered, all of them handed over by the host before the first is
- * asked for: a result set that can be walked in both directions and changes nothing.
+ * The rows a statement answered: all of them handed over by the host before the first is
+ * asked for -- a result set that can be walked in both directions -- or, under a fetch
+ * size, read from the host's stream so many at a time as the cursor moves on, forward
+ * only, the statement's refusal thrown where the rows run out. It changes nothing.
  */
 final class SpinPostgresResultSet extends UnsupportedResultSet {
 
@@ -34,7 +38,8 @@ final class SpinPostgresResultSet extends UnsupportedResultSet {
 
 	private final List<Postgres.Column> columns;
 
-	private final List<List<Postgres.DbValue>> rows;
+	// The rows; of a result read in pieces, the piece the cursor is in.
+	private List<List<Postgres.DbValue>> rows;
 
 	private final int type;
 
@@ -48,11 +53,51 @@ final class SpinPostgresResultSet extends UnsupportedResultSet {
 
 	private @Nullable Map<String, Integer> labels;
 
+	// A result read in pieces: the host's stream and its end, null for a whole one.
+	private final Postgres.@Nullable QueryAsync source;
+
+	private int fetchSize;
+
+	// The most rows read, 0 for no limit.
+	private final int limit;
+
+	private final boolean timed;
+
+	// The rows read before the first of this.rows.
+	private long before;
+
+	// The piece after this.rows, read to tell whether a row is the last.
+	private @Nullable List<List<Postgres.DbValue>> ahead;
+
+	// Whether the stream and its end were given back.
+	private boolean ended;
+
 	SpinPostgresResultSet(@Nullable SpinPostgresStatement statement, Postgres.RowSet rows, int type) {
 		this.statement = statement;
 		this.columns = rows.columns();
 		this.rows = rows.rows();
 		this.type = type;
+		this.source = null;
+		this.limit = 0;
+		this.timed = false;
+	}
+
+	/**
+	 * Rows read in pieces.
+	 * @param fetchSize the most rows a read asks the host for
+	 * @param limit the most rows read, 0 for no limit
+	 * @param timed whether the statement ran under a limit on its time
+	 */
+	SpinPostgresResultSet(SpinPostgresStatement statement, Postgres.QueryAsync source, int fetchSize, int limit,
+			boolean timed) {
+		this.statement = statement;
+		this.columns = source.columns();
+		this.rows = List.of();
+		this.type = ResultSet.TYPE_FORWARD_ONLY;
+		this.source = source;
+		this.fetchSize = fetchSize;
+		this.limit = limit;
+		this.timed = timed;
 	}
 
 	// The cursor.
@@ -60,7 +105,75 @@ final class SpinPostgresResultSet extends UnsupportedResultSet {
 	@Override
 	public boolean next() throws SQLException {
 		open();
-		return move(Math.min(this.at + 1, this.rows.size()));
+		if (this.source == null || this.at + 1 < this.rows.size() || this.at >= this.rows.size()) {
+			return move(Math.min(this.at + 1, this.rows.size()));
+		}
+		List<List<Postgres.DbValue>> next = more();
+		if (next.isEmpty()) {
+			return move(this.rows.size());
+		}
+		this.before += this.rows.size();
+		this.rows = next;
+		return move(0);
+	}
+
+	// The piece after this.rows: the one read ahead, or the host's next, none at the end
+	// -- where the statement's refusal is thrown -- or at the most rows.
+	private List<List<Postgres.DbValue>> more() throws SQLException {
+		List<List<Postgres.DbValue>> next = this.ahead;
+		if (next != null) {
+			this.ahead = null;
+			return next;
+		}
+		if (this.ended) {
+			return List.of();
+		}
+		Postgres.QueryAsync read = Objects.requireNonNull(this.source);
+		long most = this.fetchSize;
+		if (this.limit > 0) {
+			most = Math.min(most, this.limit - this.before - this.rows.size());
+			if (most <= 0) {
+				// the rest is the host's to drop: its end is not read
+				end(false);
+				return List.of();
+			}
+		}
+		next = read.rows().read((int) most);
+		if (next.isEmpty()) {
+			end(true);
+		}
+		return next;
+	}
+
+	// Gives the stream and its end back, the end read first when the rows ran out: its
+	// error arm is the statement's refusal. An end not read is the host's to drop.
+	private void end(boolean read) throws SQLException {
+		this.ended = true;
+		Postgres.QueryAsync streamed = Objects.requireNonNull(this.source);
+		try {
+			if (read) {
+				streamed.done().get();
+			}
+		}
+		catch (WitException ex) {
+			throw Objects.requireNonNull(this.statement).connection.refused(ex, this.timed);
+		}
+		finally {
+			streamed.rows().close();
+			streamed.done().close();
+		}
+	}
+
+	// Whether no row follows this.rows, a piece read ahead to tell.
+	private boolean noMore() throws SQLException {
+		if (this.source == null) {
+			return true;
+		}
+		if (this.ahead == null && !this.ended) {
+			List<List<Postgres.DbValue>> next = more();
+			this.ahead = next.isEmpty() ? null : next;
+		}
+		return this.ahead == null;
 	}
 
 	@Override
@@ -114,7 +227,7 @@ final class SpinPostgresResultSet extends UnsupportedResultSet {
 	@Override
 	public boolean isBeforeFirst() throws SQLException {
 		open();
-		return this.at < 0 && !this.rows.isEmpty();
+		return this.at < 0 && (!this.rows.isEmpty() || !noMore());
 	}
 
 	@Override
@@ -126,25 +239,29 @@ final class SpinPostgresResultSet extends UnsupportedResultSet {
 	@Override
 	public boolean isFirst() throws SQLException {
 		open();
-		return this.at == 0 && !this.rows.isEmpty();
+		return this.before == 0 && this.at == 0 && !this.rows.isEmpty();
 	}
 
 	@Override
 	public boolean isLast() throws SQLException {
 		open();
-		return this.at == this.rows.size() - 1 && !this.rows.isEmpty();
+		return this.at == this.rows.size() - 1 && !this.rows.isEmpty() && noMore();
 	}
 
 	@Override
 	public int getRow() throws SQLException {
 		open();
-		return this.at >= 0 && this.at < this.rows.size() ? this.at + 1 : 0;
+		return this.at >= 0 && this.at < this.rows.size() ? (int) (this.before + this.at + 1) : 0;
 	}
 
 	@Override
 	public void close() throws SQLException {
 		if (!this.closed) {
 			this.closed = true;
+			if (this.source != null && !this.ended) {
+				// the rest is the host's to drop
+				end(false);
+			}
 			if (this.statement != null) {
 				this.statement.closed(this);
 			}
@@ -215,12 +332,19 @@ final class SpinPostgresResultSet extends UnsupportedResultSet {
 	@Override
 	public int getFetchSize() throws SQLException {
 		open();
-		return 0;
+		return this.fetchSize;
 	}
 
+	/** Of a result read in pieces, the most rows each read from now on asks for. */
 	@Override
 	public void setFetchSize(int rows) throws SQLException {
 		open();
+		if (rows < 0) {
+			throw new SQLException("The fetch size cannot be negative: " + rows, "22023");
+		}
+		if (rows > 0 || this.source == null) {
+			this.fetchSize = rows;
+		}
 	}
 
 	@Override
