@@ -83,8 +83,8 @@ is nothing, 32 `i32.wrap_i64` + `i64.extend_i32_s`, 16/8 one `i64.extend16_s`/`e
 bytes against the shift pair's 6; the boundary's canon compare already needs the sign-extension
 ops), any other width the shift pair. Two shapes keep what the wrap loses: `(truncate a b)`
 under the mask divides wrapping (a divisor of -1 negates: `Long.MIN_VALUE / -1`), and
-`(ash (logand x 2^64-1) (- (logand n 63)))` (a `long >>>`; the bignum mask is no i64) is
-`i64.shr_u`. **`(truncate a b)` of two integers is `i64.div_s`**, exact past 2^53 where
+`(ash (logand x 2^64-1) (- (logand n 63)))` (a `long >>>`; the bignum mask is no i64,
+`LispMacroExpander.unsignedShift`) is `i64.shr_u`. **`(truncate a b)` of two integers is `i64.div_s`**, exact past 2^53 where
 `(truncate (/ a b))` divides as doubles (`9007199254740993 / 1` is ...992 there); MIN / -1 and a
 zero divisor trap. `floor`/`ceiling`/`round` of two integers divide as doubles (stated residual,
 inexact past 2^53). `%single-float` is `f32.demote_f64` + `f64.promote_f32`, as on wasm-GC.

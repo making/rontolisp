@@ -713,6 +713,15 @@ final class JvmIntFusionCompiler {
 	private static final String PROBE_ROOT = "%probe";
 
 	/**
+	 * {@code (%mask-signed-field 64 (ash (logand a 2^64-1) (- n)))} over {@code (a, n)},
+	 * {@code n} from 0 to 63 ({@link LispMacroExpander#unsignedShift}): a Java
+	 * {@code long >>>}, one {@code LUSHR}. Its {@code a} is {@code (logand x -1)}, the
+	 * application that signals where the masking {@code logand} would for a non-integer
+	 * {@code x}, in its place in the interpreter's order.
+	 */
+	private static final String USHR = "%ushr";
+
+	/**
 	 * Per-site classification state: the registered leaves, plus what makes raw-local
 	 * reads shareable -- a local no leaf of this site can reassign snapshots once and is
 	 * read at every occurrence.
@@ -1965,6 +1974,22 @@ final class JvmIntFusionCompiler {
 		if (size < 1 || size > 64) {
 			return env.isEmpty() ? registerLeaf(new ExprLeaf(cons), site) : null;
 		}
+		LispMacroExpander.UnsignedShift shift = size == 64 ? LispMacroExpander.unsignedShift(cons.toList().get(2))
+				: null;
+		if (shift != null) {
+			Node operand = classify(shift.operand(), ctx, env, site, depth);
+			if (operand == null) {
+				return null;
+			}
+			Node integer = applied(makeOp(LispNames.LOGAND, List.of(operand, new ConstLeaf(-1)),
+					sourceSite(shift.masked(), ctx, site)), site);
+			Node count = shift.count() instanceof LispInteger literal ? new ConstLeaf(literal.value())
+					: classify(shift.count(), ctx, env, site, depth);
+			if (count == null) {
+				return null;
+			}
+			return applied(makeOp(USHR, List.of(integer, count), sourceSite(cons, ctx, site)), site);
+		}
 		Node arg = classify(cons.toList().get(2), ctx, env, site, depth);
 		if (arg == null) {
 			return null;
@@ -2034,6 +2059,7 @@ final class JvmIntFusionCompiler {
 					case LispNames.REM -> acc % v;
 					case LispNames.ASH -> foldAsh(acc, v);
 					case LispNames.MASK_SIGNED_FIELD -> signExtend(v, (int) acc);
+					case USHR -> acc >>> v;
 					default -> throw new ArithmeticException("not foldable");
 				};
 			}
@@ -4131,6 +4157,19 @@ final class JvmIntFusionCompiler {
 					}
 					return;
 				}
+				// The 64-bit field reads the operand's low 64 bits, and the count is
+				// within 0..63.
+				if (USHR.equals(op.op())) {
+					Node operand = op.args().get(0);
+					emitFastWrapped(operand instanceof OpNode integer && LispNames.LOGAND.equals(integer.op())
+							&& integer.args().get(1) instanceof ConstLeaf all && all.value() == -1
+									? integer.args().get(0) : operand,
+							ctx, state);
+					emitFast(op.args().get(1), ctx, state);
+					ctx.body.l2i();
+					ctx.body.lushr();
+					return;
+				}
 				// (mod x 2^k) with a positive power-of-two literal is a plain mask --
 				// two's complement makes x & (2^k - 1) the CL (divisor-signed) mod for
 				// ANY long x, with no overflow; the masked subtree may compute WRAPPED.
@@ -4207,6 +4246,9 @@ final class JvmIntFusionCompiler {
 		List<Node> args = op.args();
 		if (LispNames.MASK_SIGNED_FIELD.equals(name)) {
 			return wrappedThrows(args.get(1));
+		}
+		if (USHR.equals(name)) {
+			return wrappedThrows(args.get(0)) || fastThrows(args.get(1));
 		}
 		if (LispNames.MOD.equals(name) && args.get(1) instanceof ConstLeaf c && c.value() > 0
 				&& Long.bitCount(c.value()) == 1) {
@@ -4431,26 +4473,24 @@ final class JvmIntFusionCompiler {
 				ctx.body.labelBinding(done);
 			}
 			case OpNode op when LispNames.MASK_SIGNED_FIELD.equals(op.op()) -> {
-				// The lowering's arm (LispMacroExpander.expandMaskSignedField) through
-				// the generic helpers: flip the sign bit, keep the field, take the sign
-				// bit's weight back off. A non-integer fails in the logxor, as it does
-				// there.
-				int size = (int) ((ConstLeaf) op.args().get(0)).value();
-				long negativeSignBit = -(1L << (size - 1));
 				emitFallback(op.args().get(1), ctx, className);
-				JvmEmitHelper.compileLong(negativeSignBit, ctx);
+				emitSignedFieldFallback((int) ((ConstLeaf) op.args().get(0)).value(), op.site(), ctx);
+			}
+			case OpNode op when USHR.equals(op.op()) -> {
+				// The lowering's own operations: (logand a 2^64-1), the count negated,
+				// ash, the 64-bit field -- none of which can signal over the integers
+				// the operand's (logand x -1) and the count's logand answer.
+				emitFallback(op.args().get(0), ctx, className);
 				ctx.restoreSite(op.site());
-				ctx.body.invokestatic(numOpFor(LispNames.LOGXOR, JvmNumericRuntimeBuilder.LOGXOR, ctx));
-				if (size == 64) {
-					JvmEmitHelper.compileBigInteger(
-							java.math.BigInteger.ONE.shiftLeft(64).subtract(java.math.BigInteger.ONE), ctx);
-				}
-				else {
-					JvmEmitHelper.compileLong((1L << size) - 1, ctx);
-				}
+				JvmEmitHelper
+					.compileBigInteger(java.math.BigInteger.ONE.shiftLeft(64).subtract(java.math.BigInteger.ONE), ctx);
 				ctx.body.invokestatic(numOpFor(LispNames.LOGAND, JvmNumericRuntimeBuilder.LOGAND, ctx));
-				JvmEmitHelper.compileLong(negativeSignBit, ctx);
-				ctx.body.invokestatic(numOpFor(LispNames.ADD, JvmNumericRuntimeBuilder.ADD, ctx));
+				JvmEmitHelper.compileLong(0, ctx);
+				emitFallback(op.args().get(1), ctx, className);
+				ctx.restoreSite(op.site());
+				ctx.body.invokestatic(numOpFor(LispNames.SUB, JvmNumericRuntimeBuilder.SUB, ctx));
+				ctx.body.invokestatic(numOpFor(LispNames.ASH, JvmNumericRuntimeBuilder.ASH, ctx));
+				emitSignedFieldFallback(64, op.site(), ctx);
 			}
 			case OpNode op -> {
 				emitFallback(op.args().get(0), ctx, className);
@@ -4467,6 +4507,29 @@ final class JvmIntFusionCompiler {
 				}
 			}
 		}
+	}
+
+	/**
+	 * The lowering's arm of {@code (%mask-signed-field size x)} over the {@code x} on the
+	 * stack (LispMacroExpander.expandMaskSignedField), through the generic helpers: flip
+	 * the sign bit, keep the field, take the sign bit's weight back off. A non-integer
+	 * fails in the logxor, as it does there.
+	 */
+	private static void emitSignedFieldFallback(int size, int site, JvmLispCompiler.Ctx ctx) {
+		long negativeSignBit = -(1L << (size - 1));
+		JvmEmitHelper.compileLong(negativeSignBit, ctx);
+		ctx.restoreSite(site);
+		ctx.body.invokestatic(numOpFor(LispNames.LOGXOR, JvmNumericRuntimeBuilder.LOGXOR, ctx));
+		if (size == 64) {
+			JvmEmitHelper.compileBigInteger(java.math.BigInteger.ONE.shiftLeft(64).subtract(java.math.BigInteger.ONE),
+					ctx);
+		}
+		else {
+			JvmEmitHelper.compileLong((1L << size) - 1, ctx);
+		}
+		ctx.body.invokestatic(numOpFor(LispNames.LOGAND, JvmNumericRuntimeBuilder.LOGAND, ctx));
+		JvmEmitHelper.compileLong(negativeSignBit, ctx);
+		ctx.body.invokestatic(numOpFor(LispNames.ADD, JvmNumericRuntimeBuilder.ADD, ctx));
 	}
 
 	/**

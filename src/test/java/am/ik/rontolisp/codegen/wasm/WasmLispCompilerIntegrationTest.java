@@ -2136,6 +2136,14 @@ class WasmLispCompilerIntegrationTest {
 		assertThat(runModule(fast, "msf-fast.wasm")).isEqualTo(MaskSignedFieldProgram.EXPECTED);
 		assertThat(runModule(small, "msf-small.wasm")).isEqualTo(MaskSignedFieldProgram.EXPECTED);
 		assertThat(compileAndRunComponent(MaskSignedFieldProgram.PROGRAM)).isEqualTo(MaskSignedFieldProgram.EXPECTED);
+		// A Java long >>> by a computed count is one i64.shr_u: 100,000 of them run in
+		// some 25 M fuel, where the 2^64 - 1 mask's bignum took 140-160 M.
+		assertThat(compileAndRunWithFuel("""
+				(defun msf-ushr (x n) (%mask-signed-field 64 (ash (logand x 18446744073709551615) (- (logand n 63)))))
+				(let ((acc 0))
+				  (dotimes (i 100000) (setq acc (logxor acc (msf-ushr (- -1 i) i))))
+				  (print acc))
+				""", 50_000_000L)).isEqualTo("-6148914694099762048");
 	}
 
 	@Test
