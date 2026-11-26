@@ -206,8 +206,9 @@ other array form ([java-frontend.md](java-frontend.md), "Numbers").
   the store -- index and value raw, the arm's checks, one write, `V` in statement position
   (`JvmExprCompiler.compileStatementStore`); the fallback is the generic store over the same
   arguments, in its order. An index that may be no integer (an untrusted leaf, an aref read, a
-  draw, a celled call) is checked before the value runs, so the store fuses only where the value's
-  leaves cannot be observed. Where threads run, `_fxPut` stores the box too.
+  draw, a celled call) beside a value leaf that can be observed is checked after the value
+  (`ArefLeaf.checkWaits`, part of the method's key), as the generic store checks it. Where threads
+  run, `_fxPut` stores the box too.
 - **No string arm**: `(setf (aref var i) v)` of a pinned variable is its `%aset` at every level
   (`JvmArrayCompiler.nonStringArefStore`, wasm's twin); a string there is the false declaration's
   catchable error.

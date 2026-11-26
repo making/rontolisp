@@ -89,7 +89,8 @@ public final class ArefRankAndSubscriptChecksFixture {
 	 * Call-position accesses, stores and {@code #'aref} /
 	 * {@code #'array-row-major-index}, under handlers: each report with its expected
 	 * type, then the order the argument forms ran in. Every argument form is evaluated
-	 * before any check; then each subscript's type, the array's, its rank, a store's
+	 * before any check -- a later subscript's and a store's value's included, the rows
+	 * before the last -- then each subscript's type, the array's, its rank, a store's
 	 * value and the bounds, in that order.
 	 */
 	public static final String ORDER_SOURCE = """
@@ -211,6 +212,22 @@ public final class ArefRankAndSubscriptChecksFixture {
 			(ao-check (ao-dtput (vector 1 2 3) -2 7))
 			(ao-check (ao-dtput (vector 1 2 3) 2147483647 7))
 			(ao-check (ao-dtput nil (ao-note 15) (ao-note 16)))
+			(ao-check (setf (aref *ao-v* 'x) (ao-note 17)))
+			(ao-check (setf (aref *ao-m* 'x (ao-note 18)) (ao-note 19)))
+			(ao-check (aref *ao-m* 'x (ao-note 20)))
+			(ao-check (setf (row-major-aref *ao-v* 'x) (ao-note 21)))
+			(defun ao-nput (v i x) (setf (aref v i) (ao-note x)) v)
+			(defun ao-dnput (v i x) (declare (type (or null simple-vector) v)) (setf (aref v i) (+ (ao-note x) 0)) v)
+			(defun ao-d8nput (v i x)
+			  (declare (type (or null (simple-array (unsigned-byte 8) (*))) v))
+			  (setf (aref v i) (ao-note x))
+			  v)
+			(ao-check (ao-nput (vector 1 2 3) 'x 22))
+			(ao-check (ao-nput *ao-v8* 'x 23))
+			(ao-check (ao-nput (make-array 2 :element-type 'double-float) 'x 24))
+			(ao-check (ao-dnput (vector 1 2 3) 'x 25))
+			(ao-check (ao-dnput (vector 1 2 3) 'x 'y))
+			(ao-check (ao-d8nput *ao-v8* 'x 26))
 			(ao-check (reverse *ao-log*))""";
 
 	/** What every backend prints for {@link #ORDER_SOURCE}. */
@@ -289,6 +306,16 @@ public final class ArefRankAndSubscriptChecksFixture {
 			(SETF AREF): The value -1 is not of type (INTEGER 0 (3)) | (INTEGER 0 (3))
 			(SETF AREF): The value 2147483648 is not of type (INTEGER 0 (3)) | (INTEGER 0 (3))
 			(SETF AREF): The value NIL is not of type ARRAY | ARRAY
-			(7 8 9 10 11 12 13 14 15 16)""";
+			(SETF AREF): The value X is not of type INTEGER | INTEGER
+			(SETF AREF): The value X is not of type INTEGER | INTEGER
+			AREF: The value X is not of type INTEGER | INTEGER
+			(SETF ROW-MAJOR-AREF): The value X is not of type INTEGER | INTEGER
+			(SETF AREF): The value X is not of type INTEGER | INTEGER
+			(SETF AREF): The value X is not of type INTEGER | INTEGER
+			(SETF AREF): The value X is not of type INTEGER | INTEGER
+			(SETF AREF): The value X is not of type INTEGER | INTEGER
+			+: The value Y is not of type NUMBER | NUMBER
+			(SETF AREF): The value X is not of type INTEGER | INTEGER
+			(7 8 9 10 11 12 13 14 15 16 17 18 19 20 21 22 23 24 25 Y 26)""";
 
 }
