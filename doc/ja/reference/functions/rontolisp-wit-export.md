@@ -218,8 +218,6 @@ try {
   `&key` は拒否されます)
 - エクスポートで受け渡せない WIT 型。WASI モジュールと `--no-gc` ではフラットな型以外、
   それ以外の出力でも `flags`、ハンドル、`stream`、`future`、別のインタフェースの型
-- `--no-gc --component` での `async func` (アダプタのないリアクターには非同期の
-  機構がありません)
 - コンポーネントモデルのラベル (lower-kebab-case の語) でないエクスポート名、
   エクスポートの重複 (WIT リーダーが先に `wasm-tools component wit` の文面で拒否します:
   `` export `a` conflicts with prior func of same name ``)、予約名 `run` (コンポーネントの `wasi:cli/run`

@@ -137,7 +137,8 @@ host that has never heard of the program. The output is identical all three ways
   call to return and answers its value, as a `func` is bound, instead of a
   future: a component lowers it synchronously, a Preview 1 module imports it
   without `:async t`, and the interpreter and the JVM call the provider
-  directly. The Java front end's bindings ask for it.
+  directly. The Java front end's bindings ask for it, and it is the one way
+  `--no-gc` binds an `async func`.
 - `:aliases` — `(("name" "type") ...)`: type aliases the directive adds to the
   interface, each as if the WIT declared `type name = type;` there. A stream or a
   future is read through the built-ins of an alias of its type
@@ -180,7 +181,7 @@ WIT does not name as a function. See
 | JVM (`-o Prog.class`) | the same `defun`s, compiled |
 | Preview 1 WASM (`-o prog.wasm`) | one [`rontolisp:wasm-import`](rontolisp-wasm-import.md) per WIT function |
 | `--component` | a component-model **instance import** of the interface, each function `canon lower`ed into the core module |
-| `--no-gc` | the same `rontolisp:wasm-import` per WIT function, keeping each integer's own width (its house integer is `i64`); an `async func` is a compile error |
+| `--no-gc` | the same `rontolisp:wasm-import` per WIT function, keeping each integer's own width (its house integer is `i64`); an `async func` binds under `:blocking t` only |
 | `--no-wasi` (`-o prog.wasm --no-wasi`) | as Preview 1 while every function bound crosses the flat set; else the core imports `--component` gives the core module, the functions the program calls, which the [`--emit-js-glue` glue](../../guides/wasm-host-boundary.md#wit-interfaces-beyond-the-flat-set) answers |
 
 On Preview 1 the module is **byte-identical** to the hand-written equivalent, and
@@ -425,8 +426,10 @@ decides what to make of it.
 
 - `--no-gc` takes the directive through the same Preview 1 lowering, and carries
   every integer width (its house integer is `i64`, so `s64`/`u64` cross and a
-  `u32` keeps its own width instead of collapsing onto `s32`). Its one refusal is
-  an `async func`: `:async t` answers a future, and that value model has none.
+  `u32` keeps its own width instead of collapsing onto `s32`). An `async func`
+  binds there under `:blocking t` only
+  ([a call that waits](../../guides/wasm-nogc.md#calls-that-wait-async-func)):
+  the future its binding answers elsewhere has no value in that model.
 - On the default (wasm-GC) Preview 1 boundary only the flat set above crosses; a
   `record`, `option`, `result` or `s64` is a compile error naming the WIT file and line —
   `wit/store.wit:12: 'bucket-get': the WIT type of the result does not cross the Preview 1 WASM import boundary, which carries the flat set (...)` —

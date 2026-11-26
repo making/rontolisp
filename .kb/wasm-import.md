@@ -102,8 +102,8 @@ since literals skip the wrapper),
 ## Modes, other backends, aliases
 - `--component` on wasm-GC throws `UnsupportedOperationException` (GC components bind through
   `wit-import`'s `%component-import`); `--no-gc --component` TAKES it as instance imports
-  (`.kb/no-gc-scalar-wasm.md`, "Host imports"), hence `:param-names` (default `p0..`, read by that
-  wrap alone). Interpreter and JVM define error-signalling stubs so shared sources load everywhere.
+  (`.kb/no-gc-scalar-wasm.md`, "Host imports"), hence `:param-names` (default `p0..`) and
+  `:blocking t` (the function an `async func`), both read by that wrap alone. Interpreter and JVM define error-signalling stubs so shared sources load everywhere.
 - **`--no-gc` takes the directive** with its own wrappers; shared: `WasmImportDirective`,
   `WasmImportCompiler.parse`/`hostParamTypes`/`hostResultTypes`, `WasmImportInjector`. **The accepted
   TYPE SET is per-backend and follows the house integer** (so `parse` takes it as an argument):

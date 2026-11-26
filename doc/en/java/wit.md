@@ -335,8 +335,9 @@ export answers for a `u32` is 4294967295.
 An `async func` export is a static method answering its value, as any other. The component
 lifts it async, so the call may wait where the method blocks, as in a `Thread.sleep` or a call
 of an imported `async func`; a sync export that blocks traps (`cannot block a synchronous
-task`). It takes the types above, and `--no-gc` refuses it
-([`rontolisp:wit-export`](../reference/functions/rontolisp-wit-export.md)).
+task`). It takes the types above. `--no-gc --component` lifts it async too, but nothing
+in the scalar subset waits: it has no thread to sleep in and no object for a `@WitImport`
+binding.
 
 ```console
 export pause: async func(ms: u32) -> u32;
@@ -365,8 +366,7 @@ public static int pause(int ms) throws InterruptedException {
   `option` of a `bool`, a `list`, `flags` or an `option`, whose none the boundary cannot
   tell apart; a resource of another interface; a tuple in an error arm thrown as a
   `WitException`, for which no type is written (a `WitResult` answer carries it).
-- A world's export takes `bool`, the integers, `f64` and `string`; an `async func` export is
-  refused under `--no-gc`. Two exports of one label (a function of the world and an
+- A world's export takes `bool`, the integers, `f64` and `string`. Two exports of one label (a function of the world and an
   interface's, or two interfaces') are two methods, each of its own class.
 - An exception an export leaves uncaught is reported on standard error by the line a JDK
   writes (`Exception in thread "main" java.lang.IllegalStateException: ...`), then the call

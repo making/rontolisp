@@ -335,8 +335,9 @@ is s32, which is int in Java, not long
 `async func` のエクスポートも、ほかと同じく値を返す static メソッドです。コンポーネントはこれを
 async で lift するので、`Thread.sleep` や、インポートした `async func` の呼び出しのように
 メソッドがブロックする箇所で、呼び出しは待てます。同期のエクスポートがブロックするとトラップに
-なります（`cannot block a synchronous task`）。使える型は上と同じで、`--no-gc` では拒否されます
-（[`rontolisp:wit-export`](../reference/functions/rontolisp-wit-export.md)）。
+なります（`cannot block a synchronous task`）。使える型は上と同じです。`--no-gc --component` も
+これを async で lift しますが、スカラーのサブセットには待つ手段がありません。スリープする
+スレッドも、`@WitImport` のバインディングを持つオブジェクトもないためです。
 
 ```console
 export pause: async func(ms: u32) -> u32;
@@ -365,8 +366,7 @@ public static int pause(int ms) throws InterruptedException {
   future と境界が見分けられないため）。`bool`、`list`、`flags`、`option` を要素とする `option`
   （境界がその none を見分けられないため）。ほかのインタフェースのリソース。`WitException` として
   投げるエラーの型にある tuple（型を書く場所がないため。`WitResult` の戻り値なら書けます）。
-- world のエクスポートで使える型は、`bool`、整数、`f64`、`string` です。`async func` の
-  エクスポートは `--no-gc` では拒否されます。同じラベルのエクスポート 2 つ（world の関数と
+- world のエクスポートで使える型は、`bool`、整数、`f64`、`string` です。同じラベルのエクスポート 2 つ（world の関数と
   インタフェースの関数、または 2 つのインタフェースの関数）は、それぞれのクラスの 2 つの
   メソッドです。
 - エクスポートが捕まえなかった例外は、JDK が書く行（`Exception in thread "main"

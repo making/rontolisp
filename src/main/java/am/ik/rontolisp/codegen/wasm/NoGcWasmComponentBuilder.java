@@ -33,9 +33,12 @@ import java.util.regex.Pattern;
  * emitted by {@link NoGcWasmCompiler}, wrapped as a reactor-style WASM component whose
  * only exports are the {@code rontolisp:wasm-export} functions, each lifted
  * <strong>synchronously</strong> through the canonical ABI (against an async function
- * type when the program prints; see below), and whose only imports are the
- * {@code rontolisp:wasm-import} host functions the exports reach, each a component-model
- * instance import {@code canon lower}ed into the core.
+ * type when the export is {@code :async t} or the program prints; see below), and whose
+ * only imports are the {@code rontolisp:wasm-import} host functions the exports reach,
+ * each a component-model instance import {@code canon lower}ed into the core -- also
+ * synchronously where the function is an {@code async func} ({@code :blocking t}): the
+ * call's task waits in the host until the function returns, which only the task of an
+ * async-typed export may do.
  *
  * <p>
  * Unlike the GC path's {@link WasmComponentBuilder}, a print-free, import-free program
@@ -476,11 +479,12 @@ final class NoGcWasmComponentBuilder {
 		}
 		// Per export i: alias the core wrapper, declare its function type, lift it and
 		// export it. Types/lifts/exports line up 1:1 with the ordinal; only the core
-		// function index is shifted by the wiring above. A printing program's exports
-		// are lifted against ASYNC function types -- the bridge's blocking waitable-set
-		// park is legal only inside an async-typed task -- with the same flat core
-		// signature (the lift below is unchanged, and the post-return survives the async
-		// type); a print-free program's exports stay sync lifts.
+		// function index is shifted by the wiring above. An :async t export, and every
+		// export of a printing program, is lifted against an ASYNC function type -- a
+		// wait (an import's that is an async func, the bridge's waitable-set park) is
+		// legal only inside an async-typed task -- with the same flat core signature
+		// (the lift below is unchanged, and the post-return survives the async type);
+		// every other export stays a sync lift.
 		final int typeBase = nextType;
 		final int componentFuncBase = nextComponentFunc;
 		for (int i = 0; i < decls.size(); i++) {
@@ -490,7 +494,7 @@ final class NoGcWasmComponentBuilder {
 			int func = nextCoreFunc++;
 			// p0, p1, ... unless the directive names the parameters (:param-names, or the
 			// WIT world's own names under rontolisp:wit-export).
-			types.add(printUsed
+			types.add(printUsed || decl.async()
 					? ComponentWriter.asyncFuncTypeScalars(e.paramNames(), e.paramValTypes(), e.resultValType())
 					: ComponentWriter.funcTypeScalars(e.paramNames(), e.paramValTypes(), e.resultValType()));
 			if (WasmExportCompiler.usesMemory(decl)) {
@@ -532,7 +536,8 @@ final class NoGcWasmComponentBuilder {
 	/**
 	 * The imported instance type of one import module: one function type declaration per
 	 * bound function, each exported under the import field. Function types are
-	 * scalar/string component function types over the import's parameter names.
+	 * scalar/string component function types over the import's parameter names, async for
+	 * a function the call waits for ({@code :blocking t}).
 	 * @param decls the module's imports, in core import order
 	 * @return the encoded instance type
 	 */
@@ -544,8 +549,10 @@ final class NoGcWasmComponentBuilder {
 			for (BoundaryType t : decl.paramTypes()) {
 				params.add(WasmExportCompiler.componentValType(t));
 			}
-			items.add(ComponentWriter.instanceDeclType(ComponentWriter.funcTypeScalars(decl.paramNames(), params,
-					WasmExportCompiler.componentValType(decl.returnType()))));
+			Integer result = WasmExportCompiler.componentValType(decl.returnType());
+			items.add(ComponentWriter.instanceDeclType(
+					decl.blocking() ? ComponentWriter.asyncFuncTypeScalars(decl.paramNames(), params, result)
+							: ComponentWriter.funcTypeScalars(decl.paramNames(), params, result)));
 			items.add(ComponentWriter.instanceDeclExportFunc(decl.field(), localType++));
 		}
 		return ComponentWriter.instanceTypeOf(items);

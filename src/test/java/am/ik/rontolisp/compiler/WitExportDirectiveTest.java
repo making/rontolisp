@@ -165,10 +165,15 @@ class WitExportDirectiveTest {
 	void lowersAnAsyncFuncIntoAnAsyncExport() {
 		// The :async t lift is stated by the WIT rather than guessed: a sync-lifted
 		// export
-		// doing I/O traps at run time ("cannot block a synchronous task").
-		List<LispVal> forms = lower(world("  export count-vowels: async func(s: string) -> s32;"), Backend.WASM_GC);
-		assertThat(printed(forms)).isEqualTo(
-				"(RONTOLISP:WASM-EXPORT '|count-vowels| :PARAMS '(:STRING) :PARAM-NAMES '(|s|) :RETURNS :S32 :ASYNC T)");
+		// doing I/O traps at run time ("cannot block a synchronous task"). It is the type
+		// of the component's function, on the scalar backend as on the GC one; a core
+		// module's export has no type for it to change.
+		for (Backend backend : List.of(Backend.WASM_GC, Backend.WASM_NO_GC, Backend.WASM_NO_GC_COMPONENT)) {
+			List<LispVal> forms = lower(world("  export count-vowels: async func(s: string) -> s32;"), backend);
+			assertThat(printed(forms)).as(backend.name())
+				.isEqualTo("(RONTOLISP:WASM-EXPORT '|count-vowels| :PARAMS '(:STRING) :PARAM-NAMES '(|s|) :RETURNS"
+						+ " :S32 :ASYNC T)");
+		}
 	}
 
 	@Test
@@ -354,15 +359,6 @@ class WitExportDirectiveTest {
 		assertThat(printed(lower(wit, Backend.WASM_NO_GC)))
 			.isEqualTo("(RONTOLISP:WASM-EXPORT '|count-vowels| :PARAMS '(:U64) :PARAM-NAMES '(|s|) :RETURNS :U64)");
 		assertThat(printed(lower(wit, Backend.WASM_GC))).contains(":U64");
-	}
-
-	@Test
-	void rejectsAnAsyncFuncOnTheNoGcBackend() {
-		assertThatThrownBy(
-				() -> lower(world("  export count-vowels: async func(s: string) -> s32;"), Backend.WASM_NO_GC))
-			.isInstanceOf(UnsupportedOperationException.class)
-			.hasMessage("world.wit:4: export 'count-vowels' is an async func, which --no-gc --component cannot lift "
-					+ "(the adapter-free reactor has no async machinery)");
 	}
 
 	@Test

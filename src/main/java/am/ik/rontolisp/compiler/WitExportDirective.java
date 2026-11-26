@@ -759,11 +759,6 @@ public final class WitExportDirective {
 			throw error(witPath, locations, item, "export '" + name + "' declares " + func.params().size()
 					+ " parameter(s), but (defun " + name + " ...) takes " + lambdaList.size());
 		}
-		if (func.async() && backend.isNoGc()) {
-			throw error(witPath, locations, item,
-					"export '" + name + "' is an async func, which --no-gc --component cannot lift "
-							+ "(the adapter-free reactor has no async machinery)");
-		}
 		WitResolver resolver = implemented.resolver();
 		List<LispVal> params = new ArrayList<>();
 		List<LispVal> paramNames = new ArrayList<>();

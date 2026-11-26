@@ -139,7 +139,8 @@ rontolisp counter.lisp -o Counter.class && java Counter
   返るのを待って値を返す関数として、`func` と同じように束縛します。コンポーネントは
   同期的に lower し、Preview 1 のモジュールは `:async t` なしでインポートし、
   インタプリタと JVM はプロバイダを直接呼びます。Java のフロントエンドの
-  バインディングがこれを指定します。
+  バインディングがこれを指定します。`--no-gc` が `async func` を束縛するのは、
+  このオプションを付けたときだけです。
 - `:aliases` — `(("name" "type") ...)`: ディレクティブがインターフェースに加える
   型エイリアスです。それぞれ、WIT がそこで `type name = type;` を宣言したものとして
   扱われます。stream と future は、その型のエイリアスの組み込みで読みます
@@ -180,7 +181,7 @@ rontolisp が与えた綴りです。
 | JVM (`-o Prog.class`) | the same `defun`s, compiled |
 | Preview 1 WASM (`-o prog.wasm`) | one [`rontolisp:wasm-import`](rontolisp-wasm-import.md) per WIT function |
 | `--component` | a component-model **instance import** of the interface, each function `canon lower`ed into the core module |
-| `--no-gc` | WIT の関数 1 つにつき同じ `rontolisp:wasm-import`。各整数は自分の幅を保ちます(ハウス整数が `i64` のため)。`async func` はコンパイルエラーです |
+| `--no-gc` | WIT の関数 1 つにつき同じ `rontolisp:wasm-import`。各整数は自分の幅を保ちます(ハウス整数が `i64` のため)。`async func` は `:blocking t` のときだけ束縛されます |
 | `--no-wasi` (`-o prog.wasm --no-wasi`) | 束縛する関数がすべてフラットな型の集合に収まる間は Preview 1 と同じ。そうでなければ `--component` がコアモジュールに与えるコアインポートで、プログラムが呼ぶ関数だけ。[`--emit-js-glue` のグルー](../../guides/wasm-host-boundary.md#wit-interfaces-beyond-the-flat-set)がそれに答えます |
 
 Preview 1 では、生成されるモジュールは手書きの等価物と**バイト単位で同一**であり、
@@ -434,8 +435,10 @@ variant のどの case でもないキーワードを渡すのは**型エラー*
 
 - `--no-gc` は同じ Preview 1 のローワリングでこのディレクティブを受け付け、整数は
   すべての幅を運びます(ハウス整数が `i64` なので `s64`/`u64` も渡り、`u32` は
-  `s32` に潰れず自分の幅を保ちます)。唯一の拒否は `async func` です:
-  `:async t` は future を返しますが、あの値モデルに future はありません。
+  `s32` に潰れず自分の幅を保ちます)。`async func` は `:blocking t` を付けたとき
+  だけ、[待つ呼び出し](../../guides/wasm-nogc.md#calls-that-wait-async-func)として
+  束縛されます。ほかのバックエンドでその束縛が返す future を表す値が、
+  この値モデルにはないためです。
 - デフォルト (wasm-GC) の Preview 1 境界を渡れるのは上表のフラットな集合だけです。
   `record`、`option`、`result`、`s64` は WIT ファイル名と行番号を示すコンパイル
   エラーになります —

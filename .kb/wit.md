@@ -97,7 +97,8 @@ boundary").
   `async func`-typed imports"), Preview 1 without `:async t`, the interpreter and the JVM a
   plain provider call. Measured: Spin 4.3.0 and wasmtime 51 run a synchronous lowering of an
   async func, the task waiting; its wrapper pops what was lowered, where an async-lowered
-  call's start keeps its staging. What a front end with no futures binds (the Java subset).
+  call's start keeps its staging. What a front end with no futures binds (the Java subset), and
+  the one way `--no-gc` binds an `async func` (`.kb/no-gc-scalar-wasm.md`, "An `async func`").
 - Trap: a value type's type index is an s33 (`ComponentWriter.definedFuture` wrote it unsigned
   until 2026-11-26, so a future whose payload type sat past index 63 failed validation).
 
@@ -150,8 +151,7 @@ Each names the WIT file and line: world selection; an export not defined; **arit
 exported `defun` with `&optional`/`&rest`/`&key`; a duplicate; a name that is not a lower-kebab
 `label` or is the reserved `run`; an interface the file does not define; an inline `import name:
 func` (rejected, not dropped); a type no export carries, or none on this backend ("Compound
-types across an export"; the flat list is DERIVED, `BoundaryType.witNames`); an `async func`
-under `--no-gc --component`.
+types across an export"; the flat list is DERIVED, `BoundaryType.witNames`).
 **A user-facing message carries no `.todo` pointer** -- a todo file is deleted when the work lands.
 
 ### Compound types across an export — the canonical form
@@ -314,13 +314,16 @@ through the canonical ABI though every bound member is flat.
 - **`--no-gc`**: the SAME Preview 1 lowering, so one world serves both, differing in two places
   because the vocabulary follows the HOUSE INTEGER: the designator is read straight off the prim
   name (`BoundaryType.forWitName`, as the export side does), so `s64`/`u64` cross and a `u32` keeps
-  its width; and an `async func` is a compile error (no futures in that value model). An import and
+  its width; and an `async func` binds under `:blocking t` only (no futures in that value model;
+  the refusal names the option). An import and
   an export of ONE world must not disagree about which backend can bind it. Pins:
-  `WitImportDirectiveTest.theNoGcBackendGetsThePreview1LoweringWithItsOwnWidths`,
+  `WitImportDirectiveTest.theNoGcBackendGetsThePreview1LoweringWithItsOwnWidths` /
+  `.theNoGcBackendBindsAnAsyncFuncOnlyAsACallThatWaits`,
   `NoGcWasmImportE2eTest.aWitImportedInterfaceIsTheHandWrittenImportBlock`.
 - **`--no-gc --component`**: the same block, named as the wrap's canon-lowered instance import is
   typed -- the CANONICAL id as `:from`, the WIT label verbatim as `:as`, the WIT parameter names --
-  so a composed provider type-checks down to the names. Resources, non-primitive types and drops
+  so a composed provider type-checks down to the names, an `async func` as `:blocking t`.
+  Resources, non-primitive types and drops
   are refused at the WIT line (`validateNoGcComponentFunc`). Pins:
   `WitImportDirectiveTest.theNoGcComponentLowersToTheCanonicalImportNames` /
   `.theNoGcComponentRefusesWhatItsInstanceTypeCannotName`,

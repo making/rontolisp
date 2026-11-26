@@ -254,9 +254,10 @@ rontolisp badge.lisp --no-gc --no-wasi --optimize=size -o badge.wasm
   足しません。
 - **`rontolisp:wit-import` もここで使えます。** 展開先はまさにこれ — WIT の
   関数 1 つにつき `wasm-import` 1 つで、手書きのブロックとバイト単位で同一
-  です([WIT コントラクト](wit-contracts.md))。唯一の例外は `async func` で、
-  `:async t` は future を返しますが、このバックエンドに future を表す値は
-  ありません。`--no-gc --component` では同じ宣言がそのままコンポーネント自身の
+  です([WIT コントラクト](wit-contracts.md))。`async func` は `:blocking t` を
+  付けたときだけ、[待つ呼び出し](#calls-that-wait-async-func)として束縛されます。
+  ほかのバックエンドでその束縛が返す future を表す値が、このバックエンドには
+  ないためです。`--no-gc --component` では同じ宣言がそのままコンポーネント自身の
   インポートになります — [コンポーネントでのホストインポート](#host-imports-in-a-component)
   を参照してください。
 
@@ -352,10 +353,52 @@ world root {
 
 `:string` は双方向ともコンポーネントモデルの `string` として越えます — ホストは引数をモジュールのメモリから読み出し、結果は正準の `cabi_realloc` を通じて書き込みます — ので、JavaScript ホストには素の文字列が見えます: `setText(id, text)` と `measure(n)` をエクスポートする `env.js` に対して `jco transpile badge.wasm --map env=./env.js` とするだけで、`(ptr,len)` のグルーも JSPI も不要です。`wasmtime run --invoke` はユーザーインポートを単独では満たせません。そのインターフェースをエクスポートするコンポーネントと合成してください(`wac plug`、または `wasm-tools compose main.wasm -d provider.wasm`)— プロバイダは同じインターフェースを `wit-export` する別の rontolisp プログラムでも構いません。[`rontolisp:wit-import`](wit-contracts.md) はまさにこれへ展開され、インターフェース id をインポート名に、WIT の関数名とパラメータ名をそのまま使うため、`.wit` から作ったコンポーネントはそのインターフェースの任意のプロバイダと合成できます。宣言されるのはエクスポートから到達するインポートだけで、印字するプログラムはその横に print マイクロアダプタを保ちます。
 
+### 待つ呼び出し(`async func`)
+
+WIT の `async func` は、呼び出しが待つことのある関数です。このバックエンドには future を表す値がないので、`async func` の呼び出しは**関数が返るまで待ち、その値を返す**呼び出しとして扱います。
+
+- インポートする `async func` には `:blocking t` を付けます。`rontolisp:wasm-import` に付けるか、`async func` を含むインターフェースの [`rontolisp:wit-import`](../reference/functions/rontolisp-wit-import.md) に付けます。コンポーネントはその関数を `async func` としてインポートし、同期的に lower します。呼び出しは関数が返った時点で戻ります。
+- エクスポートする `async func` は `rontolisp:wasm-export` の `:async t` で、[`rontolisp:wit-export`](../reference/functions/rontolisp-wit-export.md) の world では `async func` と書いたエクスポートです。待てるのはこのエクスポートのタスクだけなので、`:async t` でないエクスポートやトップレベルのフォームから `:blocking t` のインポートに到達するプログラムは、途中の呼び出しを示すコンパイルエラーになります。
+
+```console
+;; clocks.wit -- ホストの時計のうち、プログラムが使う 2 つの関数
+package wasi:clocks@0.3.0;
+
+interface monotonic-clock {
+  now: func() -> u64;
+  wait-for: async func(how-long: u64);
+}
+```
+
+```console
+;; nap.lisp
+(rontolisp:wit-import "clocks.wit" :interface "wasi:clocks/monotonic-clock@0.3.0"
+                      :package clock :blocking t)
+
+(defun nap (ms)
+  (let ((start (clock:now)))
+    (clock:wait-for (* ms 1000000))
+    (- (clock:now) start)))
+
+(rontolisp:wasm-export 'nap :params '(:u32) :returns :u64 :async t)
+```
+
+```bash
+rontolisp nap.lisp --no-gc --component -o nap.wasm   # 425 バイト
+wasmtime run --invoke 'nap(20)' nap.wasm
+# 21265054
+```
+
+jco(1.42 で計測)では、`--map` で `:blocking t` のインポートに割り当てる関数を `async` 関数にでき、`:async t` のエクスポートは `await` で呼びます。
+
+待つ呼び出しは一度に 1 つです。呼び出しのあいだタスクはホストの中で待ち続けるため、2 回待てば両方の時間の合計がかかります。待ち時間を重ねる必要のあるプログラムは、`async func` の束縛が future を返すデフォルトのバックエンドでコンパイルしてください。
+
+コアモジュール(`--component` なし)には async の ABI がなく、必要でもありません。コアモジュールでは `:blocking t` も `:async t` も出力を変えず、インポートは素のインポート、エクスポートは素のエクスポートです。関数を非同期に実装するホストは、モジュールの外側で呼び出しを中断します。JavaScript ホストなら、インポートを `WebAssembly.Suspending` で、エクスポートを `WebAssembly.promising` で包みます(JSPI)。呼び出しは一度に 1 つにしてください。中断中のモジュールに別の呼び出しが入ることを、モジュールは防ぎません。
+
 素の `--no-gc` 出力とのトレードオフ、および現在の制限:
 
 - コンポーネントはコンポーネントモデル対応のホストを必要とします。生のコアモジュールは素の埋め込み API を通じて**任意の** WebAssembly エンジンで動きます。両方の出力が使えます — ホストごとに選んでください。コンポーネントは `--no-gc` のデフォルトでは*ありません*。(`--component` なしでは、`:string` は代わりに手動の `(ptr,len)` コア ABI で境界を渡ります。)
-- コンポーネントは純粋なリアクターです: `wasi:cli/run` エントリはありません(トップレベルでは何も実行されません)。エクスポート内の印字は上記のマイクロアダプタで動作します。それ以外の I/O は通常どおり `--no-gc` サブセットの外です。`:async t` は拒否されます — 印字するプログラムのエクスポートは自動的に async リフトされ、それ以外にエクスポートがサスペンドし得るものは存在しません。
+- コンポーネントは純粋なリアクターです: `wasi:cli/run` エントリはありません(トップレベルでは何も実行されません)。エクスポート内の印字は上記のマイクロアダプタで動作します。それ以外の I/O は通常どおり `--no-gc` サブセットの外です。印字するプログラムのエクスポートは、`:async t` の有無にかかわらず自動的に async リフトされます。
 - エクスポート名は lower-kebab-case のコンポーネントモデル名でなければなりません。その文法から外れる Lisp 名については、コンパイラが `:as` での改名を求めます。
 - ツリーシェイキングは組み合わせられます: コアモジュールはラップの前にシェイクされます。
-- [`--emit-wit`](wit-contracts.md#emitting-the-wit-world---emit-wit) も組み合わせられ、型付きエクスポートとプログラムが到達するホストインポートだけの小さな world(プログラムが印字するときは `wasi:cli/stdout@0.3.0` インポートと `async func` のエクスポート署名付き)を書き出します。
+- [`--emit-wit`](wit-contracts.md#emitting-the-wit-world---emit-wit) も組み合わせられ、型付きエクスポートとプログラムが到達するホストインポートだけの小さな world(プログラムが印字するときは `wasi:cli/stdout@0.3.0` インポートと `async func` のエクスポート署名付き)を書き出します。プログラムが宣言した `async func` は、そのまま `async func` と書かれます。

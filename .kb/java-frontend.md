@@ -1445,8 +1445,9 @@ exports the component's entry points.** The user's request (2026-11-24): the opp
   synchronous task before returning`); `--component --no-wasi` lifts it async too, where a
   sleep is a bare trap, sync or async. jco 1.42.0 calls an async export of a `--no-wasi`
   component (and of a Lisp WASI component); it translates no Java WASI component at all,
-  async or not ("exceptions proposal not enabled": EH mode). `--no-gc` is refused by
-  `wit-export`'s check at the WIT line. A sleeping export imports `wasi:cli/exit`:
+  async or not ("exceptions proposal not enabled": EH mode). `--no-gc --component` lifts it
+  async too, though nothing of the scalar subset waits (`.kb/no-gc-scalar-wasm.md`, "An `async
+  func`"). A sleeping export imports `wasi:cli/exit`:
   `Thread.currentThread()` makes a `Thread`, whose id counter is `synchronized`, and the wasm
   monitor entry reaches `%java-unforeseen`.
 - **The lowering**: an unsigned integer crosses through a `defun` `<function>%wit` converting

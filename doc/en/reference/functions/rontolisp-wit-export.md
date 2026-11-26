@@ -224,8 +224,6 @@ offending export:
 - a WIT type the export does not carry: beyond the flat types on a WASI module
   or under `--no-gc`, and `flags`, a handle, a `stream`, a `future` or a type
   of another interface anywhere
-- an `async func` under `--no-gc --component`, whose adapter-free reactor has no
-  async machinery
 - an export name that is not a component-model label (lower-kebab-case words), a
   duplicate export (refused by the WIT reader first, in `wasm-tools component
   wit`'s words: `` export `a` conflicts with prior func of same name ``), or

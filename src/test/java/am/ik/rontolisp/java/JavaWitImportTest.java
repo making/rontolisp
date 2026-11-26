@@ -591,7 +591,7 @@ class JavaWitImportTest {
 	 * {@code main} is refused there and on a module. The class is checked against its
 	 * world on every target, the interpreter's included. On {@code --no-gc} a class of
 	 * scalar values is the scalar component of the world, an uncaught exception its bare
-	 * trap, an {@code async func} refused.
+	 * trap, an {@code async func} lifted async as on the GC one.
 	 */
 	@Test
 	void aClassImplementsTheWorldAComponentExports() throws Exception {
@@ -639,21 +639,19 @@ class JavaWitImportTest {
 		write("Kinds.java", KINDS);
 		Path module = this.dir.resolve("kinds.wasm");
 		HostBoundaryRuns.cli("--java-source-path", API, kinds.toString(), "-o", module.toString(), "--component");
-		// --no-gc: no async lift, then the scalar component of the world, the static
-		// String the start function initializes
+		// --no-gc: the scalar component of the world, the static String the start
+		// function initializes, the async func lifted async (the backend has no thread
+		// to sleep in)
 		Path scalar = this.dir.resolve("scalar.wasm");
-		assertThatThrownBy(() -> HostBoundaryRuns.cli("--java-source-path", API, kinds.toString(), "-o",
-				scalar.toString(), "--component", "--no-gc"))
-			.hasMessageContaining(
-					"kinds.wit:16: export 'pause' is an async func, which --no-gc --component cannot lift");
-		write("kinds.wit", KINDS_WIT.replace("  export pause: async func(ms: u32) -> u32;\n", ""));
 		write("Kinds.java", KINDS
 			.replace("StringBuilder seen = new StringBuilder(\"seen:\")", "String seen = \"seen: \" + (touched - 1)")
 			.replace("seen.append(' ').append(name);", "")
-			.replace(KINDS.substring(KINDS.indexOf("    public static int pause"),
-					KINDS.indexOf("    public static class Math")), ""));
+			.replace(KINDS.substring(KINDS.indexOf("        long start = System.nanoTime();"),
+					KINDS.indexOf("    public static class Math")), "        return ms;\n    }\n\n"));
 		HostBoundaryRuns.cli("--java-source-path", API, kinds.toString(), "-o", scalar.toString(), "--component",
-				"--no-gc");
+				"--no-gc", "--emit-wit");
+		assertThat(Files.readString(this.dir.resolve("scalar.wit")))
+			.contains("export pause: async func(ms: u32) -> u32;", "export count: func() -> s32;");
 		// java.lisp's System.exit and thread ends, which no export of this world
 		// reaches, import no wasi:cli/exit (a sleep does: the refusal of a monitor
 		// held, Thread's id counter's)
@@ -669,10 +667,10 @@ class JavaWitImportTest {
 		answers.put("test:kinds/math.count@0.1.0()", "10");
 		answers.put("add(4294967295, 2)", "1");
 		answers.put("half(5.0)", "2.5");
+		answers.put("pause(5)", "5");
 		invoked(scalar, answers);
 		answers.put("greet(\"Java\")", "\"Hello, Java! seen: Java\"");
 		// an async func lifts async: its call's task waits where the method sleeps
-		answers.put("pause(5)", "5");
 		invoked(module, answers);
 		// what an export leaves uncaught is reported by the line a JDK writes, then
 		// traps;
