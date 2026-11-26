@@ -24,8 +24,12 @@ import java.util.concurrent.TimeUnit;
  * call: a read-line taking it a byte at a time with a copy each is quadratic. Then lines
  * read with their missing-newline-p at top level (an await on the WASM targets): an
  * invalid octet before a sequence the peer splits across two writes and before ASCII,
- * each one U+FFFD as the JDK's decoder and SBCL's {@code :replacement} answer, a last
- * line the peer's half-close ends, and the end of input.
+ * each one U+FFFD as the JDK's decoder and SBCL's {@code :replacement} answer; then
+ * characters read one at a time, where a malformed sequence is one U+FFFD and the octet
+ * that cut it short is left to start the next character -- the last cut short by an octet
+ * the peer sends only after the program's {@code !}, which the program's read flushes
+ * once the octets before it are spent; then a last line the peer's half-close ends, and
+ * the end of input.
  */
 public final class TcpOutputBufferFixture implements AutoCloseable {
 
@@ -44,6 +48,13 @@ public final class TcpOutputBufferFixture implements AutoCloseable {
 			                         (char-code (char line (- (length line) 1)))))
 			                 (codes (multiple-value-list (read-line s nil :eof)))
 			                 (codes (multiple-value-list (read-line s nil :eof)))
+			                 (progn
+			                   (write-char #\\! s)
+			                   (let ((chars nil))
+			                     (dotimes (i 12)
+			                       (let ((c (read-char s nil :eof)))
+			                         (push (if (characterp c) (char-code c) c) chars)))
+			                     (nreverse chars)))
 			                 (codes (multiple-value-list (read-line s nil :eof)))
 			                 (codes (multiple-value-list (read-line s nil :eof))))))
 			  (write-string "x" s)
@@ -57,10 +68,11 @@ public final class TcpOutputBufferFixture implements AutoCloseable {
 	/**
 	 * What the program prints: the peer's count of reads for the first line, the long
 	 * line's length and its first and last two characters, then the codes and
-	 * missing-newline-p of each later line.
+	 * missing-newline-p of each later line, with the characters read one at a time before
+	 * the last.
 	 */
 	public static final String EXPECTED_OUTPUT = "(\"1\" (" + (LONG_LINE + 3)
-			+ " 233 13 99) ((65533 233 122) NIL) ((65533 122) NIL) ((120 121 122) T) (:EOF T))";
+			+ " 233 13 99) ((65533 233 122) NIL) ((65533 122) NIL) (65533 122 10 65533 65 10 65 65533 66 10 65533 66) ((120 121 122) T) (:EOF T))";
 
 	/** What the peer received: the first line's length, then every later byte. */
 	public static final String EXPECTED_RECEIVED = "101:x" + "b".repeat(20000) + "bye\n";
@@ -122,7 +134,12 @@ public final class TcpOutputBufferFixture implements AutoCloseable {
 			out.write(("\u00e9" + "b".repeat(LONG_LINE) + "\rc\r\n").getBytes(StandardCharsets.UTF_8));
 			out.write(new byte[] { (byte) 0xff, (byte) 0xc3 });
 			Thread.sleep(200);
-			out.write(new byte[] { (byte) 0xa9, 'z', '\n', (byte) 0xff, 'z', '\n', 'x', 'y', 'z' });
+			out.write(new byte[] { (byte) 0xa9, 'z', '\n', (byte) 0xff, 'z', '\n', (byte) 0xff, 'z', '\n', (byte) 0xc3,
+					'A', '\n', 'A', (byte) 0xe9, 'B', '\n', (byte) 0xe9 });
+			if (in.read() != '!') {
+				throw new IllegalStateException("expected the program's ! before the rest");
+			}
+			out.write(new byte[] { 'B', 'x', 'y', 'z' });
 			s.shutdownOutput();
 			ByteArrayOutputStream rest = new ByteArrayOutputStream();
 			byte[] chunk = new byte[65536];

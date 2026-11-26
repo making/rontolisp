@@ -405,8 +405,6 @@ final class JvmSocketRuntimeBuilder {
 
 	private final MethodRefEntry sockReadCharRef;
 
-	private final MethodRefEntry stringCodePointAt;
-
 	private final StringEntry quoteStr;
 
 	private final StringEntry newlineStr;
@@ -537,7 +535,6 @@ final class JvmSocketRuntimeBuilder {
 		this.sockWriteLineRef = cp.methodRef(thisClass, SOCK_WRITE_LINE_METHOD, SOCK_WRITE_LINE_DESC);
 		this.sockWriteStringRef = cp.methodRef(thisClass, SOCK_WRITE_STRING_METHOD, SOCK_WRITE_STRING_DESC);
 		this.sockReadCharRef = cp.methodRef(thisClass, SOCK_READ_CHAR_METHOD, SOCK_READ_CHAR_DESC);
-		this.stringCodePointAt = cp.methodRef(stringClass, "codePointAt", "(I)I");
 		this.quoteStr = cp.stringEntry("\"");
 		this.newlineStr = cp.stringEntry("\n");
 	}
@@ -1836,121 +1833,36 @@ final class JvmSocketRuntimeBuilder {
 
 	/**
 	 * {@code _sockReadChar(Object socket) -> Object}. One character -- a Unicode CODE
-	 * POINT boxed as {@code int[1]}, the runtime CHARACTER representation -- assembled
-	 * from its UTF-8 sequence BYTE-WISE off the socket's input stream; {@code null} (nil)
-	 * when the peer closed before any byte arrived, which {@code _readChar} turns into
-	 * its eof contract. Byte-wise is the point: the entry is a raw {@code Socket} and a
-	 * {@code Reader} wrapped around it would read ahead and swallow bytes a following
-	 * {@code read-byte}/{@code read-line} owes the caller. An invalid lead byte stands
-	 * alone and decodes to whatever the UTF-8 decoder yields for it (U+FFFD) -- the same
-	 * answer as the interpreter's {@code SocketSupport.readChar} and the component's
-	 * {@code %sock-read-char-f}.
+	 * POINT boxed as {@code int[1]}, the runtime CHARACTER representation -- decoded
+	 * octet by octet off the socket's input by the travelling
+	 * {@code RontoSocketInput.readCodePoint}, the interpreter's decoder; {@code null}
+	 * (nil) when the peer closed before any byte arrived, which {@code _readChar} turns
+	 * into its eof contract. Never a {@code Reader}: one wrapped around the socket would
+	 * read ahead and swallow bytes a following {@code read-byte}/{@code read-line} owes
+	 * the caller.
 	 */
 	private MethodCode buildSockReadChar() {
-		// Slots: 0=socket, 1=in (InputStream), 2=b0 (int), 3=n (int), 4=baos, 5=b (int)
+		// Slots: 0=socket, 1=code point (int)
 		MethodCode code = new MethodCode();
 		MethodCode.Label tryStart = code.newBoundLabel();
-		// in = ((Socket) socket).getInputStream();
+		// int cp = ((RontoSocketInput) _sockIn((Socket) socket)).readCodePoint();
 		code.aload(0);
 		code.checkcast(this.socketClass);
 		code.invokestatic(this.sockInRef);
-		code.astore(1);
-		// b0 = in.read(); if (b0 < 0) return null;
-		code.aload(1);
-		code.invokevirtual(this.inputStreamRead);
-		code.istore(2);
-		code.iload(2);
+		ClassEntry inputClass = this.cp.classEntry(SOCKET_INPUT_CLASS);
+		code.checkcast(inputClass);
+		code.invokevirtual(this.cp.methodRef(inputClass, "readCodePoint", "()I"));
+		code.istore(1);
+		// if (cp < 0) return null; return int[1]{cp};
+		code.iload(1);
 		MethodCode.Label ifData = code.newLabel();
 		code.ifge(ifData);
 		code.aconst_null();
 		code.areturn();
 		code.labelBinding(ifData);
-		// if (b0 >= 128) goto MULTI; return int[1]{b0};
-		code.iload(2);
-		code.loadConstant(128);
-		MethodCode.Label ifMulti = code.newLabel();
-		code.if_icmpge(ifMulti);
-		emitBoxCodePoint(code, 2);
-		// MULTI: n = b0 < 192 ? 0 : b0 < 224 ? 1 : b0 < 240 ? 2 : 3;
-		code.labelBinding(ifMulti);
-		emitContinuationCount(code);
-		code.istore(3);
-		// baos = new ByteArrayOutputStream(); baos.write(b0);
-		code.new_(this.baosClass);
-		code.dup();
-		code.invokespecial(this.baosInit);
-		code.astore(4);
-		code.aload(4);
-		code.iload(2);
-		code.invokevirtual(this.baosWrite);
-		// while (n > 0) { b = in.read(); if (b < 0) break; baos.write(b); n--; }
-		MethodCode.Label loopStart = code.newBoundLabel();
-		code.iload(3);
-		MethodCode.Label ifDone = code.newLabel();
-		code.ifle(ifDone);
-		code.aload(1);
-		code.invokevirtual(this.inputStreamRead);
-		code.istore(5);
-		code.iload(5);
-		MethodCode.Label ifEof = code.newLabel();
-		code.iflt(ifEof);
-		code.aload(4);
-		code.iload(5);
-		code.invokevirtual(this.baosWrite);
-		code.iinc(3, -1); // -1
-		code.goto_(loopStart);
-		code.labelBinding(ifDone);
-		code.labelBinding(ifEof);
-		// b0 = new String(baos.toByteArray(), 0, length, UTF_8).codePointAt(0);
-		code.new_(this.stringClassRef);
-		code.dup();
-		code.aload(4);
-		code.invokevirtual(this.baosToByteArray);
-		code.dup();
-		code.astore(5);
-		code.iconst_0();
-		code.aload(5);
-		code.arraylength();
-		code.getstatic(this.utf8Field);
-		code.invokespecial(this.stringInitBytes);
-		code.iconst_0();
-		code.invokevirtual(this.stringCodePointAt);
-		code.istore(2);
-		emitBoxCodePoint(code, 2);
-		emitStreamFailure(code, tryStart, 6, "read-char: ");
+		emitBoxCodePoint(code, 1);
+		emitStreamFailure(code, tryStart, 2, "read-char: ");
 		return code;
-	}
-
-	/**
-	 * Emits the UTF-8 continuation count of the lead byte in slot 2 onto the stack:
-	 * {@code b0 < 192 ? 0 : b0 < 224 ? 1 : b0 < 240 ? 2 : 3} (an invalid lead byte -- a
-	 * stray continuation -- counts 0 and stands alone).
-	 */
-	private void emitContinuationCount(MethodCode code) {
-		code.iload(2);
-		code.loadConstant(192);
-		MethodCode.Label ifNot0 = code.newLabel();
-		code.if_icmpge(ifNot0);
-		code.iconst_0();
-		MethodCode.Label done = code.newLabel();
-		code.goto_(done);
-		code.labelBinding(ifNot0);
-		code.iload(2);
-		code.loadConstant(224);
-		MethodCode.Label ifNot1 = code.newLabel();
-		code.if_icmpge(ifNot1);
-		code.iconst_1();
-		code.goto_(done);
-		code.labelBinding(ifNot1);
-		code.iload(2);
-		code.loadConstant(240);
-		MethodCode.Label ifNot2 = code.newLabel();
-		code.if_icmpge(ifNot2);
-		code.iconst_2();
-		code.goto_(done);
-		code.labelBinding(ifNot2);
-		code.iconst_3();
-		code.labelBinding(done);
 	}
 
 	/** Emits {@code return int[1]{slot}} -- the runtime CHARACTER representation. */
