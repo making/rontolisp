@@ -156,9 +156,14 @@ public final class WitExportDirective {
 	 * @param octets whether a {@code list<u8>} a host passes an export arrives as the
 	 * octets it holds, an {@code (unsigned-byte 8)} vector, instead of the text they
 	 * decode to ({@code :octets t}, {@code rontolisp:wit-import}'s option)
+	 * @param envelope whether a function whose WIT result is a {@code result} answers its
+	 * envelope itself, {@code (:ok . v)} or {@code (:error . e)} ({@code :envelope t}),
+	 * instead of the ok arm with {@code rontolisp:wit-error} signalled for the error arm:
+	 * a front end whose own error value is no Common Lisp condition makes the envelope in
+	 * its wrapper, and the export then makes none
 	 */
 	public record Directive(String path, @Nullable String world, @Nullable Map<String, String> names, boolean reactor,
-			boolean octets) {
+			boolean octets, boolean envelope) {
 
 		/**
 		 * A directive with no naming hook: each export is the defun its label spells.
@@ -166,7 +171,7 @@ public final class WitExportDirective {
 		 * @param world the world to implement, or {@code null} for the file's only one
 		 */
 		public Directive(String path, @Nullable String world) {
-			this(path, world, null, false, false);
+			this(path, world, null, false, false, false);
 		}
 
 		/**
@@ -177,7 +182,7 @@ public final class WitExportDirective {
 		 * @param reactor whether the world's exports are the program's entry points
 		 */
 		public Directive(String path, @Nullable String world, @Nullable Map<String, String> names, boolean reactor) {
-			this(path, world, names, reactor, false);
+			this(path, world, names, reactor, false, false);
 		}
 
 	}
@@ -228,6 +233,7 @@ public final class WitExportDirective {
 		Map<String, String> names = null;
 		boolean reactor = false;
 		boolean octets = false;
+		boolean envelope = false;
 		int i = 2;
 		while (i < items.size()) {
 			if (!(items.get(i) instanceof LispSymbol keyword) || !keyword.isKeyword()) {
@@ -250,13 +256,16 @@ public final class WitExportDirective {
 			else if (":OCTETS".equals(keyword.name())) {
 				octets = WasmImportDirective.booleanValue(value, "rontolisp:wit-export", ":octets", form);
 			}
+			else if (":ENVELOPE".equals(keyword.name())) {
+				envelope = WasmImportDirective.booleanValue(value, "rontolisp:wit-export", ":envelope", form);
+			}
 			else {
 				throw new UnsupportedOperationException(
 						"Unknown rontolisp:wit-export option " + keyword.name() + " in " + form.print());
 			}
 			i += 2;
 		}
-		return new Directive(path.value(), world, names, reactor, octets);
+		return new Directive(path.value(), world, names, reactor, octets, envelope);
 	}
 
 	/**
@@ -434,12 +443,12 @@ public final class WitExportDirective {
 			List<WitTypeMapper.Param> params = new ArrayList<>();
 			for (WitFunc.Param param : func.params()) {
 				params.add(new WitTypeMapper.Param(param.name(),
-						shapeOf(param.type(), name, param.name(), witPath, locations, item, resolver, scope)));
+						shapeOf(param.type(), name, param.name(), func, witPath, locations, item, resolver, scope)));
 			}
 			WitType result = func.result();
 			exports.add(new Export(name, List.copyOf(params),
 					result == null ? null
-							: shapeOf(result, name, "the result", witPath, locations, item, resolver, scope),
+							: shapeOf(result, name, "the result", func, witPath, locations, item, resolver, scope),
 					func.async(), ifaceId, WitSource.at(witPath, locations, item)));
 		});
 		if (exports.isEmpty()) {
@@ -449,21 +458,25 @@ public final class WitExportDirective {
 		return new WorldDescription(implemented.world().name(), List.copyOf(exports));
 	}
 
-	// The shape of an export's type for a front end that binds its own names: a primitive
-	// the flat boundary carries. A front end maps a compound type itself, and none does
-	// yet for an export, so anything else is refused here with the reason.
-	private static WitTypeMapper.Shape shapeOf(WitType type, String exportName, String what, String witPath,
-			WitLocations locations, WitItem item, WitResolver resolver, WitItem.InterfaceDef scope) {
+	// The shape of an export's type for a front end that binds its own names: a type the
+	// flat boundary carries as that primitive, any other whole (aliases followed, every
+	// nested type resolved, as an import's member is described) once the refusals every
+	// backend makes have passed -- lower's, but --no-gc's and a core module's, which it
+	// makes knowing the output.
+	private static WitTypeMapper.Shape shapeOf(WitType type, String exportName, String what, WitFunc func,
+			String witPath, WitLocations locations, WitItem item, WitResolver resolver, WitItem.InterfaceDef scope) {
 		BoundaryType boundary = flatDesignator(type, resolver, scope);
-		if (boundary == null) {
-			throw error(witPath, locations, item,
-					"export '" + exportName + "': the WIT type of " + what + " is not supported at this front end's "
-							+ "export boundary yet (supported: " + supportedWitTypes() + "). Its rontolisp "
-							+ "representation is settled (" + describe(type) + "), and a Lisp program's "
-							+ "rontolisp:wit-export carries it on a component");
+		if (boundary != null) {
+			String wit = java.util.Objects.requireNonNull(boundary.witName());
+			return new WitTypeMapper.Shape(WitTypeMapper.rep(new WitType.Prim(wit)), null, wit);
 		}
-		String wit = java.util.Objects.requireNonNull(boundary.witName());
-		return new WitTypeMapper.Shape(WitTypeMapper.rep(new WitType.Prim(wit)), null, wit);
+		requireCanonical(type, exportName, what, witPath, locations, item, Backend.OTHER, resolver, scope);
+		if (func.async()) {
+			throw error(witPath, locations, item,
+					"export '" + exportName + "' is an async func, and an async export carries the flat types only ("
+							+ supportedWitTypes() + ")");
+		}
+		return WitImportDirective.shapeOf(type, resolver, scope);
 	}
 
 	/**
@@ -790,7 +803,7 @@ public final class WitExportDirective {
 		// arm, as a provider does. The boundary lowers the envelope, which a defun
 		// around the function makes -- no backend learns a condition. Only a WASM
 		// backend compiles the export.
-		if (!flat && backend != Backend.OTHER && result != null
+		if (!flat && backend != Backend.OTHER && !directive.envelope() && result != null
 				&& resolveAliases(result, resolver, scope).type() instanceof WitType.ResultOf) {
 			exported = defunName + "%wit-export";
 			forms.add(envelopeDefun(exported, defunName, lambdaList, defuns.lambdaList(WIT_RUNTIME_DEFUN) != null));

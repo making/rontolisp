@@ -475,10 +475,19 @@ class ClojureWitBoundaryTest {
 			  export negate: func(flag: bool) -> bool;
 			  export total: func(a: u32, b: u32) -> u32;
 			  export tally;
+			  export flip: func(p: point) -> point;
+			  export measure: func(text: string) -> result<u32, string>;
+
+			  record point { x: s32, y: s32 }
 			}
 
 			interface tally {
+			  enum unit { one, ten }
+			  variant sign { zero, positive(u32), negative(u32) }
+
 			  total: func(a: u32) -> u32;
+			  spread: func(xs: list<u32>, u: unit) -> option<tuple<u32, list<u8>>>;
+			  classify: func(n: s32) -> sign;
 			}
 			""";
 
@@ -492,14 +501,27 @@ class ClojureWitBoundaryTest {
 			(defn is-short [name] (< (count name) 4))
 			(defn negate [flag] (not flag))
 			(defn total ([a] a) ([a b] (+ a b)))
+			(defn flip [{:keys [x y]}] {:x y :y x})
+			(defn measure [text]
+			  (if (seq text)
+			    (count text)
+			    (throw (ex-info "nothing to measure" {::wit/error "empty text"}))))
+			(defn spread [xs u]
+			  (when (seq xs)
+			    [(* (reduce + xs) (if (= u :ten) 10 1)) (byte-array xs)]))
+			(defn classify [n]
+			  (cond (zero? n) :zero (pos? n) [:positive n] :else [:negative (- n)]))
 			""";
 
 	/**
 	 * A world the program implements, lifted as a component: each label a var of the
 	 * declaring namespace (defined below the declaration, which a file may), a
 	 * {@code bool} converted both ways, a multi-arity {@code defn} through a wrapper, of
-	 * each arity an export of its label takes -- and {@code --emit-wit} answers the world
-	 * it was handed, parameter names included.
+	 * each arity an export of its label takes, a record, an enum, a variant, a list, an
+	 * option, a tuple and a {@code list<u8>} in the import tier's spelling, a
+	 * {@code result}'s error arm the {@code ex-info} the var throws -- and
+	 * {@code --emit-wit} answers the world it was handed, parameter names included; then
+	 * {@code examples/clojure/greeter}.
 	 */
 	@Test
 	void aWorldIsImplementedAsAComponent() throws Exception {
@@ -512,15 +534,31 @@ class ClojureWitBoundaryTest {
 		assertThat(Files.readString(this.dir.resolve("out/greeter.wit")))
 			.contains("  export greet: func(name: string) -> string;\n  export is-short: func(name: string) -> bool;\n"
 					+ "  export negate: func(flag: bool) -> bool;\n  export total: func(a: u32, b: u32) -> u32;\n");
+		assertThat(invoked(module, "greet(\"Ada\")", "is-short(\"Ada\")", "is-short(\"Grace\")", "negate(false)",
+				"total(2, 40)", "local:greeter/tally.total(5)", "flip({x: 1, y: -2})", "measure(\"Ada\")",
+				"measure(\"\")", "local:greeter/tally.spread([1, 2, 3], ten)", "local:greeter/tally.spread([], one)",
+				"local:greeter/tally.classify(-3)", "local:greeter/tally.classify(0)"))
+			.isEqualTo("\"Hello, Ada!\"\ntrue\nfalse\ntrue\n42\n5\n{x: -2, y: 1}\nok(3)\nerr(\"empty text\")\n"
+					+ "some((60, [1, 2, 3]))\nnone\nnegative(3)\nzero\n");
+		// examples/clojure/greeter
+		Path example = this.dir.resolve("example.wasm");
+		HostBoundaryRuns.cli(Path.of("examples/clojure/greeter/greeter.clj").toString(), "-o", example.toString(),
+				"--component");
+		assertThat(invoked(example, "shout(\"Ada\", true)", "is-short(\"Grace\")",
+				"greet-all([{name: \"Ada\", excited: true}, {name: \"Bob\", excited: false}])", "measure(\"\")"))
+			.isEqualTo("\"HELLO, ADA!!!\"\nfalse\n[\"HELLO, ADA!!!\", \"HELLO, BOB!\"]\nerr(\"the name is empty\")\n");
+	}
+
+	// What wasmtime answers each call of a component's exports, a line each.
+	private static String invoked(Path module, String... calls) throws Exception {
 		StringBuilder answers = new StringBuilder();
-		for (String call : List.of("greet(\"Ada\")", "is-short(\"Ada\")", "is-short(\"Grace\")", "negate(false)",
-				"total(2, 40)", "local:greeter/tally.total(5)")) {
+		for (String call : calls) {
 			HostWasmtime.ExecResult run = HostWasmtime.INSTANCE.execInContainer("wasmtime", "run", "--invoke", call,
 					module.toString());
 			assertThat(run.exitCode()).as("%s: %s", call, run.stderr()).isZero();
 			answers.append(run.stdout().strip()).append('\n');
 		}
-		assertThat(answers.toString()).isEqualTo("\"Hello, Ada!\"\ntrue\nfalse\ntrue\n42\n5\n");
+		return answers.toString();
 	}
 
 	/**
@@ -550,24 +588,6 @@ class ClojureWitBoundaryTest {
 		for (List<String> flags : List.<List<String>>of(List.of("--component"), List.of())) {
 			assertThat(compile(clojure, flags)).as("flags %s", flags).isEqualTo(compile(byHand, flags));
 		}
-	}
-
-	/** {@code examples/clojure/greeter}: the world it implements, invoked. */
-	@Test
-	void theGreeterExampleAnswersItsWorld() throws Exception {
-		assumeTrue(HostWasmtime.isAvailable(), "no wasmtime " + HostWasmtime.MINIMUM_MAJOR + "+ on PATH");
-		Path module = this.dir.resolve("greeter.wasm");
-		HostBoundaryRuns.cli(Path.of("examples/clojure/greeter/greeter.clj").toString(), "-o", module.toString(),
-				"--component");
-		StringBuilder answers = new StringBuilder();
-		for (String call : List.of("greet(\"Ada\")", "shout(\"Ada\", true)", "shout(\"Ada\", false)",
-				"is-short(\"Grace\")")) {
-			HostWasmtime.ExecResult run = HostWasmtime.INSTANCE.execInContainer("wasmtime", "run", "--invoke", call,
-					module.toString());
-			assertThat(run.exitCode()).as("%s: %s", call, run.stderr()).isZero();
-			answers.append(run.stdout().strip()).append('\n');
-		}
-		assertThat(answers.toString()).isEqualTo("\"Hello, Ada!\"\n\"HELLO, ADA!!!\"\n\"HELLO, ADA!\"\nfalse\n");
 	}
 
 	/**
@@ -1074,10 +1094,21 @@ class ClojureWitBoundaryTest {
 				  export fetch: async func(url: string) -> string;
 				}
 				""");
+		write("flags.wit", """
+				package local:flags;
+
+				world flags {
+				  flags perms { read, write }
+				  export grant: func(p: perms);
+				}
+				""");
 		write("greeter.wit", GREETER_WIT);
 		String head = "(ns app (:require [rontolisp.wit :as wit] [rontolisp.wasm :as wasm]))\n";
 		assertRefused(head + "(wit/export \"async.wit\")",
 				"fetch is an async func export, which the Clojure tier does not implement yet (async.wit:4)");
+		// what no export carries is refused at the WIT line, before any var is read
+		assertRefused(head + "(wit/export \"flags.wit\")",
+				"flags.wit:5: export 'grant': the WIT type of p holds the flags 'perms', which an export does not carry");
 		assertRefused(head + "(defn f [] 1)\n(wasm/export f {})\n(wit/export \"greeter.wit\")",
 				"rontolisp.wasm/export cannot be combined with rontolisp.wit/export");
 	}

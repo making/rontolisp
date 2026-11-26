@@ -196,9 +196,15 @@ LOWERED as an import's argument is, by the one generator (`WasmComponentImportCo
 - **Refused at the WIT line** (`requireCanonical`): flags, a resource handle, a stream, a future,
   a type of another interface (`use`), a compound type in an `async func`; `--no-gc`, which has
   no value a record could be (no cons); a core module (Preview 1, `--no-wasi`), in the compiler,
-  which knows the output's shape (`.todo/m79`). `describe` (the Java and Clojure front ends) still
-  answers the flat set alone (`.todo/m80`, `.todo/m81`). The refused types and the hosts not
-  measured: `.todo/m82`.
+  which knows the output's shape (`.todo/m79`). `describe` (the front ends) answers a compound
+  type's whole shape (`WitImportDirective.shapeOf`, as an import member's) after these refusals --
+  all but `--no-gc`'s and a core module's, which need the output; a flat type keeps its primitive
+  shape. The Java subset still refuses a compound export itself (`JavaHostBoundary.requireFlat`,
+  `.todo/m80`). The refused types and the hosts not measured: `.todo/m82`.
+- `:envelope t` on the directive: a top-level `result`'s function answers the envelope itself,
+  so `lower` writes no `<f>%wit-export`. The Clojure lowering passes it: its wrapper makes the
+  envelope from an `ex-info` (one catch, no wit.lisp; [clojure-frontend.md](clojure-frontend.md),
+  "Host boundary"). Pin: `WitExportDirectiveTest.lowersATypeBeyondTheFlatSetIntoTheCanonicalFormOrRefusesItAgainstTheWitLine`.
 - `:octets t` on the directive: a `list<u8>` parameter is the `(unsigned-byte 8)` vector, not
   text. A `list<u8>` answered is a string or a packed vector, anything else traps (`reverse` of a
   packed vector is a general one).

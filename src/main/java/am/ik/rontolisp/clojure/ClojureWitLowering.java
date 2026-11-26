@@ -92,6 +92,8 @@ final class ClojureWitLowering {
 
 	private static final String ARM_MESSAGE = "RONTOLISP::%CLOJURE-WIT-ARM-MESSAGE";
 
+	private static final String ARM_VALUE = "RONTOLISP::%CLOJURE-WIT-ARM-VALUE";
+
 	/** The descriptor of a {@code bool}. */
 	private static final LispSymbol BOOL = new LispSymbol(":BOOL");
 
@@ -958,18 +960,12 @@ final class ClojureWitLowering {
 		for (PendingWorld world : worlds) {
 			Map<String, String> names = new LinkedHashMap<>();
 			for (ClojureBoundary.Function export : world.exports()) {
-				List<ClojureWasmLowering.Crossing> params = new ArrayList<>();
-				for (ClojureBoundary.Param param : export.params()) {
-					params.add(param.type().rep() == ClojureBoundary.Rep.BOOLEAN ? ClojureWasmLowering.Crossing.BOOL
-							: ClojureWasmLowering.Crossing.PLAIN);
-				}
-				ClojureBoundary.Type result = export.result();
-				ClojureWasmLowering.Crossing crossing = result != null && result.rep() == ClojureBoundary.Rep.BOOLEAN
-						? ClojureWasmLowering.Crossing.BOOL : ClojureWasmLowering.Crossing.PLAIN;
 				// a refusal names the world's line the export is declared on
 				// two exports of one label are one var, each converted by its own WIT
-				names.put(export.key(), ClojureWasmLowering.implementation(ctx, world.ns(), export.name(),
-						export.name(), params, crossing, NAMESPACE + "/export (" + export.at() + ")", world.at(), out));
+				names.put(export.key(),
+						ClojureWasmLowering.implementation(ctx, world.ns(), export.name(), export.name(),
+								export.params().size(), exportConversion(ctx, crossings(export)),
+								NAMESPACE + "/export (" + export.at() + ")", world.at(), out));
 			}
 			List<LispVal> table = new ArrayList<>();
 			for (Map.Entry<String, String> entry : names.entrySet()) {
@@ -985,9 +981,70 @@ final class ClojureWitLowering {
 			}
 			directive.add(new LispSymbol(":NAMES"));
 			directive.add(ClojureLowerUtil.list(table));
+			// a list<u8> parameter is a byte array here, so it arrives as its octets;
+			// a result at the top of an answer is the envelope the wrapper makes
+			directive.add(new LispSymbol(":OCTETS"));
+			directive.add(new LispSymbol("T"));
+			directive.add(new LispSymbol(":ENVELOPE"));
+			directive.add(new LispSymbol("T"));
 			out.add(ClojureLowerUtil.list(directive));
 		}
 		return out;
+	}
+
+	/**
+	 * How an export's values cross between the boundary and its var, or null when none
+	 * converts: inline for a value a {@code bool} or a byte array at most, else through
+	 * the walker over the descriptor, QUOTED -- a host calling an export of a command
+	 * component runs no top level, which is where an import's descriptor global is set. A
+	 * {@code result} the var answers is the envelope the canonical export lowers: the ok
+	 * arm the var's value, the error arm an {@code ExceptionInfo} holding
+	 * {@link #ERROR_KEY} the var threw, what a Clojure provider throws
+	 * ({@link #adapter}); any other exception goes on and traps the call.
+	 */
+	private static ClojureWasmLowering.@Nullable Conversion exportConversion(ClojureLowering ctx, Crossings crossings) {
+		if (!crossings.walks()) {
+			List<ClojureWasmLowering.Crossing> params = new ArrayList<>();
+			for (LispVal param : crossings.params()) {
+				params.add(inCrossing(param));
+			}
+			return ClojureWasmLowering.conversion(ctx, params, outCrossing(crossings.result()));
+		}
+		LispVal error = crossings.error();
+		if (error != null) {
+			ctx.usedExInfo = true;
+		}
+		return new ClojureWasmLowering.Conversion() {
+			@Override
+			public LispVal param(int index, LispVal value) {
+				LispVal descriptor = crossings.params().get(index);
+				return inline(descriptor) ? ClojureWasmLowering.fromHost(ctx, inCrossing(descriptor), value)
+						: ClojureLowerUtil.list(new LispSymbol(IN), quoted(descriptor), value);
+			}
+
+			@Override
+			public LispVal result(LispVal value) {
+				LispVal descriptor = crossings.result();
+				LispVal ok = inline(descriptor) ? ClojureWasmLowering.toHost(ctx, outCrossing(descriptor), value)
+						: ClojureLowerUtil.list(new LispSymbol(OUT), quoted(descriptor), value);
+				if (error == null) {
+					return ok;
+				}
+				LispSymbol caught = ctx.freshTemp();
+				LispVal arm = ClojureLowerUtil.list(ClojureLowerUtil.sym("and"), ClojureLowerUtil.sym("error"),
+						ClojureLowerUtil.list(ClojureLowerUtil.sym("satisfies"), new LispSymbol(ARM_P)));
+				return ClojureLowerUtil.list(ClojureLowerUtil.sym("handler-case"),
+						ClojureLowerUtil.list(ClojureLowerUtil.sym("cons"), new LispSymbol(":OK"), ok),
+						ClojureLowerUtil.list(arm, ClojureLowerUtil.list(caught), ClojureLowerUtil.list(
+								ClojureLowerUtil.sym("cons"), new LispSymbol(":ERROR"),
+								ClojureLowerUtil.list(new LispSymbol(ARM_VALUE), quoted(errorSpec(error)), caught))));
+			}
+		};
+	}
+
+	private static LispVal quoted(LispVal descriptor) {
+		return descriptor instanceof LispCons ? ClojureLowerUtil.list(ClojureLowerUtil.sym("quote"), descriptor)
+				: descriptor;
 	}
 
 	/**

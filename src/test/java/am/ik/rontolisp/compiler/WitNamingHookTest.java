@@ -353,13 +353,29 @@ class WitNamingHookTest {
 				  export run: func();
 				}
 				""", "w.wit")).hasMessageContaining("w.wit:3: export 'run' collides with the component's wasi:cli/run");
-		assertThatThrownBy(() -> WitExportDirective.describe(new WitExportDirective.Directive("w.wit", null), """
+		// a compound type arrives whole, aliases followed; what no export carries is
+		// refused
+		String compound = """
 				package local:w;
 				world w {
-				  export pts: func() -> list<s32>;
+				  type pts = list<s32>;
+				  export pts: func() -> pts;
 				}
-				""", "w.wit"))
-			.hasMessageContaining("w.wit:3: export 'pts': the WIT type of the result is not supported");
+				world v {
+				  flags perms { read }
+				  export grant: func(p: perms);
+				}
+				""";
+		WitTypeMapper.Shape pts = shape(
+				WitExportDirective.describe(new WitExportDirective.Directive("w.wit", "w"), compound, "w.wit")
+					.exports()
+					.get(0)
+					.result());
+		assertThat(pts.rep() + " of " + shape(pts.element()).definition()).isEqualTo("LIST of s32");
+		assertThatThrownBy(
+				() -> WitExportDirective.describe(new WitExportDirective.Directive("w.wit", "v"), compound, "w.wit"))
+			.hasMessageContaining("w.wit:8: export 'grant': the WIT type of p holds the flags 'perms', which an export "
+					+ "does not carry");
 		assertThatThrownBy(() -> WitExportDirective.describe(new WitExportDirective.Directive("w.wit", null), """
 				package local:w;
 				world w {

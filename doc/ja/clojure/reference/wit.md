@@ -43,7 +43,7 @@ $ wasmtime run -S keyvalue=y hits.wasm
 ## 渡るもの
 
 WIT の値は、下の表の Clojure の値として渡ります。変換は渡るときに両方向で行い、呼び出す側でも
-[プロバイダ](wit-provide.md)の側でも同じです。ラベルは WIT の綴りのままなので、ケース
+[プロバイダ](wit-provide.md)の側でも world のエクスポートでも同じです。ラベルは WIT の綴りのままなので、ケース
 `DNS-error` はキーワード `:DNS-error` になります。
 
 | WIT | Clojure |
@@ -61,7 +61,7 @@ WIT の値は、下の表の Clojure の値として渡ります。変換は渡�
 | `flags` | キーワードの集合: `#{:read :write}` |
 | `tuple<...>`、`list<T>` | ベクタ |
 | 引数として、またはほかの値の中の `result<T, E>` | `[:ok v]` か `[:error e]`。ペイロードのない側は `:ok` か `:error` |
-| 関数の結果としての `result<T, E>` | ok の値。エラー側は、`ex-data` の `:rontolisp.wit/error` にエラーの値を持つ `ExceptionInfo` を投げる |
+| 関数の結果としての `result<T, E>` | ok の値。エラー側は、`ex-data` の `:rontolisp.wit/error` にエラーの値を持つ `ExceptionInfo`。呼び出す側には投げられ、プロバイダとエクスポートはこれを投げる |
 
 ホストへ渡すとき、リスト、タプル、フラグはどのコレクション（ベクタ、リスト、seq、集合）でも
 受け取り、レコードはどのマップでも受け取ります。マップにないフィールドは `nil`、つまり
@@ -93,6 +93,38 @@ tcp-socket-bind of wasi:sockets/types@0.3.0 answered its error arm
 [`examples/clojure/wit-types/`](https://github.com/making/rontolisp/tree/develop/examples/clojure/wit-types) は、enum、flags、variant、record、option、
 タプルのリスト、`result` をプロバイダとの間で両方向に渡します。
 
+world のエクスポートも同じ値を受け取り、返します。var は Clojure の値で呼ばれ、var が返す
+`result` はその値、var がその `ExceptionInfo` を投げたときはエラー側です。それ以外の例外は
+呼び出しをトラップさせます。
+
+```console
+$ cat shapes.wit
+package example:shapes@0.1.0;
+
+world shapes {
+  record point { x: s32, y: s32 }
+
+  export flip: func(p: point) -> point;
+  export measure: func(text: string) -> result<u32, string>;
+}
+$ cat shapes.clj
+(ns shapes (:require [rontolisp.wit :as wit]))
+
+(wit/export "shapes.wit")
+
+(defn flip [{:keys [x y]}] {:x y :y x})
+
+(defn measure [text]
+  (if (seq text)
+    (count text)
+    (throw (ex-info "nothing to measure" {::wit/error "empty text"}))))
+$ rontolisp shapes.clj -o shapes.wasm --component
+$ wasmtime run --invoke 'flip({x: 1, y: 2})' shapes.wasm
+{x: 2, y: 1}
+$ wasmtime run --invoke 'measure("")' shapes.wasm
+err("empty text")
+```
+
 `list<u8>` はどのターゲットでも、両方向にオクテットのまま渡ります。コンポーネント、
 プロバイダ、WASM コアモジュールのいずれもです。コアモジュールのグルー（`--emit-js-glue`）は
 ホストに `Uint8Array` を渡し、`Uint8Array` を受け取ります（テキストはその UTF-8 符号化として
@@ -111,5 +143,8 @@ error: app.clj:4:1: feed of example:geo/api@0.1.0 takes option<stream<u8>> (para
 ターゲットによっては、Common Lisp と同じく範囲がさらに狭まります。WASM コアモジュールの
 インポートを渡れる型は 32 ビットまでの整数、浮動小数点数、`bool`、`string`、`list<u8>`、
 ハンドルで、それを越えるメンバーはプログラムが呼ぶところで拒否します。コンポーネントの
-インポートはフラグと、`u8` 以外のリストの引数を除くすべての行を渡せます。world の
-エクスポートを渡れる型は整数、`f64`、`bool`、`string` です。
+インポートはフラグと、`u8` 以外のリストの引数を除くすべての行を渡せます。コンポーネントの
+エクスポートはフラグとハンドルを除くすべての行を渡せ、型がそのどちらか、ストリーム、
+フューチャー、ほかのインターフェースの型（`use`）に届く world は WIT の行で拒否します。
+WASM コアモジュールと `--no-gc` のエクスポートを渡れる型は整数、`f64`、`bool`、`string` です
+（[`rontolisp:wit-export`](../../reference/functions/rontolisp-wit-export.md#compound-types)）。

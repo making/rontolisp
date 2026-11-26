@@ -43,7 +43,7 @@ WIT package directory as it is published: its `*.wit` files are one package, and
 ## What crosses
 
 A WIT value crosses as the Clojure value below, converted on the way across both ways -- for
-a caller and for a [provider](wit-provide.md) alike. A label keeps the WIT's spelling, so the
+a caller, a [provider](wit-provide.md) and a world's export alike. A label keeps the WIT's spelling, so the
 case `DNS-error` is the keyword `:DNS-error`.
 
 | WIT | Clojure |
@@ -61,7 +61,7 @@ case `DNS-error` is the keyword `:DNS-error`.
 | `flags` | a set of keywords: `#{:read :write}` |
 | `tuple<...>`, `list<T>` | a vector |
 | `result<T, E>`, as an argument or inside another value | `[:ok v]` or `[:error e]`; an arm without payload is `:ok` or `:error` |
-| `result<T, E>`, as a function's result | the ok value; the error arm throws an `ExceptionInfo` whose `ex-data` holds the error value under `:rontolisp.wit/error` |
+| `result<T, E>`, as a function's result | the ok value; the error arm is an `ExceptionInfo` whose `ex-data` holds the error value under `:rontolisp.wit/error`, thrown to a caller, thrown by a provider or an export |
 
 Going to the host, a list, a tuple and flags take any collection (a vector, a list, a seq, a
 set), and a record any map; a field the map lacks is `nil`, an option's none. A value of no
@@ -93,6 +93,38 @@ tcp-socket-bind of wasi:sockets/types@0.3.0 answered its error arm
 [`examples/clojure/wit-types/`](https://github.com/making/rontolisp/tree/develop/examples/clojure/wit-types) crosses an enum, flags, variants, a
 record, an option, a list of tuples and a `result` both ways against a provider.
 
+A world's export takes and answers the same values: its var is called with the Clojure values,
+and a `result` it answers is its value, or the error arm when it throws that `ExceptionInfo` --
+any other exception traps the call.
+
+```console
+$ cat shapes.wit
+package example:shapes@0.1.0;
+
+world shapes {
+  record point { x: s32, y: s32 }
+
+  export flip: func(p: point) -> point;
+  export measure: func(text: string) -> result<u32, string>;
+}
+$ cat shapes.clj
+(ns shapes (:require [rontolisp.wit :as wit]))
+
+(wit/export "shapes.wit")
+
+(defn flip [{:keys [x y]}] {:x y :y x})
+
+(defn measure [text]
+  (if (seq text)
+    (count text)
+    (throw (ex-info "nothing to measure" {::wit/error "empty text"}))))
+$ rontolisp shapes.clj -o shapes.wasm --component
+$ wasmtime run --invoke 'flip({x: 1, y: 2})' shapes.wasm
+{x: 2, y: 1}
+$ wasmtime run --invoke 'measure("")' shapes.wasm
+err("empty text")
+```
+
 A `list<u8>` crosses as its octets, both ways, on every target: a component, a provider, and a
 WASM core module, whose glue (`--emit-js-glue`) hands the host a `Uint8Array` and takes one back
 (text as its UTF-8 encoding). Octets that are not valid UTF-8 cross exact. A Common Lisp
@@ -110,5 +142,8 @@ error: app.clj:4:1: feed of example:geo/api@0.1.0 takes option<stream<u8>> (para
 Each target narrows it further the way it does for Common Lisp. A WASM core module's import
 carries the integers up to 32 bits, the floats, `bool`, `string`, `list<u8>` and handles, and a
 member reaching beyond them is refused where the program calls it; a component's import carries
-every row but flags and an argument list of anything but `u8`; a world's exports carry the
-integers, `f64`, `bool` and `string`.
+every row but flags and an argument list of anything but `u8`. A component's export carries
+every row but flags and handles, and a world whose types reach one of them, a stream, a future
+or a type of another interface (`use`) is refused at the WIT line; a WASM core module's and
+`--no-gc`'s exports carry the integers, `f64`, `bool` and `string`
+([`rontolisp:wit-export`](../../reference/functions/rontolisp-wit-export.md#compound-types)).

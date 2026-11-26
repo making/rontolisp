@@ -1165,6 +1165,19 @@ public final class WitImportDirective {
 		return shapeOf(type, resolver, iface, new ArrayList<>());
 	}
 
+	/**
+	 * The whole shape of a WIT type use (aliases followed, every nested type resolved):
+	 * what a front end converts its own values by -- an export's types, which
+	 * {@link WitExportDirective#describe} has checked are defined.
+	 * @param type the type use
+	 * @param resolver the resolver over the document
+	 * @param scope the scope the type is written in
+	 * @return the shape
+	 */
+	static WitTypeMapper.Shape shapeOf(WitType type, WitResolver resolver, WitItem.InterfaceDef scope) {
+		return shapeOf(type, resolver, scope, new ArrayList<>());
+	}
+
 	// The whole shape, every nested type described in the scope THAT type is written in
 	// (an option's element, a result's arms, a list's element, a record's fields, a
 	// variant's payloads, a tuple's elements). A nested type naming no definition, or a

@@ -442,8 +442,8 @@ final class ClojureWasmLowering {
 					params.add(param.crossing());
 				}
 				Crossing result = export.result() == null ? Crossing.PLAIN : export.result().crossing();
-				String fn = implementation(ctx, export.ns(), export.var(), export.exportName(), params, result,
-						NAMESPACE + "/export", export.at(), out);
+				String fn = implementation(ctx, export.ns(), export.var(), export.exportName(), params.size(),
+						conversion(ctx, params, result), NAMESPACE + "/export", export.at(), out);
 				List<LispVal> directive = new ArrayList<>();
 				directive.add(new LispSymbol(WASM_EXPORT));
 				directive.add(quoted(new LispSymbol(fn)));
@@ -474,15 +474,15 @@ final class ClojureWasmLowering {
 	 * @param ns the namespace the declaration sits in
 	 * @param var the var's name as written there
 	 * @param exportName the host-facing name
-	 * @param params how each parameter crosses
-	 * @param result how the result crosses
+	 * @param arity how many parameters the export takes
+	 * @param conversion how its values cross, or null when none converts
 	 * @param what the declaration, for a refusal
 	 * @param at where the declaration sits, for a refusal
 	 * @param out where a wrapper goes
 	 * @return the exported function's name
 	 */
-	static String implementation(ClojureLowering ctx, String ns, String var, String exportName, List<Crossing> params,
-			Crossing result, String what, @Nullable SourceLocation at, List<LispVal> out) {
+	static String implementation(ClojureLowering ctx, String ns, String var, String exportName, int arity,
+			@Nullable Conversion conversion, String what, @Nullable SourceLocation at, List<LispVal> out) {
 		String outerNs = ctx.currentNs;
 		ctx.currentNs = ns;
 		try {
@@ -498,22 +498,20 @@ final class ClojureWasmLowering {
 			if (kind == ClojureLowering.Kind.DECLARED && !ctx.incremental) {
 				throw new LispReadException(what + ": #'" + key + " is declared but never defined");
 			}
-			int arity = params.size();
 			List<ClojureLowering.ParamShape> shapes = ctx.wasm.defnShapes.get(key);
 			if (shapes != null && !accepts(shapes, arity)) {
 				throw new LispReadException(what + ": " + var + " is exported with " + arity + " parameter"
 						+ (arity == 1 ? "" : "s") + ", but no arity of (defn " + var + " ...) takes " + arity);
 			}
 			if (kind == ClojureLowering.Kind.FUNCTION && shapes != null && shapes.size() == 1
-					&& !shapes.get(0).variadic() && shapes.get(0).fixed() == arity && result == Crossing.PLAIN
-					&& params.stream().allMatch(crossing -> crossing == Crossing.PLAIN)) {
+					&& !shapes.get(0).variadic() && shapes.get(0).fixed() == arity && conversion == null) {
 				LispSymbol fn = ctx.symOf(var);
 				if (ctx.wasm.topLevelDefuns.contains(fn.name())) {
 					return fn.name();
 				}
 			}
 			String wrapper = wrapperName(ctx, key, exportName);
-			out.add(exportWrapper(ctx, wrapper, var, params, result));
+			out.add(exportWrapper(ctx, wrapper, var, arity, conversion));
 			return wrapper;
 		}
 		catch (LispReadException ex) {
@@ -548,23 +546,71 @@ final class ClojureWasmLowering {
 	}
 
 	/**
-	 * {@code (defun wrapper (#:wasm-in0 ...) (to-host (let* ((#:wasm-arg0 (from-host
+	 * How an export's values cross between the boundary and the var: each a lowered form
+	 * around the value.
+	 */
+	interface Conversion {
+
+		/**
+		 * A parameter, the boundary's value as the Clojure one.
+		 * @param index its position
+		 * @param value the boundary's value
+		 * @return the Clojure value
+		 */
+		LispVal param(int index, LispVal value);
+
+		/**
+		 * The var's answer as the boundary's value.
+		 * @param value the call of the var -- inside a {@code let*} binding the converted
+		 * parameters
+		 * @return the boundary's value
+		 */
+		LispVal result(LispVal value);
+
+	}
+
+	/**
+	 * The conversion of an export whose values cross inline, or null when none converts.
+	 * @param ctx the hub
+	 * @param params how each parameter crosses
+	 * @param result how the result crosses
+	 * @return the conversion, or null
+	 */
+	static @Nullable Conversion conversion(ClojureLowering ctx, List<Crossing> params, Crossing result) {
+		if (result == Crossing.PLAIN && params.stream().allMatch(crossing -> crossing == Crossing.PLAIN)) {
+			return null;
+		}
+		return new Conversion() {
+			@Override
+			public LispVal param(int index, LispVal value) {
+				return fromHost(ctx, params.get(index), value);
+			}
+
+			@Override
+			public LispVal result(LispVal value) {
+				return toHost(ctx, result, value);
+			}
+		};
+	}
+
+	/**
+	 * {@code (defun wrapper (#:wasm-in0 ...) (result (let* ((#:wasm-arg0 (param
 	 * #:wasm-in0)) ...) (var #:wasm-arg0 ...))))}: the call is the lowering of a Clojure
 	 * call of the var, so it reaches the var whatever defined it. The {@code #:} names
 	 * lower to themselves (a macro gensym's spelling), so no program name can capture
 	 * one.
 	 */
-	private static LispVal exportWrapper(ClojureLowering ctx, String wrapper, String var, List<Crossing> params,
-			Crossing result) {
+	private static LispVal exportWrapper(ClojureLowering ctx, String wrapper, String var, int arity,
+			@Nullable Conversion conversion) {
 		List<LispVal> lambdaList = new ArrayList<>();
 		List<LispVal> bindings = new ArrayList<>();
 		List<LispVal> call = new ArrayList<>();
 		call.add(new LispSymbol(var));
-		for (int i = 0; i < params.size(); i++) {
+		for (int i = 0; i < arity; i++) {
 			LispSymbol in = new LispSymbol("#:wasm-in" + i);
 			LispSymbol arg = new LispSymbol("#:wasm-arg" + i);
 			lambdaList.add(in);
-			bindings.add(ClojureLowerUtil.list(arg, fromHost(ctx, params.get(i), in)));
+			bindings.add(ClojureLowerUtil.list(arg, conversion == null ? in : conversion.param(i, in)));
 			call.add(arg);
 		}
 		LispVal body = ctx.lower(ClojureLowerUtil.list(call));
@@ -572,7 +618,7 @@ final class ClojureWasmLowering {
 			body = ClojureLowerUtil.list(ClojureLowerUtil.sym("let*"), ClojureLowerUtil.list(bindings), body);
 		}
 		return ClojureLowerUtil.list(ClojureLowerUtil.sym("defun"), new LispSymbol(wrapper),
-				ClojureLowerUtil.list(lambdaList), toHost(ctx, result, body));
+				ClojureLowerUtil.list(lambdaList), conversion == null ? body : conversion.result(body));
 	}
 
 	/**
