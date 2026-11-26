@@ -212,11 +212,11 @@ world の型はコンポーネントのインポートになるので、world �
 (`-o out.wasm` だけ) と `--no-gc` はフラットな型だけをエクスポートでき、
 それ以外の型を含む world を拒否します。
 
-`--no-wasi` のモジュールも、`flags` 以外の複合型をエクスポートできます。コアのエクスポートは正準 ABI の
+`--no-wasi` のモジュールも、複合型をエクスポートできます。コアのエクスポートは正準 ABI の
 コアの値を受け取り、[`--emit-js-glue`](../../guides/wasm-host-boundary.md#wit-interfaces-beyond-the-flat-set)
 のファイルがそれを下ろし、持ち上げます。各エクスポートはラベルを camelCase にした名前の
 エントリポイントになり、ホストのインポートが受け取るのと同じ JavaScript の値で呼びます
-(record はオブジェクト、variant は `{ tag, val }`、none は `undefined`、64 ビットは BigInt)。
+(record はオブジェクト、variant は `{ tag, val }`、none は `undefined`、flags は真偽値のオブジェクト、64 ビットは BigInt)。
 結果が `result` なら ok 側の値を返し、error 側はグルーの `WitError` として投げます。
 `--reentrant` はこのエクスポートを拒否します。
 

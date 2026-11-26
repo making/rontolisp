@@ -211,8 +211,8 @@ LOWERED as an import's argument is, by the one generator (`WasmComponentImportCo
   twice is set once; a lift answers label order (so a function that conses a label onto the
   front answers another order in process than through the boundary -- `examples/wit/shapes`'
   `embolden` appends). The Clojure and Java tiers convert already (a set, a `Set` of a member
-  enum) and cross a component with nothing added. Not a `--no-wasi` core module, either way:
-  its JavaScript glue has no value (`WitGlueLayouts.layout` refuses, `.todo/m92`).
+  enum) and cross a component with nothing added. A `--no-wasi` core module's glue holds them
+  as jco does, an object of booleans ([wasm-import.md](wasm-import.md), "The JS side").
 - **Refused at the WIT line** (`requireCanonical`): a resource handle, a stream, a future, a
   compound type in an `async func` (`.todo/m90`), an interface declaring a resource
   (`.todo/m91`); `--no-gc`, which has no value a record could be (no cons). In the compiler,

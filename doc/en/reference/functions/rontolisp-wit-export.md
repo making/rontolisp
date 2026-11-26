@@ -220,12 +220,12 @@ exported interface that declares a `resource` is refused as a whole. A WASI
 module (`-o out.wasm` alone) and `--no-gc` export the flat types alone and
 refuse a world with any other.
 
-A `--no-wasi` module exports them too, all but `flags`. Its core export takes the canonical ABI's
+A `--no-wasi` module exports them too. Its core export takes the canonical ABI's
 core values, and the [`--emit-js-glue`](../../guides/wasm-host-boundary.md#wit-interfaces-beyond-the-flat-set)
 file lowers and lifts them: each export is an entry point under its label in
 camelCase, called with the JavaScript values a host import is handed (an object
-for a record, `{ tag, val }` for a variant, `undefined` for none, a BigInt for
-64 bits). A `result` answer returns its ok value and throws the error arm as the
+for a record, `{ tag, val }` for a variant, `undefined` for none, an object of
+booleans for flags, a BigInt for 64 bits). A `result` answer returns its ok value and throws the error arm as the
 glue's `WitError`. `--reentrant` refuses such an export.
 
 ```js

@@ -689,7 +689,6 @@ Current limitations:
   name, because its house integer is `i31ref`. `--no-gc` refuses an
   `async func` instead: `:async t` answers a future, and that value model
   has none.
-- `flags` crosses a component, not a `--no-wasi` module.
 - The directive binds an **interface**. A world's `import` items are still
   not read.
 - It must appear at top level **before** the code that calls the interface —

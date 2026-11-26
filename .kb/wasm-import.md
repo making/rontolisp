@@ -255,17 +255,19 @@ Worker; `wasi:config`, `wasi:blobstore`, `wasi:logging` take the same path.
   `--no-wasi`, whose binding is written before the reached set is known). A WASI Preview 1 module and
   `--native` refuse: their host answers no canonical import.
 - Refused on a core module where a component carries it: `async func`, stream/future
-  (`refuseAsyncOnCore`), `--reentrant` (absolute-pop staging), and `flags`, for which the glue
-  has no value (`WitGlueLayouts.layout`, in the compiler; `.todo/m92`). A canonical form binding nothing is
-  dropped.
+  (`refuseAsyncOnCore`) and `--reentrant` (absolute-pop staging). A canonical form binding
+  nothing is dropped.
 - **May suspend**: every canonical import except what the glue answers synchronously
   (`HostGlueEmitter.answersSynchronously`: a drop, the store's `open`). Hence the load-path guard
   `onLoadPathOfCanonical`, and EVERY export promising: the call walk does not follow a Java program's
   dispatch.
 - **The JS side**: `lifted(what, call, params, result, retptr, raises)` per import over
   `load`/`store`/`liftFlat`/`lowerFlat`; jco's value conventions (BigInt for 64 bits, `undefined`,
-  `{ tag, val }`, camelCase keys); a top-level `result` error arm thrown as `WitError`; resources in a
-  table per `<iface id>#<name>`. A `u64` at or past 2^63 lifts as a float (`boxI64`, as on a
+  `{ tag, val }`, camelCase keys; flags an object of booleans, measured on jco 1.42.0 2026-11-26:
+  every label present lifted, its key camelCased (`read-only` -> `readOnly`), a label left out,
+  `null` or `undefined` lowered false, any truthy value true, an unknown key ignored; jco throws
+  `TypeError` on a non-object, so does the glue); a top-level `result` error arm thrown as
+  `WitError`; resources in a table per `<iface id>#<name>`. A `u64` at or past 2^63 lifts as a float (`boxI64`, as on a
   component). Pinned by
   `WasmHostGlueE2eTest.anInterfaceTheFlatSetDoesNotCarryCrossesThroughTheCanonicalAbi`.
 - **The export direction** (`HostGlueEmitter.WitExport`, `WitGlueLayouts.of(WitExportSignature)`):
@@ -281,9 +283,10 @@ Worker; `wasi:config`, `wasi:blobstore`, `wasi:logging` take the same path.
   written for one alone: `lifted` only with a canonical import). Sizes (2026-11-26, default
   `--optimize`, raw / gzip): `examples/wit/shapes/shapes.lisp` 64,504 / 24,365 B, glue 21,024 /
   6,006; a one-function `flip` 1,336 / 827 B (`--component` 1,857), glue 16,953 / 5,034 -- the
-  ABI block is written whole, not per kind used. Pinned by the `mirror` leg of
+  ABI block is written whole, not per kind used: flags' arms cost every canonical glue
+  1,077 / 238-299 B (2026-11-27), the modules byte-identical. Pinned by the `mirror` leg of
   `WasmHostGlueE2eTest.anInterfaceTheFlatSetDoesNotCarryCrossesThroughTheCanonicalAbi` (every
-  kind but a handle, spilled parameters, the arena back at its mark) and
+  kind but a handle, flags flat and in a list, spilled parameters, the arena back at its mark) and
   `WitExportInlinerTest.aWorldIsRefusedAnOutputThatCannotExportIt`.
 - **`wasi:keyvalue` over Workers KV** (`HostGlueEmitter.KEYVALUE`, `0.2.0-draft2`'s `store` and
   `batch`, each member only where the WIT signature matches): `defaultHost(stores)`; `worker()` maps

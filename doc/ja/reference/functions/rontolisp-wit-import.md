@@ -446,8 +446,6 @@ variant のどの case でもないキーワードを渡すのは**型エラー*
   `wasi:keyvalue` の例はしたがって Preview 1 のプログラムではなく、コンポーネント
   (あるいはインタプリタ／JVM) のプログラムです: その `result`
   アームが Preview 1 の境界から遠ざけています。
-- `flags` が渡るのはコンポーネントだけです。`--no-wasi` のモジュールは、JavaScript の
-  グルーに `flags` の値がないため、`flags` を含むメンバーを拒否します。
 - `--component` では、コンポーネントが**自身の WASI 表面としてすでにインポートしている**
   インターフェースを束縛できません (その表面はプログラムが使う機能に応じて増えます:
   `rontolisp:fetch` は `wasi:http/types` と `wasi:http/client` を、`rontolisp:tcp-*`

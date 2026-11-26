@@ -461,9 +461,10 @@ public static int pause(int ms) throws InterruptedException {
 
 - A WASM module takes the types `rontolisp:wit-import` takes there: a Preview 1 core module
   the flat set (the integers up to 32 bits, the floats, `bool`, `string`, `list<u8>`,
-  handles), a component everything, a `--no-wasi` module everything but `flags`. A member of any
-  other type is refused at its WIT line where the program calls it, as `wit-import` refuses
-  it.
+  handles), a component everything, a `--no-wasi` module everything but an `async func`, a
+  `stream` and a `future` (`flags` included, a JavaScript host's object of booleans). A
+  member of any other type is refused at its WIT line where the program calls it, as
+  `wit-import` refuses it.
 - A `u64` past `Long.MAX_VALUE` crosses no WASM boundary: the call traps. One exception:
   inside a compound value an export answers (a record's field, a list's element) a
   negative `long` is the `u64` of its bits.
