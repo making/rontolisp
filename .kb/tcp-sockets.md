@@ -150,8 +150,38 @@ one source, and the runner's variant reads form for form as before.** Without th
   "cannot connect" a `ConnectException`); `SocketInfo` gives no local address (`getLocalPort` 0);
   `allowHalfOpen: true` keeps the output open at the peer's end and `writer.close()` is the
   half-close.
-- **TLS is not made** (`.todo/m49`): `secureTransport: "off"`; `tls-connect`/`tls-upgrade` keep the
-  call-time error.
+- **TLS: `tls-upgrade` is the primitive** (`tcp.upgrade(h, name)`, begun like a connect: waited for,
+  then `end`), `tls-connect` = the host connect + the upgrade under the 10 s bound, as on the
+  component. The entry is swapped IN PLACE (the same fd answered, the component's convention; the
+  interpreter/JVM answer a new handle). Unread input in the clear is dropped (the interpreter's
+  `detach`). `:insecure` non-nil signals by name (no knob). Failures signal the interpreter's texts
+  with the platform's words. The provider's tls defuns are `#+rontolisp-host-sockets`, and the
+  splice fires on a tls name alone only for this host; `WasmExprCompiler` lets the tls call through
+  on `noWasi && !reactorComponent && socketsSpliced`.
+- **Every connect is `secureTransport: "starttls"`**: the module cannot know at a connect whether
+  it will be upgraded, and `startTls()` of an `"off"` socket throws (`TypeError: The
+  `secureTransport` socket option must be set to 'starttls' ..`). Measured 2026-11-26 under `wrangler
+  dev` 4.168.0: a `"starttls"` socket used in the clear echoes and half-closes as an `"off"` one.
+- **Trap (workerd): `startTls()` needs both stream locks released**, else it answers a socket whose
+  `opened` never settles (an uncaught `.. is currently locked to a writer`); **`releaseLock()` with a
+  read in flight throws** (`Cannot call releaseLock() on a reader with outstanding read promises.`),
+  and the pump always has one in flight after a reply. So the upgrade cancels that read
+  (`reader.cancel()`; the read rejects `Stream was cancelled.`) -- measured: the connection stays, and
+  the handshake and an HTTP exchange over `startTls()` then succeed (example.com, badssl.com). A
+  pump callback whose reader is no longer the entry's is ignored.
+- **What workerd answers for TLS** (same measurement): `expectedServerHostname` IS what the
+  certificate is verified against (and the SNI) although workerd logs `NOSENTRY startTls called with
+  unsupported expectedServerHostname option` once per process. A failed handshake (untrusted issuer,
+  wrong name) rejects the new socket's `opened`, reads and writes with `internal error; reference =
+  <id>`, the reason only in wrangler's log (`TLS handshake failed: invalid peer certificate: ..`);
+  `secureTransport: "on"` fails the same certificates as a refused connect, `proxy request failed,
+  cannot connect to the specified address` (why the upgrade, not `"on"`, is the primitive).
+  `startTls()` before `opened` works; a second throws. The generated glue under `wrangler dev`:
+  `tls-connect` and `tcp-connect` + `tls-upgrade` to example.com:443 answer, a wrong name and a
+  self-signed certificate signal.
+- Sizes (2026-11-26): the Lisp connect-and-read reactor +334 B (`%sock-host-connect`, shared by both
+  connects), `hello-jdbc`'s module at `=size` 1,032,444 -> 1,032,874; the glue +1.7 KB; a program
+  without sockets, Preview 1 and component socket programs byte-identical.
 - **Measured** 2026-11-25 (node 24.22.3 over `node:net`, load 15-30; a Java handler): a MiB through
   an 8 KiB array 11-20 ms (16-17 suspensions, node's 64 KiB chunks), 2,000 round trips of 100 bytes
   230-330 ms (two suspensions a trip), connect + line + reply + close 1.0-2.4 ms (a JDK 2.1-2.3).
@@ -165,7 +195,9 @@ one source, and the runner's variant reads form for form as before.** Without th
   and the imports against `HostSockets.FIELDS`),
   `HostGlueEmitterTest#theHostsSocketsAreWrittenOverConnectAndEndWithTheirRequest`,
   `WasmHostGlueE2eTest#aModulesSocketsAreItsHostsConnect` (Lisp: tcp-*, usocket, a deadline, the
-  refusals, an expired socket; node, `TcpLinePeer.NODE_CONNECT`), `FetchSpecE2eTest#javaHttpServer`'s
+  refusals, an expired socket, a STARTTLS upgrade, `tls-connect`, a wrong name, `:insecure`; node,
+  `TcpLinePeer.NODE_CONNECT` over `node:tls`, whose readable lets go of the connection on a cancel as
+  workerd's does, trusting `RONTOLISP_TEST_CA`), `FetchSpecE2eTest#javaHttpServer`'s
   `peers` (every leg and the JDK; the reactor's two deviations), `ClPostgresE2eTest#aJdbcProgramAHostCallsReachesTheServerThroughItsHostsConnect`
   (the driver, with and without `--host-timer`), `RontoLispCliTest` (the flag's refusals). By hand
   under `wrangler dev`: `examples/cloudflare-workers/hello-jdbc/`.
@@ -179,7 +211,8 @@ listener and the accepted `SSLSocket` handshakes lazily on first I/O.
 - FRESH `SSLContext` per call, never the cached `SSLSocketFactory.getDefault()`, so
   `javax.net.ssl.trustStore` is re-read per connection. Endpoint identification `"HTTPS"` is set
   before `startHandshake()` -- the JDK does NOT verify hostnames by default.
-- `tls-upgrade` answers a NEW stream-table entry (closing it closes both).
+- `tls-upgrade` answers a NEW stream-table entry (closing it closes both); the component and a
+  reactor's host sockets answer the same one.
 - **Handshake deadline**: the socket's `SO_TIMEOUT`. `tls-upgrade` uses whatever the caller set
   (none = unbounded). `tls-connect` sets `LispNames.TLS_CONNECT_HANDSHAKE_TIMEOUT_MS` (10 s, Go's
   `TLSHandshakeTimeout` and Netty's default) -- the caller has no handle to set one on first --

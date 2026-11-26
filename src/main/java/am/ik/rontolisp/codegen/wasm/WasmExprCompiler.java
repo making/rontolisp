@@ -1004,18 +1004,24 @@ final class WasmExprCompiler {
 					return;
 				}
 				if ((LispNames.TLS_CONNECT.equals(qn.member()) || LispNames.TLS_UPGRADE.equals(qn.member()))
-						&& !ctx.component) {
+						&& !ctx.component && !(ctx.noWasi && !ctx.reactorComponent && ctx.socketsSpliced)) {
 					// Under --component the CLIENT tls built-ins are the spliced tls.lisp
-					// defuns (over the wit-imported wasi:tls@0.3.0-draft) -- the symbol
-					// falls through to the ordinary call path like the tcp family above.
-					// Preview 1 has no TLS host API (a --native runner's sockets carry
-					// none either), so the call site compiles to a call-time error, the
-					// tcp policy: dexador's request reaches the cl+ssl shim's
-					// tls-upgrade on its https branch, live code no http:// request runs,
-					// and a compile error refused the whole program.
+					// defuns (over the wit-imported wasi:tls@0.3.0-draft), and on a
+					// --no-wasi module whose sockets are its host's (--host-sockets, the
+					// one socket provider a --no-wasi module is spliced) the provider's
+					// -- the symbol falls through to the ordinary call path like the tcp
+					// family above. Preview 1 has no TLS host API (a --native runner's
+					// sockets carry none either), so the call site compiles to a
+					// call-time error, the tcp policy: dexador's request reaches the
+					// cl+ssl shim's tls-upgrade on its https branch, live code no
+					// http:// request runs, and a compile error refused the whole
+					// program.
 					WasmExprCompiler.compileExpr(LispMacroExpander.callTimeUnsupportedStub(ctx.noWasi
-							? "rontolisp:" + qn.member() + " requires the component's wasi:tls imports, which"
-									+ " --no-wasi excludes (a --no-wasi build imports nothing); drop --no-wasi"
+							? "rontolisp:" + qn.member() + (ctx.reactorComponent
+									? " requires the component's wasi:tls imports, which --no-wasi excludes (a"
+											+ " --no-wasi build imports nothing); drop --no-wasi"
+									: " requires the host's sockets, which a --no-wasi module imports only with"
+											+ " --host-sockets (a --no-wasi build imports nothing); add --host-sockets")
 							: "rontolisp:" + qn.member() + " requires the interpreter, the JVM backend or --component"
 									+ " (no TLS host API is wired on Preview 1 WASM, --native included)"),
 							ctx);

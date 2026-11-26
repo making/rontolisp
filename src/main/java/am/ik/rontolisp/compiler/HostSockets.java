@@ -48,6 +48,7 @@ public final class HostSockets {
 		fields.put("socket", new Shape(List.of(), number));
 		fields.put("begin", new Shape(List.of(number, BoundaryType.STRING, number), number));
 		fields.put("end", new Shape(List.of(number), number));
+		fields.put("upgrade", new Shape(List.of(number, BoundaryType.STRING), number));
 		fields.put("shutdown", new Shape(List.of(number, number), number));
 		fields.put("option", new Shape(List.of(number, number, number), number));
 		fields.put("read", new Shape(List.of(number, number), BoundaryType.BYTES));
