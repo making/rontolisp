@@ -850,7 +850,8 @@ OpenJDK's source ([java-frontend-provenance.md](java-frontend-provenance.md)).
   calls are three functions of a number (`jdkFunctions`): `%jdk-tests` a class's instance test,
   `%jdk-methods` a method's call, `%jdk-fields` a field's read and write; numbered by member, kept
   across a session's buffers (`Session.jdkNumbers`: a `Method` a variable holds calls by its
-  number), arms of one form shared (`(or (eql k a) (eql k b))`). Against a function a class and a
+  number; **the arms are kept too** (`Session.jdkArms`): a buffer's three functions replace the
+  earlier ones and would drop every arm it did not make itself, `PlaygroundReplTest`), arms of one form shared (`(or (eql k a) (eql k b))`). Against a function a class and a
   dispatcher of `eq` arms: the shiori -22 KB, mustache -3 KB. **Trap: on a threaded wasm target the
   one function went resumable whole** (+38 KB of `_async_resume`): `jdkSuspending` asks the
   analysis of each arm as a function of its own, then splits the arms that can suspend into
