@@ -1303,8 +1303,8 @@ examples:
     backends: [jvm-compile, wasm-component]
     note: >-
       implements the world shapes of wit/shapes.wit (see wit/shapes/README.md): an
-      interface whose functions take and answer records, an enum, a variant, lists,
-      an option, a tuple and a result, and one function of the world's own over a
+      interface whose functions take and answer records, an enum, flags, a variant,
+      lists, an option, a tuple and a result, and one function of the world's own over a
       record of the world's. wasm-component pins that the world lowers through the
       canonical ABI (the interface's types named by a shim component, the world's
       by type imports); jvm-compile that the same contract check runs on a backend
@@ -1328,8 +1328,9 @@ examples:
         area     12.0
         area     12.0
         area     "a dot has no area"
-        caption  "a green dot called origin"
+        caption  "a filled bold green dot called origin"
         caption  "a red circle"
+        embolden (:DASHED :BOLD)
   - path: wit/pipeline/app.lisp
     backends: [wasm-component]
     note: >-

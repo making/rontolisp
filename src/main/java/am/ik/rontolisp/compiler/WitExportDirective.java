@@ -28,9 +28,11 @@ import org.jspecify.annotations.Nullable;
  * The {@code (rontolisp:wit-export "world.wit" :world name)} directive: <em>this program
  * implements this WIT world</em>. It is a compile-time front-end for
  * {@code rontolisp:wasm-export} -- the world's {@code export} items are checked against
- * the program's {@code defun}s and then lowered into exactly the
- * {@code rontolisp:wasm-export} directives a hand-written equivalent would carry, so the
- * emitted component is byte-identical and no new export path exists.
+ * the program's {@code defun}s and then lowered into {@code rontolisp:wasm-export}
+ * directives, so no new export path exists. A world of flat functions that names no type
+ * lowers into exactly the directives a hand-written equivalent would carry, and its
+ * component is byte-identical; the exports of any other world carry the WIT, from which a
+ * component declares the world's types.
  *
  * <p>
  * The point is that the types stop being maintained in two places: without it a program
@@ -42,8 +44,9 @@ import org.jspecify.annotations.Nullable;
  * <ul>
  * <li>an export the world declares but the program does not define, or defines with a
  * different arity</li>
- * <li>a WIT type outside the boundary subset (every fixed-width integer, {@code f64},
- * {@code bool} and {@code string} — see {@link BoundaryType})</li>
+ * <li>a WIT type no export carries (a resource handle, a stream, a future), or one beyond
+ * the flat set (every fixed-width integer, {@code f64}, {@code bool} and {@code string} —
+ * see {@link BoundaryType}) where the output is no component</li>
  * <li>an export name that is not a component-model label, or the reserved
  * {@code run}</li>
  * <li>an {@code async func} in the world (the {@code :async t} lift is stated by the WIT
@@ -335,8 +338,10 @@ public final class WitExportDirective {
 			}
 			return text[0];
 		};
+		boolean typed = (backend == Backend.WASM_COMPONENT || backend == Backend.WASM_NO_GC_COMPONENT)
+				&& namesTypes(implemented, witPath);
 		walk(implemented, witPath, (name, func, item, ifaceId, scope) -> forms.addAll(exportForms(name, func, witPath,
-				locations, item, defuns, backend, ifaceId, directive, implemented, scope, document)));
+				locations, item, defuns, backend, ifaceId, directive, implemented, scope, document, typed)));
 		if (forms.isEmpty()) {
 			throw new UnsupportedOperationException(WitSource.at(witPath, locations, implemented.world()) + ": world '"
 					+ implemented.world().name() + "' declares no exports");
@@ -362,13 +367,61 @@ public final class WitExportDirective {
 	 * freestanding function export's type names resolve in.
 	 */
 	private record Implemented(WitLocations locations, WitResolver resolver, WitItem.World world,
-			WitItem.InterfaceDef worldScope) {
+			WitItem.InterfaceDef worldScope, Map<Object, WitItem.InterfaceDef> scopes) {
+
+		// The scope an exported interface's type names resolve in: the interface with
+		// its use clauses written out (WitUses), one instance per interface -- keyed by
+		// the interface, or by the world item of an inline one.
+		WitItem.InterfaceDef scope(Object key) {
+			return java.util.Objects.requireNonNull(this.scopes.get(key));
+		}
+
 	}
 
+	// Every scope is made here, once: a world read for one program's export forms is
+	// read by every compilation of that text (lastRead), on whatever thread.
 	private static Implemented implemented(Directive directive, WitSource source) {
 		WitParseResult parsed = source.parse();
 		WitItem.World world = selectWorld(parsed.document(), directive.world(), source);
-		return new Implemented(parsed.locations(), new WitResolver(parsed.document()), world, worldScope(world));
+		WitResolver resolver = new WitResolver(parsed.document());
+		String witPath = source.path();
+		WitLocations locations = parsed.locations();
+		Map<Object, WitItem.InterfaceDef> scopes = new java.util.IdentityHashMap<>();
+		for (WitItem item : world.items()) {
+			if (item instanceof WitItem.ExportNamed export
+					&& export.extern() instanceof WitItem.Extern.ExternInterface inline) {
+				scopes.put(item, inlineUses(resolver, inlineScope(export.name(), inline), true, witPath, locations));
+			}
+			else if (item instanceof WitItem.ExportRef ref && !isComponentRunExport(ref)) {
+				WitItem.InterfaceDef iface = resolver.findInterface(ref.target().toString());
+				if (iface != null && !scopes.containsKey(iface)) {
+					scopes.put(iface, inlineUses(resolver, iface, true, witPath, locations));
+				}
+			}
+		}
+		return new Implemented(locations, resolver, world,
+				inlineUses(resolver, worldScope(world), false, witPath, locations), scopes);
+	}
+
+	// A scope with the value types its use clauses name written out as its own: a value
+	// type is structural, so the copy is the type, and the export then names nothing of
+	// another interface (no instance to import, no type to alias). What stays a clause
+	// holds a resource, which is nominal. An interface's types are its exports, so what
+	// a copied definition mentions comes with it; a world's are imports of the
+	// component, which a world of the WIT does not have unless the clause names them.
+	private static WitItem.InterfaceDef inlineUses(WitResolver resolver, WitItem.InterfaceDef scope, boolean iface,
+			String witPath, WitLocations locations) {
+		try {
+			return am.ik.wit.WitUses.inline(resolver, scope, iface);
+		}
+		catch (am.ik.wit.WitUses.Unnamed unnamed) {
+			String name = unnamed.name();
+			throw error(witPath, locations, unnamed.use(),
+					"use " + unnamed.use().path() + " brings the type '" + name + "', "
+							+ (unnamed.taken() ? "and the scope holds another type of that name"
+									: "which the world does not name (a world's types are imports of the component)")
+							+ "; name it in the clause ('" + name + (unnamed.taken() ? " as other-name')" : "')"));
+		}
 	}
 
 	/**
@@ -514,13 +567,7 @@ public final class WitExportDirective {
 	 * @throws UnsupportedOperationException when the world exports no such function
 	 */
 	public static Signature signature(String witText, String world, @Nullable String ifaceId, String label) {
-		ReadWorld read = lastRead;
-		if (read == null || !read.text().equals(witText) || !read.world().equals(world)) {
-			read = new ReadWorld(witText, world,
-					implemented(new Directive("the world", world), WitSource.file("the world", witText)));
-			lastRead = read;
-		}
-		Implemented implemented = read.implemented();
+		Implemented implemented = read(witText, world);
 		Signature[] found = new Signature[1];
 		walk(implemented, "the world", (name, func, item, id, scope) -> {
 			if (name.equals(label) && java.util.Objects.equals(id, ifaceId)) {
@@ -532,6 +579,92 @@ public final class WitExportDirective {
 					+ namesKey(label, ifaceId) + "' (rontolisp:wasm-export :wit)");
 		}
 		return found[0];
+	}
+
+	/**
+	 * An interface a world exports.
+	 *
+	 * @param id the exported instance's id: the interface's fully-qualified id, or the
+	 * plain name of an inline one
+	 * @param scope the interface as its members' type names resolve in it
+	 */
+	public record InterfaceExport(String id, WitItem.InterfaceDef scope) {
+	}
+
+	/**
+	 * Lists the interfaces the world behind an export form exports, in world order -- one
+	 * of types alone among them, which no export form stands for.
+	 * @param witText the WIT document the form carries ({@code :wit})
+	 * @param world the world's name ({@code :wit-world})
+	 * @return the exported interfaces
+	 */
+	public static List<InterfaceExport> interfaceExports(String witText, String world) {
+		return interfaceExports(read(witText, world));
+	}
+
+	private static List<InterfaceExport> interfaceExports(Implemented implemented) {
+		List<InterfaceExport> exports = new ArrayList<>();
+		for (WitItem item : implemented.world().items()) {
+			if (item instanceof WitItem.ExportNamed export
+					&& export.extern() instanceof WitItem.Extern.ExternInterface inline) {
+				exports.add(new InterfaceExport(export.name(), implemented.scope(item)));
+			}
+			else if (item instanceof WitItem.ExportRef ref && !isComponentRunExport(ref)) {
+				WitItem.InterfaceDef iface = implemented.resolver().findInterface(ref.target().toString());
+				if (iface != null) {
+					exports.add(new InterfaceExport(
+							java.util.Objects.requireNonNull(implemented.resolver().canonicalId(iface)),
+							implemented.scope(iface)));
+				}
+			}
+		}
+		return exports;
+	}
+
+	// Whether the world names a type a component has to declare: a type one of its
+	// exporting scopes defines (an alias of a flat type too -- a component importing the
+	// interface names it), or a type of an export beyond the flat set. A component of
+	// such a world declares the types of every scope, so every export form carries the
+	// WIT; a world of flat functions over primitives is the hand-written export list.
+	private static boolean namesTypes(Implemented implemented, String witPath) {
+		if (definesTypes(implemented.worldScope())) {
+			return true;
+		}
+		for (InterfaceExport export : interfaceExports(implemented)) {
+			if (definesTypes(export.scope())) {
+				return true;
+			}
+		}
+		boolean[] compound = new boolean[1];
+		walk(implemented, witPath, (name, func, item, ifaceId, scope) -> {
+			for (WitFunc.Param param : func.params()) {
+				compound[0] |= flatDesignator(param.type(), implemented.resolver(), scope) == null;
+			}
+			compound[0] |= func.result() != null
+					&& flatDesignator(func.result(), implemented.resolver(), scope) == null;
+		});
+		return compound[0];
+	}
+
+	private static boolean definesTypes(WitItem.InterfaceDef scope) {
+		for (WitItem item : scope.items()) {
+			if (item instanceof WitItem.TypeAlias || item instanceof WitItem.RecordDef
+					|| item instanceof WitItem.VariantDef || item instanceof WitItem.EnumDef
+					|| item instanceof WitItem.FlagsDef) {
+				return true;
+			}
+		}
+		return false;
+	}
+
+	private static Implemented read(String witText, String world) {
+		ReadWorld read = lastRead;
+		if (read == null || !read.text().equals(witText) || !read.world().equals(world)) {
+			read = new ReadWorld(witText, world,
+					implemented(new Directive("the world", world), WitSource.file("the world", witText)));
+			lastRead = read;
+		}
+		return read.implemented();
 	}
 
 	// Walks the world's exports in world order, handing each to the visitor right after
@@ -558,9 +691,8 @@ public final class WitExportDirective {
 						// plain name is the exported instance's id, and each of its
 						// functions
 						// is a member the program must implement.
-						case WitItem.Extern.ExternInterface inline ->
-							lowerInterfaceMembers(export.name(), inline.items(), seen, witPath, locations, item,
-									visitor, inlineScope(export.name(), inline));
+						case WitItem.Extern.ExternInterface inline -> lowerInterfaceMembers(export.name(),
+								inline.items(), seen, witPath, locations, item, visitor, implemented.scope(item));
 					}
 				}
 				case WitItem.ExportRef ref -> {
@@ -590,7 +722,8 @@ public final class WitExportDirective {
 					// canonicalId is non-null for an interface obtained from this
 					// resolver.
 					String ifaceId = java.util.Objects.requireNonNull(resolver.canonicalId(iface));
-					lowerInterfaceMembers(ifaceId, iface.items(), seen, witPath, locations, item, visitor, iface);
+					lowerInterfaceMembers(ifaceId, iface.items(), seen, witPath, locations, item, visitor,
+							implemented.scope(iface));
 				}
 				case WitItem.ImportNamed named -> throw error(witPath, locations, item, "import '" + named.name()
 						+ "': a world's inline function imports are not bound; declare the interface to call with "
@@ -662,9 +795,14 @@ public final class WitExportDirective {
 			WitLocations locations, WitItem item, ExportVisitor visitor, WitItem.InterfaceDef scope) {
 		boolean any = false;
 		for (WitItem member : members) {
-			// Only plain functions are exportable members; an interface's type
-			// definitions
-			// only describe signatures, and a resource is not a function export.
+			// A resource's functions and its handles are exports of the interface too,
+			// and a component that left them out would not be the world's.
+			if (member instanceof WitItem.ResourceDef resource) {
+				throw error(witPath, locations, item,
+						"interface '" + ifaceId + "' declares the resource '" + resource.name()
+								+ "', and an export carries no resource (its constructor, its methods and its "
+								+ "handles are not exported)");
+			}
 			if (member instanceof WitItem.FuncDef func && func.kind() == WitItem.FuncKind.PLAIN) {
 				if (!seen.add(ifaceId + "#" + func.name())) {
 					throw error(witPath, locations, item,
@@ -674,7 +812,8 @@ public final class WitExportDirective {
 				any = true;
 			}
 		}
-		if (!any) {
+		// An interface of types alone exports those, which a component declares.
+		if (!any && !definesTypes(scope)) {
 			throw error(witPath, locations, item, "interface '" + ifaceId + "' declares no functions to export");
 		}
 	}
@@ -715,7 +854,8 @@ public final class WitExportDirective {
 	// function is the one the table names, exported under the label (:as).
 	private static List<LispVal> exportForms(String name, WitFunc func, String witPath, WitLocations locations,
 			WitItem item, Defuns defuns, Backend backend, @Nullable String ifaceId, Directive directive,
-			Implemented implemented, WitItem.InterfaceDef scope, java.util.function.Supplier<String> document) {
+			Implemented implemented, WitItem.InterfaceDef scope, java.util.function.Supplier<String> document,
+			boolean typed) {
 		Map<String, String> names = directive.names();
 		checkLabel(name, witPath, locations, item);
 		String defunName = name;
@@ -822,16 +962,18 @@ public final class WitExportDirective {
 			out.add(new LispSymbol(":PARAMS"));
 			out.add(quote(list(params)));
 		}
-		else {
+		if (!flat || typed) {
 			// The function's types are the WIT's own: the text travels in the form, with
-			// the world and the line the export stands on.
+			// the world and the line the export stands on. A flat export of a world that
+			// names types carries it beside its designators: its wrapper is the flat
+			// one, its type in a component the WIT's.
 			out.add(new LispSymbol(":WIT"));
 			out.add(new LispString(document.get()));
 			out.add(new LispSymbol(":WIT-WORLD"));
 			out.add(new LispString(implemented.world().name()));
 			out.add(new LispSymbol(":WIT-AT"));
 			out.add(new LispString(WitSource.at(witPath, locations, item)));
-			if (directive.octets()) {
+			if (!flat && directive.octets()) {
 				out.add(new LispSymbol(":OCTETS"));
 				out.add(LispTrue.INSTANCE);
 			}
@@ -943,8 +1085,8 @@ public final class WitExportDirective {
 
 	// Refuses a type the canonical export does not carry, and a backend that has no
 	// canonical export: the scalar backend holds no value a record, a list or a variant
-	// could be. What is carried is everything but flags, a resource handle, a stream
-	// and a future, wherever it nests, defined in the scope that exports it.
+	// could be. What is carried is everything but a resource handle, a stream and a
+	// future, wherever it nests.
 	private static void requireCanonical(WitType type, String exportName, String what, String witPath,
 			WitLocations locations, WitItem item, Backend backend, WitResolver resolver, WitItem.InterfaceDef scope) {
 		if (backend.isNoGc()) {
@@ -959,8 +1101,7 @@ public final class WitExportDirective {
 			throw error(witPath, locations, item,
 					"export '" + exportName + "': the WIT type of " + what + " holds " + refused
 							+ ", which an export does not carry (carried: every primitive type, and a list, an "
-							+ "option, a result, a tuple, a record, a variant or an enum of them, defined where the "
-							+ "export is)");
+							+ "option, a result, a tuple, a record, a variant, an enum or flags of them)");
 		}
 	}
 
@@ -992,7 +1133,12 @@ public final class WitExportDirective {
 					yield "'" + named.name() + "', a type the file does not define";
 				}
 				if (owned.owner() != scope) {
-					yield "'" + named.name() + "', a type of another interface (a use clause)";
+					// What is still a use clause holds a resource (inlineUses): say
+					// which.
+					String name = java.util.Objects.requireNonNull(WitResolver.definedTypeName(owned.item()));
+					String held = refusedCanonical(new WitType.Named(name), resolver, owned.owner(),
+							new java.util.HashSet<>());
+					yield held != null ? held : "'" + named.name() + "', a type of another interface (a use clause)";
 				}
 				if (!walking.add(named.name())) {
 					yield "'" + named.name() + "', a type that contains itself";
@@ -1016,7 +1162,7 @@ public final class WitExportDirective {
 						yield payload;
 					}
 					case WitItem.EnumDef ignored -> null;
-					case WitItem.FlagsDef ignored -> "the flags '" + named.name() + "'";
+					case WitItem.FlagsDef ignored -> null;
 					case WitItem.ResourceDef ignored -> "a handle of the resource '" + named.name() + "'";
 					default -> "'" + named.name() + "'";
 				};

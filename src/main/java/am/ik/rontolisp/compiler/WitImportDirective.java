@@ -1625,10 +1625,9 @@ public final class WitImportDirective {
 							}
 						}
 					}
-					case WitItem.FlagsDef ignored -> throw new UnsupportedOperationException(WitSource.at(witPath,
-							locations, anchor) + ": '" + member + "': the WIT type of " + what
-							+ " involves flags, which does not cross the component import boundary yet (its rontolisp "
-							+ "representation is settled: a keyword list)");
+					case WitItem.FlagsDef ignored -> {
+						// a list of keywords -- crosses
+					}
 					case WitItem.EnumDef ignored -> {
 						// a keyword -- crosses
 					}
@@ -1758,11 +1757,9 @@ public final class WitImportDirective {
 							}
 						}
 					}
-					case WitItem.FlagsDef ignored ->
-						throw new UnsupportedOperationException(WitSource.at(witPath, locations, anchor) + ": '"
-								+ member + "': the WIT type of " + what + " involves flags, which does not cross the "
-								+ "component import boundary yet (its rontolisp representation is settled: a keyword "
-								+ "list)");
+					case WitItem.FlagsDef ignored -> {
+						// a list of keywords -- crosses
+					}
 					case WitItem.EnumDef ignored -> {
 						// a keyword -- crosses
 					}

@@ -353,8 +353,8 @@ public static int pause(int ms) throws InterruptedException {
 
 - WASM のモジュールで使える型は、そのモジュールで `rontolisp:wit-import` が使える型と
   同じです。Preview 1 のコアモジュールでは平坦な型（32 ビットまでの整数、浮動小数点数、
-  `bool`、`string`、`list<u8>`、ハンドル）だけで、コンポーネントと `--no-wasi` のモジュールでは
-  `flags` 以外のすべてです。
+  `bool`、`string`、`list<u8>`、ハンドル）だけです。コンポーネントではすべての型、`--no-wasi` の
+  モジュールでは `flags` 以外のすべての型です。
   それ以外の型を持つメンバーは、プログラムが呼ぶ場合に限り、`wit-import` と同じく WIT の行を
   示して拒否されます。
 - `Long.MAX_VALUE` を超える `u64` は、どの WASM の境界も越えません。

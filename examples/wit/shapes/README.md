@@ -2,8 +2,8 @@
 
 [`shapes.lisp`](shapes.lisp) implements the world `shapes` of
 [`wit/shapes.wit`](wit/shapes.wit): an interface of functions over records, an
-enum, a variant, lists, an option, a tuple and a result, and one function of the
-world's own. [`app.lisp`](app.lisp) calls that interface from another component.
+enum, flags, a variant, lists, an option, a tuple and a result, and one function
+of the world's own. [`app.lisp`](app.lisp) calls that interface from another component.
 No function names a boundary type; the WIT states them, and each value arrives as
 the Lisp value its WIT type maps to:
 
@@ -11,6 +11,7 @@ the Lisp value its WIT type maps to:
 |---|---|
 | `record point { x: s32, y: s32 }` | `(:x 1 :y 2)` |
 | `enum color { red, green, blue }` | `:green` |
+| `flags style { filled, dashed, bold }` | `(:filled :bold)` |
 | `variant shape { circle(f64), rect(point), dot }` | `(:circle . 2.0d0)`, `(:rect :x 3 :y 4)`, `:dot` |
 | `list<point>`, `tuple<point, point>` | a list |
 | `option<string>` | the string, or `nil` |
@@ -30,8 +31,9 @@ rontolisp app.lisp
 # area     12.0
 # area     12.0
 # area     "a dot has no area"
-# caption  "a green dot called origin"
+# caption  "a filled bold green dot called origin"
 # caption  "a red circle"
+# embolden (:DASHED :BOLD)
 ```
 
 As components, a host calls an export of `shapes.wasm` directly:

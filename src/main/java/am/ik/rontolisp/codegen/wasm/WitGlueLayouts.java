@@ -84,6 +84,9 @@ final class WitGlueLayouts {
 				case WitItem.VariantDef ignored -> cases("variant", in, t);
 				case WitItem.EnumDef ignored -> cases("enum", in, t);
 				case WitItem.ResourceDef ignored -> new CanonicalLayout.Handle(resource(in, named.name()), true);
+				case WitItem.FlagsDef ignored -> throw new UnsupportedOperationException("the flags '" + named.name()
+						+ "' do not cross a --no-wasi module's canonical-ABI import: its JavaScript glue has no value "
+						+ "for flags (a component carries them: --component)");
 				default -> throw unsupported(named.name());
 			};
 			default -> throw unsupported(WitPrinter.type(t));

@@ -1,7 +1,9 @@
 package am.ik.rontolisp.codegen.wasm;
 
 import java.util.ArrayList;
+import java.util.LinkedHashMap;
 import java.util.List;
+import java.util.Map;
 
 import am.ik.rontolisp.compiler.WitExportDirective;
 import am.ik.wasm.Type;
@@ -33,9 +35,10 @@ import org.jspecify.annotations.Nullable;
  * @param at the WIT file and line of the export ({@code path:line}), for a refusal
  * @param octets whether a {@code list<u8>} parameter is lifted as the octets it holds (an
  * {@code (unsigned-byte 8)} vector) instead of as text
+ * @param worldInterfaces the interfaces the function's world exports, in world order
  */
 record WitExportSignature(WitCanonicalAbi abi, WitFunc func, boolean ofWorld, String scopeName, String at,
-		boolean octets) {
+		boolean octets, List<WitExportDirective.InterfaceExport> worldInterfaces) {
 
 	/**
 	 * Reads the signature a canonical export form names.
@@ -52,7 +55,44 @@ record WitExportSignature(WitCanonicalAbi abi, WitFunc func, boolean ofWorld, St
 			boolean octets) {
 		WitExportDirective.Signature signature = WitExportDirective.signature(witText, world, ifaceId, label);
 		return new WitExportSignature(new WitCanonicalAbi(signature.resolver(), signature.scope()), signature.func(),
-				signature.ofWorld(), ifaceId == null ? world : ifaceId, at, octets);
+				signature.ofWorld(), ifaceId == null ? world : ifaceId, at, octets,
+				WitExportDirective.interfaceExports(witText, world));
+	}
+
+	/**
+	 * {@return the scope the function's type names resolve in}
+	 */
+	WitExportTypes.Scope scope() {
+		return new WitExportTypes.Scope(this.abi, this.scopeName);
+	}
+
+	/**
+	 * The interfaces a component of these exports' world exports, in world order, each
+	 * with its scope: the ones the exports are members of, and the ones of types alone,
+	 * which no export stands for. An interface that neither holds an export nor declares
+	 * a type is not exported.
+	 * @param decls the exports
+	 * @return the interfaces by id; empty when no export says what its world is, and the
+	 * interfaces are then the exports' own, in their order
+	 */
+	static Map<String, WitExportTypes.Scope> exportedInterfaces(List<WasmExportCompiler.Decl> decls) {
+		Map<String, WitExportTypes.Scope> interfaces = new LinkedHashMap<>();
+		for (WasmExportCompiler.Decl decl : decls) {
+			WitExportSignature typing = decl.typing();
+			if (typing == null) {
+				continue;
+			}
+			for (WitExportDirective.InterfaceExport exported : typing.worldInterfaces()) {
+				WitExportTypes.Scope scope = new WitExportTypes.Scope(typing.abi().scopedTo(exported.scope()),
+						exported.id());
+				if (decls.stream().anyMatch(member -> exported.id().equals(member.iface()))
+						|| !WitExportTypes.declared(scope.abi()).isEmpty()) {
+					interfaces.put(exported.id(), scope);
+				}
+			}
+			break;
+		}
+		return interfaces;
 	}
 
 	/**

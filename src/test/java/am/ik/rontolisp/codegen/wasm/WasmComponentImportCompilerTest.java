@@ -699,14 +699,21 @@ class WasmComponentImportCompilerTest {
 	void aListParameterStagesACanonicalArrayThatValidates(@TempDir Path tempDir) throws Exception {
 		// A list<T> parameter is staged as a canonical array, each element stored through
 		// the memory lowering -- a scalar, a record, a list inside a list, a list inside
-		// a variant payload, and one in a spilled async call's argument area. The
-		// wrapper bodies are worth what a real validator says of them; the round trip
-		// against a host is WasmLispCompilerIntegrationTest's.
+		// a variant payload, and one in a spilled async call's argument area. Flags
+		// cross as the bits of a list of keywords, flat and in memory at each of their
+		// three widths. The wrapper bodies are worth what a real validator says of
+		// them; the round trip against a host is WasmLispCompilerIntegrationTest's.
 		String listParamWit = """
 				package local:x@0.1.0;
 
 				interface s {
 				    record point { x: s32, y: s32 }
+				    flags perm { read, write }
+				    flags days { mon, tue, wed, thu, fri, sat, sun, off, any }
+				    flags bits { b0, b1, b2, b3, b4, b5, b6, b7, b8, b9, b10, b11, b12, b13, b14, b15, b16 }
+				    record modes { p: perm, d: days, b: bits }
+				    chmod: func(p: perm) -> perm;
+				    spread: func(m: modes, all: list<days>) -> modes;
 				    plot: func(xs: list<s32>, pts: list<point>);
 				    grid: func(rows: list<list<u32>>, tag: option<list<string>>);
 				    send: async func(a: u32, b: u32, c: u32, d: u32, names: list<string>);
@@ -719,25 +726,6 @@ class WasmComponentImportCompilerTest {
 			.start();
 		String output = new String(process.getInputStream().readAllBytes(), StandardCharsets.UTF_8);
 		assertThat(process.waitFor()).as(output).isZero();
-	}
-
-	@Test
-	void rejectsAFlagsParameterNamingTheWitLine() {
-		String flagsParamWit = """
-				package local:x@0.1.0;
-
-				interface s {
-				    flags perm {
-				        read,
-				        write,
-				    }
-				    chmod: func(p: perm);
-				}
-				""";
-		assertThatThrownBy(() -> lower(flagsParamWit, "local:x/s", WitExportDirective.Backend.WASM_COMPONENT))
-			.isInstanceOf(UnsupportedOperationException.class)
-			.hasMessageContaining("kv.wit:8")
-			.hasMessageContaining("involves flags");
 	}
 
 	@Test

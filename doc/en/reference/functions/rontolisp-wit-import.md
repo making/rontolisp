@@ -325,9 +325,9 @@ the provider is written against, not a marshaller. On the **Preview 1 WASM**
 boundary only the flat set `rontolisp:wasm-import` can carry crosses: a core
 import is a bare host function, with no component type to describe a richer shape
 with. Under **`--component`** the canonical ABI marshals the rich types, so a
-`record`, `variant`, `enum`, `option`, `tuple`, `list<T>` or `result` crosses **in
-both directions** — as an argument as well as a result. Only `flags` does not (in
-neither direction). Anything unsupported is a compile error naming the WIT file and line.
+`record`, `variant`, `enum`, `flags`, `option`, `tuple`, `list<T>` or `result`
+crosses **in both directions** — as an argument as well as a result. Anything
+unsupported is a compile error naming the WIT file and line.
 
 | WIT type | Lisp value | Preview 1 | `--component` |
 | --- | --- | --- | --- |
@@ -345,7 +345,7 @@ neither direction). Anything unsupported is a compile error naming the WIT file 
 | `record` | a keyword plist | no | yes |
 | `enum` | a keyword | no | yes |
 | `variant` | a keyword, or `(keyword . payload)` | no | yes |
-| `flags` | a list of keywords | no | no |
+| `flags` | a list of the keywords of the labels that are set; an argument naming no label traps | no | yes |
 | `resource`, `borrow<R>`, `own<R>` | an opaque integer handle | `:int` | yes |
 | `stream<T>`, `future<T>` | an opaque integer handle, read through an alias's built-ins | no | yes |
 
@@ -433,7 +433,8 @@ decides what to make of it.
   even though `--component`, the interpreter and the JVM all bind it. The
   `wasi:keyvalue` example above is therefore a component (or an interpreter/JVM)
   program, not a Preview 1 one: its `result` arms keep it off that boundary.
-- Under `--component` `flags` does not cross in either direction yet.
+- `flags` crosses a component alone: a `--no-wasi` module, whose JavaScript glue
+  has no value for it, refuses a member that carries one.
 - Under `--component` the interface must not be one the component **already
   imports for its own WASI surface** (which grows with what the program uses:
   `rontolisp:fetch` adds `wasi:http/types` and `wasi:http/client`, the

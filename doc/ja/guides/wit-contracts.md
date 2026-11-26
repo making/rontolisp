@@ -132,7 +132,7 @@ wasmtime run --invoke 'area(dot)' shapes.wasm
 # err("a dot has no area")
 ```
 
-レコードはキーワードの plist、バリアントはケース名のキーワード(ペイロードがあればドット対)、リストはリスト、option は値か `nil` です。WIT の結果が `result` の関数は、ok 側の値を返し、error 側では `rontolisp:wit-error` を通知します。これは[プロバイダ](#importing-a-wit-interface-wit-import)の書き方と同じなので、`shapes.lisp` の関数は、インタプリタと JVM ではこのインターフェースの `wit-import` に応えるプロバイダにもなります。対応の全体と、受け渡せないもの(`flags`、ハンドル、ストリーム、別のインターフェースの型)は[リファレンス](../reference/functions/rontolisp-wit-export.md#compound-types)にあります。[`examples/wit/shapes`](https://github.com/making/rontolisp/tree/develop/examples/wit/shapes) は、この world と、それを呼び出す 2 つ目のコンポーネントの例です。
+レコードはキーワードの plist、バリアントはケース名のキーワード(ペイロードがあればドット対)、リストはリスト、option は値か `nil` です。WIT の結果が `result` の関数は、ok 側の値を返し、error 側では `rontolisp:wit-error` を通知します。これは[プロバイダ](#importing-a-wit-interface-wit-import)の書き方と同じなので、`shapes.lisp` の関数は、インタプリタと JVM ではこのインターフェースの `wit-import` に応えるプロバイダにもなります。対応の全体と、受け渡せないもの(ハンドル、ストリーム)は[リファレンス](../reference/functions/rontolisp-wit-export.md#compound-types)にあります。[`examples/wit/shapes`](https://github.com/making/rontolisp/tree/develop/examples/wit/shapes) は、この world と、それを呼び出す 2 つ目のコンポーネントの例です。
 
 コアモジュール(`-o out.wasm` だけ、`--no-wasi`)と `--no-gc` がエクスポートできるのは、フラットな型だけです。コアの値を受け渡す関数にはレコードを表す型がなく、スカラバックエンドにはレコードを保持する値がないためです。
 
@@ -336,7 +336,7 @@ wasmtime run -S keyvalue=y counter.wasm
   (sock:tcp-socket-bind s '(:ipv4 :port 0 :address (127 0 0 1))))
 ```
 
-`list<T>` の引数はリストまたはベクタ (`rontolisp:json-parse` が読んだ JSON 配列もそのまま渡せます) で、ラッパーがそれを canonical な配列としてリニアメモリに書き込みます: `wasi:keyvalue/batch` の `get-many` は `'("a" "b")` を、`set-many` は `'(("a" "1") ("b" "2"))` を取ります。それ以外 (ドット対のリスト、文字列) は、どのバックエンドでも呼び出しの前に `type-error` を通知します。`flags` は今のところどちらの向きでも渡りません。
+`list<T>` の引数はリストまたはベクタ (`rontolisp:json-parse` が読んだ JSON 配列もそのまま渡せます) で、ラッパーがそれを canonical な配列としてリニアメモリに書き込みます: `wasi:keyvalue/batch` の `get-many` は `'("a" "b")` を、`set-many` は `'(("a" "1") ("b" "2"))` を取ります。それ以外 (ドット対のリスト、文字列) は、どのバックエンドでも呼び出しの前に `type-error` を通知します。`flags` は、立っているラベルのキーワードのリストです。
 
 コンポーネントが束縛**できない**インターフェースが 1 つあります: そのコンポーネントが自身の WASI 表面としてすでにインポートしているものです。しかもその表面はプログラムが使う機能に応じて増えます (`rontolisp:fetch` は `wasi:http/types` と `wasi:http/client` を、`rontolisp:tcp-*` 組み込みは `wasi:sockets/types` を引き込みます)。コンポーネントは同じインターフェースを 2 回インポートできないため、これもコンパイルエラーです: 組み込みと併用するのではなく、組み込みの*代わりに* WIT 束縛経由で使ってください。
 
@@ -387,7 +387,7 @@ drop より前の呼び出しがコンディションを通知すると drop は
 
 - Preview 1 の境界を渡れるのは `rontolisp:wasm-import` が運べる型だけです — 整数スカラー、浮動小数点スカラー、`bool`、`string`、`list<u8>`、リソースハンドル。`record`、`option`、`result` は、`--component`・インタプリタ・JVM のいずれもが束縛できるとしても、WIT ファイル名と行番号を示すコンパイルエラーになります (上の `wasi:keyvalue` プログラムが Preview 1 向けではなく、コンポーネントまたはインタプリタ／JVM 向けなのはそのためです: その `result` アームが Preview 1 の境界から遠ざけています)。コアインポートは素のホスト関数であり、より豊かな形を記述するためのコンポーネント型を持たないからです。そのため、これに答えられるのは canonical ABI での変換を自分で行うホスト、つまり `--no-wasi` のモジュールのグルーだけです。`stream` と `future` はすべてのバックエンドで拒否されます。
 - どの整数幅が渡れるかはバックエンドの値モデル次第です: [`--no-gc`](wasm-nogc.md#host-imports-rontolispwasm-import) は `s64`/`u64` まで全ファミリを運び、それぞれの幅を保ちます。デフォルト (wasm-GC) のコアモジュールは 32 ビットまでで、ハウス整数が `i31ref` のため `s64`/`u64` は名前を挙げて拒否します。代わりに `--no-gc` は `async func` を拒否します: `:async t` は future を返しますが、あの値モデルに future はありません。
-- `--component` では、位置を問わず `flags` はコンパイルエラーになります。
+- `flags` はコンポーネントを渡れますが、`--no-wasi` のモジュールは渡れません。
 - 束縛できるのは**インターフェース**です。world の `import` 項目は依然として読まれません。
 - ディレクティブはトップレベルで、インターフェースを呼ぶコードより**前**に置かなければなりません (パッケージと束縛を定義するのがこれだからです)。`wit-export` とは逆です。
 

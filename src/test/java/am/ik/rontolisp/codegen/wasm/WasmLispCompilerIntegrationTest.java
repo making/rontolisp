@@ -991,24 +991,34 @@ class WasmLispCompilerIntegrationTest {
 
 	@Test
 	void aWorldsCompoundTypesCrossItsExportsThroughTheCanonicalAbi() throws Exception {
-		// A world's export carries every WIT type but flags, a handle, a stream and a
+		// A world's export carries every WIT type but a handle, a stream and a
 		// future: wasmtime lowers each argument and lifts each answer by the canonical
 		// ABI, so what it prints is what crossed. The world holds the places a value
 		// can lie: flat values and joined variant flats (an s64, an f64, an f32 and a
 		// string in one position), a tuple of parameters past sixteen flats (in memory),
 		// a result in memory, lists of lists, an interface's types (a shim component
-		// names them) beside the world's own (type imports), a flat member among them,
-		// a string in and an s64 out (whose post-return takes an i64).
+		// names them) beside the world's own (type imports), types another interface
+		// defines (a use clause, in the interface and in the world), a flat member
+		// among them, a string in and an s64 out (whose post-return takes an i64).
 		java.nio.file.Path dir = java.nio.file.Files.createTempDirectory("wit-export-canonical");
 		java.nio.file.Files.writeString(dir.resolve("world.wit"), """
 				package example:crossing@0.1.0;
 
-				interface geo {
-				  record line { a: point, b: point, tag: id }
+				interface units {
 				  type id = u32;
 				  enum color { red, green, blue }
 				  record point { x: s32, y: s32 }
+				}
+
+				interface geo {
+				  record line { a: point, b: point, tag: id }
+				  use units.{id, color, point};
 				  variant shape { circle(f64), rect(point), none }
+				  flags perms { read, write, exec }
+				  flags days { mon, tue, wed, thu, fri, sat, sun, off, any }
+				  record shift { who: string, on: days, may: perms }
+				  widen: func(p: perms) -> perms;
+				  swap: func(s: shift, others: list<days>) -> shift;
 				  len: func(l: line) -> id;
 				  next: func(c: color) -> color;
 				  area: func(s: shape) -> result<f64, string>;
@@ -1017,6 +1027,7 @@ class WasmLispCompilerIntegrationTest {
 				}
 
 				world crossing {
+				  use units.{color as tint};
 				  type age = u8;
 				  record person { name: string, age: age, tags: list<string>, nick: option<string> }
 				  variant num { i(s64), f(f64), small(f32), text(string), none }
@@ -1033,6 +1044,7 @@ class WasmLispCompilerIntegrationTest {
 				  export narrow: func(x: s32) -> tuple<s8, u16>;
 				  export wide-ints: func(x: s32, y: u32, z: u64) -> tuple<s32, u32, u64>;
 				  export size: func(s: string) -> s64;
+				  export invert: func(t: tint) -> tint;
 				}
 				""");
 		java.nio.file.Path lisp = dir.resolve("prog.lisp");
@@ -1044,6 +1056,9 @@ class WasmLispCompilerIntegrationTest {
 				        ((eq (car s) :circle) (* 3.0d0 (cdr s) (cdr s)))
 				        (t (float (* (getf (cdr s) :x) (getf (cdr s) :y)) 1.0d0))))
 				(defun top (ps) (car ps))
+				(defun widen (p) (cons :exec p))
+				(defun swap (s others)
+				  (list :who (getf s :who) :on (apply #'append others) :may (getf s :may)))
 				(defun twice (x) (* 2 x))
 				(defun older (p by)
 				  (list :name (string-upcase (getf p :name)) :age (+ (getf p :age) by)
@@ -1067,6 +1082,7 @@ class WasmLispCompilerIntegrationTest {
 				(defun narrow (x) (list x x))
 				(defun wide-ints (x y z) (list x y (+ z 1)))
 				(defun size (s) (length s))
+				(defun invert (c) (case c (:red :blue) (:blue :red) (t c)))
 				(rontolisp:wit-export "world.wit" :octets t)
 				""");
 		// What an export answers, or "trap": a value the declared type cannot state
@@ -1080,6 +1096,12 @@ class WasmLispCompilerIntegrationTest {
 		answers.put("top([{x: 7, y: 8}, {x: 1, y: 1}])", "some({x: 7, y: 8})");
 		answers.put("top([])", "none");
 		answers.put("twice(21)", "42");
+		// flags: the labels set, flat and in memory (one byte, two bytes), a label
+		// named twice set once
+		answers.put("widen({read})", "{read, exec}");
+		answers.put("widen({write, exec})", "{write, exec}");
+		answers.put("swap({who: \"ann\", on: {mon}, may: {read, write}}, [{any, tue}, {}, {sun}])",
+				"{who: \"ann\", on: {tue, sun, any}, may: {read, write}}");
 		answers.put("older({name: \"ann\", age: 41, tags: [\"a\", \"bb\"], nick: some(\"an\")}, 1)",
 				"{name: \"ANN\", age: 42, tags: [\"bb\", \"a\"], nick: some(\"an\")}");
 		answers.put("older({name: \"bob\", age: 250, tags: [], nick: none}, 10)", "trap");
@@ -1104,6 +1126,7 @@ class WasmLispCompilerIntegrationTest {
 				"(-2147483648, 4294967295, 9223372036854775807)");
 		answers.put("wide-ints(0, 0, 18446744073709551615)", "trap");
 		answers.put("size(\"h\u00e9llo\")", "5");
+		answers.put("invert(blue)", "red");
 		// A command beside wasi:cli/run, and the reactor that imports nothing.
 		for (List<String> shape : List.of(List.of("--component"), List.of("--component", "--no-wasi"))) {
 			java.nio.file.Path wasm = dir.resolve("prog.wasm");
