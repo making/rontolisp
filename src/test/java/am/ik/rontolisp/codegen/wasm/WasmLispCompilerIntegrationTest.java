@@ -6822,19 +6822,27 @@ class WasmLispCompilerIntegrationTest {
 		// wasmtime answers both. The counter is seeded through the host's own CLI
 		// (-S keyvalue-in-memory-data), so the reply proves the handler READ the host's
 		// store across the canonical ABI and wrote back a value it read again -- which no
-		// process-local hash table could fake.
+		// process-local hash table could fake. /big reads back 1.5 MB, which the host
+		// lowers through cabi_realloc: more than an allocator of a window of its own in
+		// the
+		// first megabyte of linear memory holds.
 		java.nio.file.Path dir = java.nio.file.Files.createTempDirectory("wit-serve");
 		java.nio.file.Files.writeString(dir.resolve("kv.wit"), WASI_KEYVALUE_WIT);
 		byte[] component = compileServeComponent("""
 				(rontolisp:wit-import "kv.wit" :interface "wasi:keyvalue/store@0.2.0-draft" :package kv)
 				(defun handle (env)
 				  (let* ((page (getf env :path-info))
-				         (bucket (kv:open ""))
-				         (seen (kv:bucket-get bucket page)))
-				    (kv:bucket-set bucket page
-				                   (princ-to-string (+ 1 (if seen (parse-integer seen) 0))))
-				    (list 200 nil
-				          (list page " " (kv:bucket-get bucket page)))))
+				         (bucket (kv:open "")))
+				    (if (string= page "/big")
+				        (progn
+				          (kv:bucket-set bucket page (make-string 1500000 :initial-element #\\x))
+				          (list 200 nil
+				                (list page " " (princ-to-string (length (kv:bucket-get bucket page))))))
+				        (let ((seen (kv:bucket-get bucket page)))
+				          (kv:bucket-set bucket page
+				                         (princ-to-string (+ 1 (if seen (parse-integer seen) 0))))
+				          (list 200 nil
+				                (list page " " (kv:bucket-get bucket page)))))))
 				(rontolisp:http-handler 'handle)
 				""", dir.toString());
 		wasmtime.copyFileToContainer(Transferable.of(component), path("serve-kv.wasm"));
@@ -6846,9 +6854,10 @@ class WasmLispCompilerIntegrationTest {
 					+ " cat " + path("serve-kv.log") + " 1>&2; exit 1; };"
 					+ awaitServePort("port", path("serve-kv.log"))
 					+ " for i in $(seq 1 60); do out=$(curl -s http://127.0.0.1:$port/hits) && [ -n \"$out\" ]"
-					+ " && { echo \"$out\"; exit 0; }; sleep 0.25; done; cat " + path("serve-kv.log") + "; exit 1");
+					+ " && { echo \"$out\"; curl -s http://127.0.0.1:$port/big; echo; exit 0; }; sleep 0.25; done;"
+					+ " cat " + path("serve-kv.log") + "; exit 1");
 		assertThat(result.getExitCode()).as("wasmtime serve keyvalue round trip; log: %s", result.getStderr()).isZero();
-		assertThat(result.getStdout().trim()).isEqualTo("/hits 42");
+		assertThat(result.getStdout().trim()).isEqualTo("/hits 42\n/big 1500000");
 	}
 
 	@Test

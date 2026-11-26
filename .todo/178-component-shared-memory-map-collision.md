@@ -1,37 +1,28 @@
-# The SERVE component's canonical-ABI window can still collide with core scratch
+# A pop of the component's bump heap may free what another task or subtask holds
 
-NARROWED 2026-07-26 (the todo-177 session): the non-serve collision this file
-originally described is FIXED --
+Difficulty: High
 
-- the component's interned-string data starts at page 6
-  (`COMPONENT_DATA_BASE_OFFSET` = 0x60000), above the adapter's page-5 scratch,
-  the serve cabi window and the core's page-3/4 env/socket cells;
-- the non-serve `cabi_realloc` (`src/wasm-component/mem.wat`) bumps the core's
-  own HEAP_PTR cell (address 84) -- ONE shared monotonic allocator, so there is
-  no private ABI region to outgrow and nothing recycles memory the adapter (or
-  the scheduler's free-listed read buffers) retains. Full mechanics:
-  `.kb/wasi-component.md`.
+NARROWED 2026-11-26: the served component's own canonical-ABI window (0x10000, reset at the
+top of every `handle`) is gone; every component's `cabi_realloc` bumps the core's HEAP_PTR
+and grows the memory (`.kb/wasi-component.md`, "Shared-memory map"). Both issues this file
+described went with it: a request lowering more than ~320 KB overwrote static data, and the
+per-request reset recycled the buffers of a request still running on the same instance.
 
-## What remains: the serve memory module
+## What remains (not measured)
 
-`mem-http-client.wat` deliberately keeps its own cabi cell/window at 0x10000
-(`CABI_HP_CELL_ADDR`, base 0x10008) with a per-request reset from the `handle`
-wrapper, because a resident, instance-reusing host (jco / wasmCloud) must
-reclaim request buffers per call -- a monotonic HEAP_PTR bump would grow linear
-memory by ~one request per call, and the core's snapshot/pop discipline is
-per-export-invocation, not per-task.
+A `%component-import` wrapper pops HEAP_PTR back to the mark it took at its start. That is
+right for what its own call allocated, wrong for anything allocated meanwhile that outlives
+the call. Two ways something could be, both only while the wrapper WAITS inside its bracket
+(`emitBlockedWait`: a future read, a stream write, a read outside asyncMode):
 
-Two latent issues survive there, both size-gated and none user-visible today:
+1. The host completes another subtask during the wait and lowers its result through
+   `cabi_realloc` (the canonical ABI lowers at the callee's return, not when the guest
+   takes the event); the scheduler lifts it after the wrapper has popped it.
+2. The host runs another task of the instance during the wait (wasmtime serve runs up to
+   16 requests of a p3 instance at once), whose permanent allocations -- an async start's
+   staging, a free-listed read buffer -- land above the mark.
 
-1. The window grows from 0x10008 toward the core's fixed env scratch at
-   0x30000: past ~128 KB of ABI traffic within ONE request (large request
-   bodies/headers lifted into guest memory), it clobbers `ENV_PTRS_ADDR` /
-   `ENV_BUF_ADDR` and, past 0x40000, the socket scratch cell.
-2. The per-request reset (`mem[CABI_HP_CELL] = CABI_HP_BASE` at the top of
-   `handle`) assumes one request at a time; under CONCURRENT callback tasks a
-   reset while another task's lifted buffers are still live recycles them.
-
-A unification would give serve the same shared-HEAP_PTR allocator plus a
-per-task mark/pop keyed to the task record (the callback-async machinery
-already has per-task state) -- design work, to be done when a serve workload
-actually hits either limit.
+First measure whether either happens on wasmtime 51 and Spin 4.3.0 (a probe: one request
+blocked in a future read while another runs; an async call completing during a blocking
+wait). If one does, the fix is a mark per waiting bracket that no pop crosses, or an
+allocator that frees what it lifted instead of popping.

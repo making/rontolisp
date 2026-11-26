@@ -496,25 +496,7 @@ final class WasmExportCompiler {
 		if (ctx.reentrant) {
 			WasmDynVars.emitTaskBegin(ctx);
 		}
-		// Serve mode: `handle` is the wasi:http/incoming-handler export, called once per
-		// request on a possibly REUSED instance (jco / wasmCloud). The canonical-ABI
-		// allocator (mem-http-client's cabi_realloc) is where the host writes a request's
-		// result buffers -- the incoming path / headers / body -- and it only grows, so
-		// reset its bump-pointer cell to the base here, before http.lisp reads anything.
-		// Without it linear memory grows by ~one request per call; wasmtime serve
-		// re-instantiates per request, so it never showed. Only the cell needs resetting
-		// --
-		// the core HEAP_PTR stays put because every %component-import wrapper already
-		// pops it
-		// back -- and no init-once snapshot is needed: the base is a constant and nothing
-		// allocates through cabi_realloc before the first handle call. See
-		// WasmLispCompiler.CABI_HP_CELL_ADDR / mem-http-client.wat.
 		if (ctx.serve && "handle".equals(decl.exportName())) {
-			ctx.writer.write(Instruction.I32_CONST);
-			ctx.writer.writeSignedLeb128(WasmLispCompiler.CABI_HP_CELL_ADDR);
-			ctx.writer.write(Instruction.I32_CONST);
-			ctx.writer.writeSignedLeb128(WasmLispCompiler.CABI_HP_BASE);
-			ctx.writer.write(Instruction.I32_STORE, 0x02, 0x00);
 			// Run the program's top level once per instance before the first request. A
 			// serve component never lifts `run`, so nothing else would execute the
 			// top-level initializers (defvar/defparameter globals, spliced library

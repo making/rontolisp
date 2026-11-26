@@ -16,31 +16,26 @@ import static org.assertj.core.api.Assertions.assertThat;
  * <p>
  * The shared memory module must declare at least the pages the core's
  * {@code "mem"/"memory"} import asks for ("mismatch in memory limits"): the serve
- * component used its 16-page module as shipped, so a served program with more static data
- * than that (tiny-routes over lack-request) never started. And the serve preview1 bridge
- * must export every preview1 function a core can import.
+ * component once used a 16-page module as shipped, so a served program with more static
+ * data than that (tiny-routes over lack-request) never started. And the serve preview1
+ * bridge must export every preview1 function a core can import.
  */
 class WasmComponentHelperModulesTest {
 
 	@Test
-	void theServeMemoryModuleGrowsToWhatTheCoreImports() throws Exception {
-		byte[] mem = resource("mem-http-client.wasm");
-		assertThat(WasmComponentBuilder.memoryMinPagesOf(mem)).isEqualTo(16);
-		byte[] sized = WasmComponentBuilder.memModuleFor(mem, coreImportingMemory(20));
-		assertThat(WasmComponentBuilder.memoryMinPagesOf(sized)).isEqualTo(20);
-	}
-
-	@Test
-	void aMemoryModuleIsNeverShrunkBelowItsOwnMinimum() throws Exception {
-		// The bridge adapters import the same memory at the module's shipped minimum, so
-		// a core asking for less must leave the module exactly as it is.
-		byte[] mem = resource("mem-http-client.wasm");
-		assertThat(WasmComponentBuilder.memModuleFor(mem, coreImportingMemory(10))).isSameAs(mem);
+	void aMemoryModuleIsSizedForItsCoreAndNeverShrunk() throws Exception {
 		byte[] plain = resource("mem.wasm");
-		assertThat(WasmComponentBuilder.memModuleFor(plain, coreImportingMemory(4))).isSameAs(plain);
-		assertThat(
-				WasmComponentBuilder.memoryMinPagesOf(WasmComponentBuilder.memModuleFor(plain, coreImportingMemory(9))))
+		assertThat(WasmComponentBuilder.memModuleFor(coreImportingMemory(4))).isEqualTo(plain);
+		assertThat(WasmComponentBuilder.memoryMinPagesOf(WasmComponentBuilder.memModuleFor(coreImportingMemory(9))))
 			.isEqualTo(9);
+		// A served component's is the same module, its allocator the HEAP_PTR bump, at
+		// the sixteen pages the serve bridge imports at least.
+		byte[] served = WasmComponentBuilder.memModuleFor(16, coreImportingMemory(10));
+		assertThat(WasmComponentBuilder.memoryMinPagesOf(served)).isEqualTo(16);
+		assertThat(am.ik.wasm.WasmExports.names(served)).contains("cabi_realloc");
+		assertThat(
+				WasmComponentBuilder.memoryMinPagesOf(WasmComponentBuilder.memModuleFor(16, coreImportingMemory(20))))
+			.isEqualTo(20);
 	}
 
 	@Test
