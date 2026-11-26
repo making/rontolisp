@@ -250,7 +250,7 @@ another slice). A bare kebab-case pin is a `clojure-spec.yaml` case. Deviations 
 | `quote` | `quote` with symbols mangled | collections inside are rebuilt; a quoted empty one is the canonical empty object |
 | `comment` | `nil` | |
 | `transient` `persistent!` `conj!` `assoc!` `dissoc!` `disj!` `pop!` | `ClojureTransientLowering`: worker | "Transients" |
-| refused by name (call-time) | the arguments, then `(error "same words")`: only the call signals, so a library merely defining such a function loads (integrant over `enumeration-seq`) | `use-fixtures`; `bean` `supers` `bases` `clojure-version` (host answers on no wasm backend); the proxy helpers; the chunk verbs; `->Vec` `->VecNode` `->VecSeq` `-cache-protocol-fn` `-reset-methods`; the `stream-*!` reductions; `pcalls` `seque` `await1` (no thread pool); the agent executor verbs; `enumeration-seq` `resultset-seq`; `compile` `get-thread-bindings` `read+string`. `gen-class` `gen-interface` stay expansion refusals (the oracle fails the compile too); `eval` and the lowering verbs over computed arguments lower at run time on the interpreter and refuse in a compiled program ("Lowering at run time"); `add-classpath` (no class loader), `Inst`, `PrintWriter-on`, `primitives-classnames` stay unknown names |
+| refused by name (call-time) | the arguments, then `(error "same words")`: only the call signals, so a library merely defining such a function loads (integrant over `enumeration-seq`) | `use-fixtures`; `bean` `clojure-version` (host answers on no wasm backend); the proxy helpers; the chunk verbs; `->Vec` `->VecNode` `->VecSeq` `-cache-protocol-fn` `-reset-methods`; the `stream-*!` reductions; `pcalls` `seque` `await1` (no thread pool); the agent executor verbs; `enumeration-seq` `resultset-seq`; `compile` `get-thread-bindings` `read+string`. `gen-class` `gen-interface` stay expansion refusals (the oracle fails the compile too); `eval` and the lowering verbs over computed arguments lower at run time on the interpreter and refuse in a compiled program ("Lowering at run time"); `add-classpath` (no class loader), `Inst`, `PrintWriter-on`, `primitives-classnames` stay unknown names |
 
 ## Deviations
 
@@ -2174,11 +2174,41 @@ real `Class` objects, so a class value of another shape would be unequal to them
   `methods` keys a row a class spelling stored by its class value: the defmethod notes it
   (`%clojure-note-class-row`), a statement of `METHOD_CLASS_ROW`, which only a `methods` call
   keeps.
-- Deviations (user doc `reference/class.md`): one class per kind's value -- every fn
-  `AFunction`, every strict seq `PersistentList`, a two-member vector `PersistentVector`;
-  records and deftypes keep their designators on every backend, so Java sees no class of
-  theirs (a handle); a stub's `getMethods` lists the answered statics alone; `supers`/`bases`
-  stay refused (`.todo/m64`).
+- **A fn's class** is the class the oracle compiles it to (`%clojure-fn-class` over
+  `%clojure-fn-class-name`), what `.getClass` answers too (it lowers to `class`): where the host
+  makes class values a stub of that name extending the `AFunction` stub (flags 17, the
+  oracle's), else its designator. `%clojure-fn-class-names` records every name answered, so
+  `%clojure-kind-of-class` reads one back as `:function`. `class` (`CLASS_OF`) is a producer of
+  `Family.FN_CLASS`, so a program calling `class` keeps the per-`defn` registrations. Trap: a
+  core fn's name is built (`concatenate`), and on the JVM a built string is a character vector,
+  so `RontoStubClasses.text` reads one.
+- **`supers`/`bases`** (`%clojure-supers`/`%clojure-bases`): a host class by the host's
+  `getSuperclass`/`getInterfaces` (host arm `%clojure-host-class-bases`); a designator by
+  `%clojure-class-bases-text`, one line per class: the 106 stub rows' and 147 JDK classes' (the
+  closure of the stub rows' supertypes and of the classes `ClojureClassBases`/`ClojureThrowables`/
+  `ClojureValueClasses` name, read off the oracle by reflection), pinned by
+  `ClojureClassBasesTest#theDesignatorTableIsReflectionsAndTheStubRowsClosedUnderTheirBases`.
+  One string, not a quoted list: as the two row lists `(println (bases Long))` was 63,275 B of
+  wasm P1, as the string 56,374 (the printer of class values is 20 KB of it). A fn class
+  `AFunction`, a record's or deftype's what its definition noted, a program-defined interface
+  none; any other designator (a JDK class past the rows on wasm, a `reify`'s) is refused by name.
+  The note (`%clojure-note-type-bases`: `Object`, the body's interfaces in body order -- the
+  oracle's are hash-set ordered -- then `IRecord`'s eight or `IType`) is a statement of
+  `Family.TYPE_BASES`, kept only where `supers`/`bases` is read.
+- Size, measured 2026-11-26 (wasm P1 / `--optimize=size` / component / JVM class):
+  `examples/clojure/demo.clj`, `collections.clj`, `state.clj`, `text.clj`, a record program and a
+  `class` multimethod byte-identical; `(println (class "a") (class 1) (class [1]))` +21,963 /
+  +18,436 / +21,990 / +7,994 (a fn's class name: the per-`defn` registrations and
+  `%clojure-fn-class-name`; munging through `munge`'s printer and `apply` of `concatenate` was
+  +40 KB more, hence `%clojure-munge-string`); `java-interop.clj` +5,308 / +4,331 / +5,226 /
+  +7,572; `(.getName (.getClass inc))` 103,558 -> 61,143 P1.
+- Deviations (user doc `reference/class.md`, `reference/bases.md`): one class per kind's value --
+  every anonymous fn `AFunction$fn`, a variadic fn under `AFunction` (the oracle's `RestFn`),
+  every strict seq `PersistentList`, a two-member vector `PersistentVector`; records and
+  deftypes keep their designators on every backend, so Java sees no class of theirs (a
+  handle); a stub's `getMethods` lists the answered statics alone; a designator of an
+  interface `str`s as `class X` (the oracle's `interface X`); a `definterface` name evaluates
+  to its name string (`.todo/m87`).
 - Measured 2026-11-26 (oracle `clj` 1.12.6): tools.analyzer.jvm 1.2.3 analyzes all 18 forms of
   "core.async and tools.analyzer.jvm"'s list to the oracle's op and tag (interpreter, run-time
   `analyze` over the copy with `RT`/`Compiler/LOADER` patched); core.match 1.1.1 and schema
@@ -2197,7 +2227,9 @@ real `Class` objects, so a class value of another shape would be unequal to them
   (all four); `ClojureLoweringTest#typeAndClassAnswerClassValuesAKindDispatchesBy`,
   `ClojureInteropTest#classOfAnExceptionIsItsClassWithOrWithoutInterop`,
   `ClojureSessionTest#aSessionReadsAClassKeywordsSupersInALaterBuffer`,
-  `JvmRuntimeClassFilesTest` (the stub classes travel).
+  `JvmRuntimeClassFilesTest` (the stub classes travel); `supers`/`bases` and a fn's class:
+  clojure-spec `parents-and-ancestors-of-a-class-add-its-java-supers` (all four,
+  oracle-identical), `ClojureClassBasesTest`.
 
 ## Record and deftype class values
 
@@ -2222,7 +2254,7 @@ real `Class` objects, so a class value of another shape would be unequal to them
   (`ClojureInteropLowering.qualifiedMember`; a deftype has none).
 - **Kept lenient**: a local or a var of the name wins (the oracle refuses `(def R ...)` beside
   `(defrecord R ...)`); a reference above the definition reads the class (the oracle's `Unable to
-  resolve symbol`). `supers` stays refused.
+  resolve symbol`). `supers`/`bases` answer from the bases its definition noted ("Class values").
 - **Libraries**: specter's `dynamic-param?` and schema's `record*` `(class? klass)` run verbatim
   on this. Trap:
   probe the oracle on the verbatim jars; with rewrite-clj's `make-printable!` or schema's

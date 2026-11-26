@@ -656,7 +656,127 @@ class WasmHostGlueE2eTest {
 				"\"2\" \"é\" T NIL", "NIL", "(:KEYS (\"y\") :CURSOR \"1\") (:KEYS (\"z\") :CURSOR NIL)",
 				":NO-SUCH-STORE", "(:OTHER . \"KV GET failed: 503 Service Unavailable\")", "",
 				"get absent, list -, list 1, put a, delete b", "a y z 2");
+		// The other direction: a world exporting the same kinds of value, implemented
+		// in Lisp and called from JavaScript through the glue's entry points.
+		Files.writeString(this.tempDir.resolve("mirror.wit"), MIRROR_WIT, StandardCharsets.UTF_8);
+		Path exporter = this.tempDir.resolve("mirror.lisp");
+		Files.writeString(exporter, MIRROR_MODULE, StandardCharsets.UTF_8);
+		HostBoundaryRuns.cli(exporter.toString(), "-o", this.tempDir.resolve("mirror.wasm").toString(), "--no-wasi",
+				"--emit-js-glue");
+		Path called = this.tempDir.resolve("mirror.mjs");
+		Files.writeString(called, MIRROR_DRIVER, StandardCharsets.UTF_8);
+		assertThat(runNode(called).lines().toList()).containsExactly(
+				// the scalars, both ways; a list of records, an enum, a variant (an f32,
+				// a u64 and a string in its joined slots), an option, a result's arms, a
+				// list of strings, a tuple with octets, a one-field record, a u64 past
+				// 2^53, a result with no payload, parameters spilled to memory under a
+				// camel-cased name
+				"[true,-5,250,-300,65000,-70000]", "[4000000000,\"-5000000000n\",\"9007199254740993n\",1.5,2.25,\"é\"]",
+				"[{\"x\":2,\"y\":1,\"label\":\"a!\"},{\"x\":4,\"y\":-3,\"label\":\"bé!\"}]",
+				"\"blue\" {\"tag\":\"circle\",\"val\":2.5} {\"tag\":\"square\",\"val\":\"12345678901n\"} "
+						+ "{\"tag\":\"named\",\"val\":\"x\"} {\"tag\":\"nothing\"}",
+				"undefined \"none\" [\"x1\",\"yy2\",\"0\"]", "14 {\"thrown\":\"negative\"}",
+				"[[0,255,65],\"k3\"] {\"inner\":4294967295} \"9007199254740993n\"", "undefined {\"thrown\":null}", "91",
+				"the arena is where it was: true");
 	}
+
+	// A world whose interface carries every kind of value an export lifts and lowers
+	// on a --no-wasi module (a handle is refused on an export).
+	private static final String MIRROR_WIT = """
+			package example:mirror@0.1.0;
+
+			interface mirror {
+			  enum color { red, green, blue }
+			  record point { x: s32, y: s32, label: string }
+			  record wrapped { inner: u32 }
+			  variant shape { circle(f32), square(u64), named(string), nothing }
+			  small: func(a: bool, b: s8, c: u8, d: s16, e: u16, f: s32) -> tuple<bool, s8, u8, s16, u16, s32>;
+			  wide: func(g: u32, h: s64, i: u64, j: f32, k: f64, l: char) -> tuple<u32, s64, u64, f32, f64, char>;
+			  points: func(ps: list<point>) -> list<point>;
+			  pick: func(c: color) -> color;
+			  shapes: func(s: shape) -> shape;
+			  maybe: func(o: option<string>) -> option<string>;
+			  checked: func(n: s32) -> result<s32, string>;
+			  words: func(ws: list<string>) -> list<string>;
+			  pair: func(p: tuple<string, list<u8>>) -> tuple<list<u8>, string>;
+			  wrap: func(n: u32) -> wrapped;
+			  big: func(n: u64) -> u64;
+			  done: func(ok: bool) -> result;
+			  spread-out: func(a: point, b: point, c: point, d: point, e: point, f: point) -> s32;
+			}
+
+			world mirrored {
+			  export mirror;
+			}
+			""";
+
+	private static final String MIRROR_MODULE = """
+			(defun small (a b c d e f) (list a b c d e f))
+			(defun wide (g h i j k l) (list g h i j k l))
+			(defun points (ps)
+			  (mapcar (lambda (p)
+			            (list :x (getf p :y) :y (getf p :x) :label (concatenate 'string (getf p :label) "!")))
+			          ps))
+			(defun pick (c) (if (eq c :green) :blue :red))
+			(defun shapes (s) s)
+			(defun maybe (o) (if o nil "none"))
+			(defun checked (n) (if (< n 0) (error 'rontolisp:wit-error :payload "negative") (* n 2)))
+			(defun words (ws) (mapcar (lambda (w) (format nil "~a~d" w (length w))) ws))
+			(defun pair (p) (list (second p) (format nil "~a~d" (first p) (length (second p)))))
+			(defun wrap (n) (list :inner n))
+			(defun big (n) n)
+			(defun done (ok) (unless ok (error 'rontolisp:wit-error :payload nil)))
+			(defun spread-out (a b c d e f)
+			  (reduce #'+ (mapcar (lambda (p) (* (getf p :x) (length (getf p :label)))) (list a b c d e f))))
+			(rontolisp:wit-export "mirror.wit" :octets t)
+			""";
+
+	private static final String MIRROR_DRIVER = """
+			import { readFileSync } from "node:fs";
+			import { instantiate, WitError } from "./mirror.js";
+
+			const lisp = instantiate(new WebAssembly.Module(readFileSync(new URL("./mirror.wasm", import.meta.url))));
+			const show = (value) =>
+			  value === undefined
+			    ? "undefined"
+			    : JSON.stringify(value, (key, v) =>
+			        typeof v === "bigint" ? v + "n" : v instanceof Uint8Array ? [...v] : v,
+			      );
+			const raised = (thunk) => {
+			  try {
+			    return thunk();
+			  } catch (error) {
+			    if (error instanceof WitError) return { thrown: error.payload ?? null };
+			    throw error;
+			  }
+			};
+			const mark = lisp.exports.__ronto_alloc_mark();
+			console.log(show(lisp.small(true, -5, 250, -300, 65000, -70000)));
+			console.log(show(lisp.wide(4000000000, -5000000000n, 9007199254740993n, 1.5, 2.25, "é")));
+			console.log(show(lisp.points([{ x: 1, y: 2, label: "a" }, { x: -3, y: 4, label: "bé" }])));
+			console.log(
+			  [
+			    lisp.pick("green"),
+			    lisp.shapes({ tag: "circle", val: 2.5 }),
+			    lisp.shapes({ tag: "square", val: 12345678901n }),
+			    lisp.shapes({ tag: "named", val: "x" }),
+			    lisp.shapes({ tag: "nothing" }),
+			  ]
+			    .map(show)
+			    .join(" "),
+			);
+			console.log([lisp.maybe("hi"), lisp.maybe(undefined), lisp.words(["x", "yy", ""])].map(show).join(" "));
+			console.log([lisp.checked(7), raised(() => lisp.checked(-1))].map(show).join(" "));
+			console.log(
+			  [lisp.pair(["k", new Uint8Array([0, 255, 65])]), lisp.wrap(4294967295), lisp.big(9007199254740993n)]
+			    .map(show)
+			    .join(" "),
+			);
+			console.log([lisp.done(true), raised(() => lisp.done(false))].map(show).join(" "));
+			const at = (x, label) => ({ x, y: 0, label });
+			console.log(show(lisp.spreadOut(at(1, "a"), at(2, "bb"), at(3, "ccc"), at(4, "dddd"), at(5, "eeeee"), at(6, "ffffff"))));
+			console.log("the arena is where it was:", lisp.exports.__ronto_alloc_mark() === mark);
+			""";
 
 	// A module whose sockets are its host's (--host-sockets): the tcp built-ins and the
 	// usocket shim over the glue's host half, here over node:net in place of connect()

@@ -482,9 +482,12 @@ final class ClojureCoreLowering {
 			case "compile":
 				return refusedCall(ctx, items,
 						"compile is not supported yet: namespaces compile ahead of time, never at run time");
-			case "bean", "supers", "bases":
+			case "bean":
 				return refusedCall(ctx, items,
-						name + " is not supported yet: host classes are not answered on every backend");
+						"bean is not supported yet: host classes are not answered on every backend");
+			case "supers", "bases":
+				arity(name, n, 1, 1);
+				return worker(name, ctx.lower(items.get(1)));
 			case "clojure-version":
 				return refusedCall(ctx, items, "clojure-version is not supported yet: no release of Clojure runs here");
 			case "destructure":
@@ -767,8 +770,8 @@ final class ClojureCoreLowering {
 			case "read-string", "read" -> ClojureReadLowering.valueOf(ctx, name);
 			case "compile" ->
 				refusedValue("compile is not supported yet: namespaces compile ahead of time, never at run time");
-			case "bean", "supers", "bases" ->
-				refusedValue(name + " is not supported yet: host classes are not answered on every backend");
+			case "bean" -> refusedValue("bean is not supported yet: host classes are not answered on every backend");
+			case "supers", "bases" -> ClojureLowerUtil.list(ClojureLowerUtil.sym("function"), runtime(name + "-v"));
 			case "clojure-version" ->
 				refusedValue("clojure-version is not supported yet: no release of Clojure runs here");
 			case "destructure" -> ClojureCoreMacros.destructureValue(ctx);
@@ -1312,6 +1315,18 @@ final class ClojureCoreLowering {
 		ctx.usedProtocols = true;
 		return worker("cast", ctx.lower(classDatum), ctx.lower(valueDatum));
 	}
+
+	/** {@code supers}' call: a set of class values ({@code clojure.lisp}). */
+	static final String SUPERS = "RONTOLISP::%CLOJURE-SUPERS";
+
+	/** {@code supers} as a value. */
+	static final String SUPERS_V = "RONTOLISP::%CLOJURE-SUPERS-V";
+
+	/** {@code bases}' call: a seq of class values ({@code clojure.lisp}). */
+	static final String BASES = "RONTOLISP::%CLOJURE-BASES";
+
+	/** {@code bases} as a value. */
+	static final String BASES_V = "RONTOLISP::%CLOJURE-BASES-V";
 
 	private static LispVal worker(String name, LispVal... args) {
 		List<LispVal> out = new ArrayList<>();

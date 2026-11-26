@@ -278,6 +278,13 @@ canonical ABI での値の持ち上げと引き下げはグルー自身が行う
 
 ホストは promise で答えてよいので、グルーが同期的に答えるもの(解放と `wasi:keyvalue` の `open`)を除くこれらのインポートは、サスペンドしうるインポートとして扱います。モジュールは重なった呼び出しを拒否し、ホストがエントリを 1 つでもマークするとすべてのエクスポートが `promising` 経由になり、モジュールのロード経路から到達できる呼び出しは、`:async t` のインポートと同じくコンパイルエラーです。
 
+逆向きも同じです。このような型を持つ関数の world を [`rontolisp:wit-export`](../reference/functions/rontolisp-wit-export.md#compound-types) でエクスポートすると、canonical ABI のコアの値を受け取るコアのエクスポートになります。グルーはそのエントリポイントをラベルの camelCase の名前で用意し、上の JavaScript の値で呼ぶと JavaScript の値で答えます。引数の配置と答えの読み出しは、呼び出しの割り当ての括弧の中で行います。結果が `result` なら ok の値を返し、エラー側は `WitError` として投げます。
+
+```js
+const lisp = instantiate(module);
+lisp.flip({ x: 1, y: 2 }); // { x: 2, y: 1 }
+```
+
 #### Workers KV で答える `wasi:keyvalue`
 
 `wasi:keyvalue/store@0.2.0-draft2` と `wasi:keyvalue/batch@0.2.0-draft2` には、グルー自身が答えます。`defaultHost()` が各メンバーを Workers KV の名前空間の上で実装し、`worker(module)` が Worker のバインディングをそこに渡すので、状態を `wasi:keyvalue` に置くプログラムは、手で何も書かずに Worker になります。デフォルトのストア(`""`)はバインディング `KEYVALUE`、それ以外の識別子は同じ名前のバインディングです。`worker(module, { keyvalue: { "": "SESSIONS" } })` のように、識別子を別のバインディング名にも、名前空間そのもの(node のホストが用意したものなど)にも対応づけられます。KV の名前空間を指さない識別子は `error::no-such-store` に、失敗した KV の呼び出しはそのメッセージを持つ `error::other` になります。

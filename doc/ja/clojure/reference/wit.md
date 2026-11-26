@@ -146,5 +146,6 @@ error: app.clj:4:1: feed of example:geo/api@0.1.0 takes option<stream<u8>> (para
 インポートは `u8` 以外のリストの引数を除くすべての行を渡せます。コンポーネントの
 エクスポートはハンドルを除くすべての行を渡せ、型がハンドル、ストリーム、
 フューチャーに届く world は WIT の行で拒否します。
-WASM コアモジュールと `--no-gc` のエクスポートを渡れる型は整数、`f64`、`bool`、`string` です
+`--no-wasi` のモジュールのエクスポートも、`--emit-js-glue` のグルーを通して、フラグを除く同じ型を渡せます。
+WASI モジュールと `--no-gc` のエクスポートを渡れる型は整数、`f64`、`bool`、`string` です
 （[`rontolisp:wit-export`](../../reference/functions/rontolisp-wit-export.md#compound-types)）。

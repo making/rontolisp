@@ -15,11 +15,11 @@ import am.ik.wit.WitType;
 import org.jspecify.annotations.Nullable;
 
 /**
- * A {@code --no-wasi} module's canonical-ABI imports as the JavaScript glue lifts and
- * lowers them: each import's parameters and result as {@link CanonicalLayout}s, computed
- * by the layout calculator the module's own marshalling wrappers use
- * ({@link WitCanonicalAbi}), so the glue's offsets, sizes and discriminants are the
- * wrappers'.
+ * A {@code --no-wasi} module's canonical-ABI imports and exports as the JavaScript glue
+ * lifts and lowers them: each function's parameters and result as
+ * {@link CanonicalLayout}s, computed by the layout calculator the module's own
+ * marshalling wrappers use ({@link WitCanonicalAbi}), so the glue's offsets, sizes and
+ * discriminants are the wrappers'.
  */
 final class WitGlueLayouts {
 
@@ -56,6 +56,33 @@ final class WitGlueLayouts {
 	}
 
 	/**
+	 * The glue's view of a canonical export: what the glue lowers a JavaScript caller's
+	 * arguments by and lifts the module's answer by.
+	 * @param signature the export's WIT function
+	 * @return its export as the glue sees it
+	 */
+	static HostGlueEmitter.WitExport of(WitExportSignature signature) {
+		WitCanonicalAbi abi = signature.abi();
+		List<CanonicalLayout> params = new ArrayList<>();
+		List<WitType> types = new ArrayList<>();
+		List<String> declared = new ArrayList<>();
+		for (var param : signature.func().params()) {
+			params.add(layout(abi, param.type()));
+			types.add(param.type());
+			declared.add(param.name() + ": " + WitPrinter.type(param.type()));
+		}
+		WitType result = signature.func().result();
+		String written = "func(" + String.join(", ", declared) + ")"
+				+ (result == null ? "" : " -> " + WitPrinter.type(result));
+		boolean raises = result != null && abi.resolveAliases(result).type() instanceof WitType.ResultOf;
+		// Past 16 flats the parameters cross as one tuple in memory, laid out as the
+		// tuple of their types is.
+		CanonicalLayout spilled = signature.spilledParams() ? fields("tuple", abi, new WitType.TupleOf(types)) : null;
+		return new HostGlueEmitter.WitExport(written, signature.paramNames(), List.copyOf(params), spilled,
+				result == null ? null : layout(abi, result), signature.indirectResult(), raises);
+	}
+
+	/**
 	 * The glue's view of a resource's release.
 	 * @param drop the binding
 	 * @return its import as the glue sees it
@@ -85,8 +112,8 @@ final class WitGlueLayouts {
 				case WitItem.EnumDef ignored -> cases("enum", in, t);
 				case WitItem.ResourceDef ignored -> new CanonicalLayout.Handle(resource(in, named.name()), true);
 				case WitItem.FlagsDef ignored -> throw new UnsupportedOperationException("the flags '" + named.name()
-						+ "' do not cross a --no-wasi module's canonical-ABI import: its JavaScript glue has no value "
-						+ "for flags (a component carries them: --component)");
+						+ "' do not cross a --no-wasi module's canonical ABI: its JavaScript glue has no value for "
+						+ "flags (a component carries them: --component)");
 				default -> throw unsupported(named.name());
 			};
 			default -> throw unsupported(WitPrinter.type(t));
@@ -132,7 +159,7 @@ final class WitGlueLayouts {
 
 	private static UnsupportedOperationException unsupported(String what) {
 		return new UnsupportedOperationException(
-				"the WIT type '" + what + "' does not cross a --no-wasi module's canonical-ABI import");
+				"the WIT type '" + what + "' does not cross a --no-wasi module's canonical-ABI boundary");
 	}
 
 }

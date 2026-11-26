@@ -1018,7 +1018,9 @@ public final class ClojureArms {
 				Set.of(ClojureDispatchLowering.DISPATCH_KIND),
 				Map.of(ClojurePredicateLowering.IS_CLASS, "RONTOLISP::%CLOJURE-HOST-INSTANCE-P"),
 				Set.of(":C%CLASS", ClojureDispatchLowering.CLASS_OF, ClojureInteropLowering.CLASS_VALUE,
-						ClojureProtocolLowering.INTERFACE_CLASS),
+						ClojureProtocolLowering.INTERFACE_CLASS, ClojureValueMethodLowering.FN_CLASS,
+						ClojureCoreLowering.SUPERS, ClojureCoreLowering.SUPERS_V, ClojureCoreLowering.BASES,
+						ClojureCoreLowering.BASES_V),
 				Set.of()),
 
 		/**
@@ -1045,14 +1047,31 @@ public final class ClojureArms {
 
 		/**
 		 * A fn's class name, the oracle's {@code ns$name} for a var's function: only
-		 * {@code .getClass} of a fn reads it
-		 * ({@link ClojureValueMethodLowering#FN_CLASS_NAME}). The statements register a
-		 * {@code defn}'s function, and a {@code def}'s whose value is a fn literal,
-		 * beside the definition; a program reading no fn's class sheds them.
+		 * {@code class} of a fn reads it ({@link ClojureDispatchLowering#CLASS_OF},
+		 * {@link ClojureValueMethodLowering#FN_CLASS_NAME},
+		 * {@link ClojureValueMethodLowering#FN_CLASS}), {@code .getClass} through
+		 * {@code class}. The statements register a {@code defn}'s function, and a
+		 * {@code def}'s whose value is a fn literal, beside the definition; a program
+		 * reading no fn's class sheds them.
 		 */
-		FN_CLASS("fn-class", Set.of(), Set.of(), Map.of(), Set.of(ClojureValueMethodLowering.FN_CLASS_NAME), Set.of(),
-				false, Set.of(), Set.of(), Set.of(), Map.of(), Map.of(),
+		FN_CLASS("fn-class", Set.of(), Set.of(), Map.of(),
+				Set.of(ClojureValueMethodLowering.FN_CLASS_NAME, ClojureValueMethodLowering.FN_CLASS,
+						ClojureDispatchLowering.CLASS_OF),
+				Set.of(), false, Set.of(), Set.of(), Set.of(), Map.of(), Map.of(),
 				Set.of(ClojureValueMethodLowering.NOTE_FN_CLASS), null, null, Set.of()),
+
+		/**
+		 * The bases of a record's or deftype's class: only {@code supers} and
+		 * {@code bases} read them ({@link ClojureCoreLowering#SUPERS},
+		 * {@link ClojureCoreLowering#BASES}). The statement notes them beside the type's
+		 * definition ({@link ClojureProtocolLowering#NOTE_TYPE_BASES}); a program reading
+		 * neither sheds it.
+		 */
+		TYPE_BASES("type-bases", Set.of(), Set.of(), Map.of(),
+				Set.of(ClojureCoreLowering.SUPERS, ClojureCoreLowering.SUPERS_V, ClojureCoreLowering.BASES,
+						ClojureCoreLowering.BASES_V),
+				Set.of(), false, Set.of(), Set.of(), Set.of(), Map.of(), Map.of(),
+				Set.of(ClojureProtocolLowering.NOTE_TYPE_BASES), null, null, Set.of()),
 
 		/**
 		 * A byte array, which the printer, {@code str}, {@code class}, the seq view,
@@ -2032,26 +2051,28 @@ public final class ClojureArms {
 
 	/**
 	 * Whether the statement weighs nothing in a namespace's init: a switch
-	 * ({@link #isSwitch}) or a fn-class registration ({@link Family#FN_CLASS}), each of
-	 * which a program may shed.
+	 * ({@link #isSwitch}), a fn-class registration ({@link Family#FN_CLASS}) or a type's
+	 * bases ({@link Family#TYPE_BASES}), each of which a program may shed.
 	 * @param statement a lowered statement
 	 * @return {@code true} for a statement that joins the chunk at hand
 	 */
 	static boolean weighsNothing(LispVal statement) {
-		return isSwitch(statement) || isStatementArm(statement, Family.FN_CLASS);
+		return isSwitch(statement) || isStatementArm(statement, Family.FN_CLASS)
+				|| isStatementArm(statement, Family.TYPE_BASES);
 	}
 
 	/**
-	 * A statement as a program reading none of the switched specials and no fn's class
-	 * compiles it: every switch ({@link Family#switches}) and every fn-class registration
-	 * ({@link Family#FN_CLASS}) in it folded away, what it weighs in a namespace's init.
+	 * A statement as a program reading none of the switched specials, no fn's class and
+	 * no type's bases compiles it: every switch ({@link Family#switches}), fn-class
+	 * registration ({@link Family#FN_CLASS}) and type's bases ({@link Family#TYPE_BASES})
+	 * in it folded away, what it weighs in a namespace's init.
 	 * @param statement a lowered statement, itself no switch
 	 * @return the statement without its switches and registrations
 	 */
 	static LispVal withoutSwitches(LispVal statement) {
 		LispVal out = statement;
 		for (Family family : Family.values()) {
-			if (!family.switches.isEmpty() || family == Family.FN_CLASS) {
+			if (!family.switches.isEmpty() || family == Family.FN_CLASS || family == Family.TYPE_BASES) {
 				out = new Stripper(family).walkCode(out);
 			}
 		}

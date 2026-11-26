@@ -6489,13 +6489,22 @@ public final class WasmLispCompiler implements LispCompiler {
 							+ "' declares :bytes, a core-module (Preview 1 / --no-wasi) boundary type; the"
 							+ " --component path does not lift it yet");
 				}
-				// A canonical export's types are a component's: a core module's export
-				// is a function of core values, with no type to say a record by.
+				// A canonical export's types are a component's, or a --no-wasi module's,
+				// whose glue lifts and lowers them in JavaScript: a WASI module's host
+				// calls a core export with core values, which say no record.
 				WitExportSignature wit = decl.wit();
-				if (wit != null && !this.component) {
+				if (wit != null && !this.component && !this.noWasi) {
 					throw new UnsupportedOperationException(wit.at() + ": export '" + decl.exportName()
-							+ "' carries a type only a component's export does (--component); a core module exports "
-							+ "the flat types alone (" + BoundaryType.witNames() + ")");
+							+ "' carries a type only a component's export does (--component), or a --no-wasi module's"
+							+ " through its --emit-js-glue glue; a WASI module exports the flat types alone ("
+							+ BoundaryType.witNames() + ")");
+				}
+				// What the result stages stays until the glue has lifted it, under the
+				// call's bracket, which overlapped calls would share.
+				if (wit != null && this.reentrant) {
+					throw new UnsupportedOperationException(wit.at() + ": export '" + decl.exportName()
+							+ "' carries a type the flat set does not, whose answer stays on the bump heap until the"
+							+ " glue has read it, which overlapped calls would share; drop --reentrant");
 				}
 				if (this.component && !this.serve) {
 					if (!WasmExportCompiler.COMPONENT_EXPORT_NAME.matcher(decl.exportName()).matches()) {
@@ -6549,11 +6558,12 @@ public final class WasmLispCompiler implements LispCompiler {
 				List<Type> scratch = pools == null ? WasmExportCompiler.scratchTypes(decl) : pools.types();
 				wrapperCtx.nextLocal = paramSlots + scratch.size();
 				// What a canonical result stages is released by the post-return of the
-				// core's own cabi_realloc, the first function behind the wrappers.
+				// core's own cabi_realloc, the first function behind the wrappers; a
+				// core module's glue pops it with the call's bracket.
 				WasmComponentImportCompiler.ExportMarshal marshal = pools == null ? null
 						: WasmComponentImportCompiler.exportMarshal(wrapperCtx, decl, pools, allocFuncIndex,
 								strFromMemFuncIndex, bytesFromMemFuncIndex,
-								exportHelperBase + helperFuncCount + exportDecls.size());
+								this.component ? exportHelperBase + helperFuncCount + exportDecls.size() : -1);
 				WasmExportCompiler.emitBody(wrapperCtx, decl, target.callIndex(), strFromMemFuncIndex,
 						bytesFromMemFuncIndex, bytesCopyFuncIndex, marshal);
 				exportBodies.add(assembleEntry(wrapperCtx, scratch, wrapperCtx.nextLocal - paramSlots - scratch.size(),
@@ -6616,8 +6626,8 @@ public final class WasmLispCompiler implements LispCompiler {
 				boolean promising = hostMaySuspend && (hostTimer || anySuspendingImportEscapes
 						|| maySuspend.containsKey(decl.name())
 						|| SuspendingImports.reaches(program, maySuspend.keySet(), this.hostFetch, decl.name()));
-				glueExports.add(
-						new HostGlueEmitter.Export(decl.exportName(), decl.paramTypes(), decl.returnType(), promising));
+				glueExports.add(new HostGlueEmitter.Export(decl.exportName(), decl.paramTypes(), decl.returnType(),
+						promising, decl.wit() == null ? null : WitGlueLayouts.of(decl.wit())));
 			}
 			// The two halves of this boundary the glue can WRITE rather than ask for --
 			// both read off the imports that are here, never off a flag threaded down,

@@ -41,6 +41,8 @@
 | `instance?` | `(instance? String "a")` | `true` |
 | `class` | `(class "a")` | `:string` |
 | `type` | `(type (with-meta [] {:type :a}))` | `:a` |
+| `supers` | `(count (supers Long))` | `6` |
+| `bases` | `(bases Object)` | `nil` |
 | `int` | `(int 2.7)` | `2` |
 | `long` | `(long -2.7)` | `-2` |
 | `double` | `(double 1)` | `1.0` |

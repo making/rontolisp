@@ -469,8 +469,9 @@ Conformance is partial by design. Where behavior departs from the Clojure oracle
   oracle's stays lazy and stops at the bound; `print-dup` of a record or a queue prints as
   `pr` prints it, where the oracle prints its `toString`.
 - `class` answers the oracle's class but where a value here stands for several of the
-  oracle's ([class](reference/class.md)): every function is a `clojure.lang.AFunction`,
-  every seq that is no lazy seq a `clojure.lang.PersistentList`, a two-member vector a
+  oracle's ([class](reference/class.md)): a function's is the class the oracle compiles it
+  to, but an anonymous fn's is one class, `clojure.lang.AFunction$fn`, and a variadic fn's
+  extends `AFunction` (the oracle's `RestFn`), every seq that is no lazy seq a `clojure.lang.PersistentList`, a two-member vector a
   `PersistentVector`, a typed array a `PersistentVector`, `1N` a `Long` (it reads as a
   plain integer). The class is a `java.lang.Class` on the interpreter and in a JVM program
   using Java interop, a `clojure.lang` class there one defined with the oracle's name,
@@ -543,12 +544,12 @@ Conformance is partial by design. Where behavior departs from the Clojure oracle
   failed one's `:val` the exception's report where the oracle prints its `#error` map, and `str`
   answers `clojure.lang.Delay` (the oracle's `clojure.lang.Delay@hash`).
 - An instance call on a collection, keyword, symbol, ratio, atom or fn answers through the core
-  functions and shares their deviations (`.getClass` answers what `class` does, but of a fn: the
-  class the oracle compiles it to, whose `.getName` is a core function's `clojure.core$name`, a
-  `defn`'s or a `def`'d fn literal's `ns$name`, and any other fn's that of an anonymous fn,
-  `clojure.lang.AFunction$fn`, where the oracle spells the enclosing function and a named
-  `fn`'s name in it; a `defn` inside another form is `ns$name` too, the oracle's
-  `ns$eval123$name__124`). A method of a
+  functions and shares their deviations (`.getClass` answers what `class` does; a fn's class
+  is the class the oracle compiles it to, whose `.getName` is a core function's
+  `clojure.core$name`, a `defn`'s or a `def`'d fn literal's `ns$name`, and any other fn's that
+  of an anonymous fn, `clojure.lang.AFunction$fn`, where the oracle spells the enclosing
+  function and a named `fn`'s name in it; a `defn` inside another form is `ns$name` too, the
+  oracle's `ns$eval123$name__124`). A method of a
   JDK interface the oracle's class implements (`.toArray`) is refused on the wasm backends as
   `Method m taking N args is not supported for class C`, and so is, on every backend, a method
   the oracle's class may have that nothing here answers (`.reduce`, `.meta`, an atom's

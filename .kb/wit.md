@@ -182,6 +182,9 @@ LOWERED as an import's argument is, by the one generator (`WasmComponentImportCo
   nothing and leaves the heap top 8-aligned (an intern leaves it anywhere: "The alignment trap").
   Measured 2026-11-26, wasmtime 51: 9,000,000 calls of list / record / string exports from a
   composed Lisp command under `-W max-memory-size=48MiB`, no growth.
+  A `--no-wasi` module has no `cabi_realloc`: the area comes from `__ronto_alloc` behind the
+  staging prologue's 8-aligned heap top, and the glue's mark/reset bracket pops it after the
+  lift (`exportMarshal(..., -1)`).
 - **A `result` at the top of the answer is the provider's mapping**: the function returns the ok
   arm and signals `rontolisp:wit-error` for the error arm. `lower` writes a defun
   `<f>%wit-export` making the envelope (`handler-case` only in a program that holds wit.lisp, so
@@ -203,16 +206,19 @@ LOWERED as an import's argument is, by the one generator (`WasmComponentImportCo
   twice is set once; a lift answers label order (so a function that conses a label onto the
   front answers another order in process than through the boundary -- `examples/wit/shapes`'
   `embolden` appends). The Clojure and Java tiers convert already (a set, a `Set` of a member
-  enum) and cross a component with nothing added. Not a `--no-wasi` core module: its
-  JavaScript glue has no value (`.todo/m92`).
+  enum) and cross a component with nothing added. Not a `--no-wasi` core module, either way:
+  its JavaScript glue has no value (`WitGlueLayouts.layout` refuses, `.todo/m92`).
 - **Refused at the WIT line** (`requireCanonical`): a resource handle, a stream, a future, a
   compound type in an `async func` (`.todo/m90`), an interface declaring a resource
-  (`.todo/m91`); `--no-gc`, which has no value a record could be (no cons); a core module
-  (Preview 1, `--no-wasi`), in the compiler, which knows the output's shape (`.todo/m79`).
-  `describe` (the front ends) answers a compound type's whole shape (`WitTypeMapper.shape`, as
-  an import member's) after these refusals -- all but `--no-gc`'s and a core module's, which
-  need the output; a flat type keeps its primitive shape. The Java subset still refuses a
-  compound export itself (`JavaHostBoundary.requireFlat`, `.todo/m80`).
+  (`.todo/m91`); `--no-gc`, which has no value a record could be (no cons). In the compiler,
+  which knows the output's shape: a WASI Preview 1 module (its host, wasmtime, calls a core
+  export with core values) and `--reentrant` (the answer waits on the bump heap for the glue).
+  A `--no-wasi` module exports them through `--emit-js-glue` ([wasm-import.md](wasm-import.md),
+  "A WIT interface beyond the flat set"). `describe` (the front ends) answers a compound type's
+  whole shape (`WitTypeMapper.shape`, as an import member's) after these refusals -- all but
+  `--no-gc`'s and a Preview 1 module's, which need the output; a flat type keeps its primitive
+  shape. The Java subset still refuses a compound export itself (`JavaHostBoundary.requireFlat`,
+  `.todo/m80`).
 - `:envelope t` on the directive: a top-level `result`'s function answers the envelope itself,
   so `lower` writes no `<f>%wit-export`. The Clojure lowering passes it: its wrapper makes the
   envelope from an `ex-info` (one catch, no wit.lisp; [clojure-frontend.md](clojure-frontend.md),

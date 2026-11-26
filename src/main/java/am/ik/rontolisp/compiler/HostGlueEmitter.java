@@ -90,8 +90,43 @@ public final class HostGlueEmitter {
 	 * @param returnType the declared result type ({@link BoundaryType#VOID} for none)
 	 * @param promising whether a call chain from it can reach an import the host may
 	 * suspend, i.e. whether it has to be entered through {@code WebAssembly.promising}
+	 * @param wit the WIT function of an export through the canonical ABI, whose types
+	 * this file lowers and lifts (the declared types are then empty), or {@code null}
 	 */
-	public record Export(String exportName, List<BoundaryType> paramTypes, BoundaryType returnType, boolean promising) {
+	public record Export(String exportName, List<BoundaryType> paramTypes, BoundaryType returnType, boolean promising,
+			@Nullable WitExport wit) {
+
+		/**
+		 * An export of the flat set.
+		 * @param exportName the WASM export name
+		 * @param paramTypes the declared parameter types, in order
+		 * @param returnType the declared result type
+		 * @param promising whether it has to be entered through
+		 * {@code WebAssembly.promising}
+		 */
+		public Export(String exportName, List<BoundaryType> paramTypes, BoundaryType returnType, boolean promising) {
+			this(exportName, paramTypes, returnType, promising, null);
+		}
+
+	}
+
+	/**
+	 * One export a {@code --no-wasi} module makes through the canonical ABI: its caller's
+	 * JavaScript values, by the conventions of {@link WitImport}, are lowered into core
+	 * values and linear memory here, and its answer lifted back.
+	 *
+	 * @param signature the WIT function as the world declares it
+	 * @param paramNames the parameters' WIT names
+	 * @param params the parameters' layouts, in the same order
+	 * @param spilled the layout of the tuple of every parameter, when they flatten past
+	 * sixteen core values and cross as one pointer to it; {@code null} otherwise
+	 * @param result the result's layout, or {@code null} for none
+	 * @param retptr whether the module answers a pointer to the result in memory
+	 * @param raises whether the result is a {@code result}: the caller is answered its ok
+	 * value, and its error arm thrown as a {@code WitError}
+	 */
+	public record WitExport(String signature, List<String> paramNames, List<CanonicalLayout> params,
+			@Nullable CanonicalLayout spilled, @Nullable CanonicalLayout result, boolean retptr, boolean raises) {
 	}
 
 	/**
@@ -333,7 +368,8 @@ public final class HostGlueEmitter {
 					}
 					""");
 		}
-		if (surface.witImports().stream().anyMatch(WitImport::raises)) {
+		if (surface.witImports().stream().anyMatch(WitImport::raises)
+				|| witExports(surface).stream().anyMatch(WitExport::raises)) {
 			out.append("""
 
 					/**
@@ -628,6 +664,10 @@ public final class HostGlueEmitter {
 
 	private static String callSketch(Export export) {
 		List<String> params = new ArrayList<>();
+		if (export.wit() != null) {
+			export.wit().paramNames().forEach(name -> params.add(jsName(name)));
+			return String.join(", ", params);
+		}
 		for (int i = 0; i < export.paramTypes().size(); i++) {
 			params.add(jsValueName(export.paramTypes().get(i), i));
 		}
@@ -2427,6 +2467,9 @@ public final class HostGlueEmitter {
 		Map<String, List<Import>> groups = surface.byModule();
 		Map<String, List<WitImport>> witGroups = witByModule(surface);
 		if (groups.isEmpty() && witGroups.isEmpty()) {
+			if (!witExports(surface).isEmpty()) {
+				canonicalAbi(out, surface);
+			}
 			out.append("""
 
 					  // This module imports nothing: instantiating it is the whole boundary.
@@ -2437,7 +2480,7 @@ public final class HostGlueEmitter {
 		if (surface.needsHost()) {
 			hostPlumbing(out, surface);
 		}
-		if (!witGroups.isEmpty()) {
+		if (!witGroups.isEmpty() || !witExports(surface).isEmpty()) {
 			canonicalAbi(out, surface);
 		}
 		if (surface.output() != null) {
@@ -2501,7 +2544,27 @@ public final class HostGlueEmitter {
 				}
 			}
 		}
+		for (WitExport export : witExports(surface)) {
+			export.params().forEach(layout -> nameLayout(layout, names));
+			if (export.spilled() != null) {
+				nameLayout(export.spilled(), names);
+			}
+			if (export.result() != null) {
+				nameLayout(export.result(), names);
+			}
+		}
 		return names;
+	}
+
+	// The exports through the canonical ABI, in declaration order.
+	private static List<WitExport> witExports(Surface surface) {
+		List<WitExport> exports = new ArrayList<>();
+		for (Export export : surface.exports()) {
+			if (export.wit() != null) {
+				exports.add(export.wit());
+			}
+		}
+		return exports;
 	}
 
 	private static void nameLayout(CanonicalLayout layout, Map<CanonicalLayout, String> names) {
@@ -2898,41 +2961,49 @@ public final class HostGlueEmitter {
 						        return (toCore[t.k] ?? ((v) => Number(v) | 0))(value);
 						    }
 						  };
-
-						  // One WIT function the host answers: the core values in, the host handed its
-						  // JavaScript arguments, its answer lowered -- into the return area the module
-						  // passed last when the result is more than one core value. A result's ok arm
-						  // is the answer, its error arm a WitError the host throws; anything else it
-						  // throws traps the call, as a failed import does.
-						  const lifted = (what, call, params, result, retptr, raises) =>
-						    (...core) => {
-						      let at = 0;
-						      const next = () => core[at++];
-						      const args = params.map((t) => liftFlat(t, next));
-						      const area = retptr ? core[core.length - 1] >>> 0 : 0;
-						      const answer = (value) =>
-						        retptr ? store(result, value, area) : result === null ? undefined : lowerFlat(result, value);
-						      const ok = raises ? (value) => answer({ tag: "ok", val: value }) : answer;
-						      const failed = (error) => {
-						        if (raises && error instanceof WitError) return answer({ tag: "err", val: error.payload });
-						        throw error;
-						      };
-						      let value;
-						      try {
-						        value = call(...args);
-						      } catch (error) {
-						        return failed(error);
-						      }
-						      if (typeof value?.then === "function") {
-						        if (!marked.has(what)) {
-						          console.error(unmarked(what));
-						          throw new TypeError(unmarked(what));
-						        }
-						        return value.then(ok, failed);
-						      }
-						      return ok(value);
-						    };
 						""");
+		if (!surface.witImports().isEmpty()) {
+			out.append(
+					"""
+
+							  // One WIT function the host answers: the core values in, the host handed its
+							  // JavaScript arguments, its answer lowered -- into the return area the module
+							  // passed last when the result is more than one core value. A result's ok arm
+							  // is the answer, its error arm a WitError the host throws; anything else it
+							  // throws traps the call, as a failed import does.
+							  const lifted = (what, call, params, result, retptr, raises) =>
+							    (...core) => {
+							      let at = 0;
+							      const next = () => core[at++];
+							      const args = params.map((t) => liftFlat(t, next));
+							      const area = retptr ? core[core.length - 1] >>> 0 : 0;
+							      const answer = (value) =>
+							        retptr ? store(result, value, area) : result === null ? undefined : lowerFlat(result, value);
+							      const ok = raises ? (value) => answer({ tag: "ok", val: value }) : answer;
+							      const failed = (error) => {
+							        if (raises && error instanceof WitError) return answer({ tag: "err", val: error.payload });
+							        throw error;
+							      };
+							      let value;
+							      try {
+							        value = call(...args);
+							      } catch (error) {
+							        return failed(error);
+							      }
+							      if (typeof value?.then === "function") {
+							        if (!marked.has(what)) {
+							          console.error(unmarked(what));
+							          throw new TypeError(unmarked(what));
+							        }
+							        return value.then(ok, failed);
+							      }
+							      return ok(value);
+							    };
+							""");
+		}
+		if (!witExports(surface).isEmpty()) {
+			exported(out, surface);
+		}
 		Map<CanonicalLayout, String> layouts = layoutNames(surface);
 		out.append("\n  // The layouts of the WIT types crossing here, one per distinct type.\n");
 		for (Map.Entry<CanonicalLayout, String> layout : layouts.entrySet()) {
@@ -2941,6 +3012,99 @@ public final class HostGlueEmitter {
 				.append(" = ")
 				.append(descriptor(layout.getKey(), layouts))
 				.append(";\n");
+		}
+	}
+
+	// The canonical ABI the other way, for the module's exports: the caller's values
+	// lowered into core values, the module's answer lifted back.
+	private static void exported(StringBuilder out, Surface surface) {
+		out.append(
+				"""
+
+						  // One WIT function the module exports: the caller's JavaScript arguments
+						  // lowered into core values -- past sixteen, into one tuple in memory -- and the
+						  // answer lifted out of the core value or the area it points at, before the
+						  // call's bracket pops what both staged. A value's core values are pushed with
+						  // their types, so a case's payload is widened into the types its variant
+						  // joins them to.
+						  const widen = (have, want, value) => {
+						    if (have === want) return value;
+						    if (have === "i32") return BigInt(value >>> 0);
+						    if (have === "f64") {
+						      bits.setFloat64(0, value, true);
+						      return bits.getBigInt64(0, true);
+						    }
+						    bits.setFloat32(0, value, true);
+						    return want === "i64" ? BigInt(bits.getUint32(0, true)) : bits.getInt32(0, true);
+						  };
+						  const lowerFlats = (t, value, push) => {
+						    switch (t.k) {
+						      case "string":
+						      case "bytes": {
+						        const octets = t.k === "string" ? encoder.encode(String(value)) : octetsOf(value);
+						        const at = alloc(octets.length, 1);
+						        new Uint8Array(exports.memory.buffer, at, octets.length).set(octets);
+						        push("i32", at);
+						        push("i32", octets.length);
+						        return;
+						      }
+						      case "list": {
+						        const items = [...value];
+						        const at = alloc(items.length * t.of.s, t.of.a);
+						        items.forEach((item, i) => store(t.of, item, at + i * t.of.s));
+						        push("i32", at);
+						        push("i32", items.length);
+						        return;
+						      }
+						      case "record":
+						        t.f.forEach((key, i) => lowerFlats(t.of[i], value[key], push));
+						        return;
+						      case "tuple":
+						        t.of.forEach((field, i) => lowerFlats(field, value[i], push));
+						        return;
+						      case "option":
+						      case "enum":
+						      case "result":
+						      case "variant": {
+						        const index = caseIndex(t, value);
+						        const payload = [];
+						        if (t.of[index] !== null) {
+						          lowerFlats(t.of[index], t.k === "option" ? value : value.val, (have, v) => payload.push([have, v]));
+						        }
+						        push("i32", index);
+						        t.fl.slice(1).forEach((want, i) =>
+						          push(want, i < payload.length ? widen(payload[i][0], want, payload[i][1]) : want === "i64" ? 0n : 0),
+						        );
+						        return;
+						      }
+						      default:
+						        push(coreOf[t.k] ?? "i32", lowerFlat(t, value));
+						    }
+						  };
+						  const exported = (params, spilled, result, retptr) => ({
+						    stage: (args) => {
+						      if (spilled !== null) {
+						        const at = alloc(spilled.s, spilled.a);
+						        store(spilled, args, at);
+						        return [at];
+						      }
+						      const core = [];
+						      params.forEach((t, i) => lowerFlats(t, args[i], (have, value) => core.push(value)));
+						      return core;
+						    },
+						    decode: (raw) =>
+						      result === null ? undefined : retptr ? load(result, raw >>> 0) : liftFlat(result, () => raw),
+						  });
+						""");
+		if (witExports(surface).stream().anyMatch(WitExport::raises)) {
+			out.append("""
+					  // A result's ok arm is the answer, its error arm a WitError -- thrown once the
+					  // call is over, so its staging is popped first.
+					  const settled = (value) => {
+					    if (value.tag === "err") throw new WitError(value.val);
+					    return value.val;
+					  };
+					""");
 		}
 	}
 
@@ -3888,6 +4052,10 @@ public final class HostGlueEmitter {
 	}
 
 	private static void entryPoint(StringBuilder out, Surface surface, Export export) {
+		if (export.wit() != null) {
+			witEntryPoint(out, surface, export, export.wit());
+			return;
+		}
 		List<String> params = new ArrayList<>();
 		List<String> staged = new ArrayList<>();
 		List<String> setup = new ArrayList<>();
@@ -3929,6 +4097,48 @@ public final class HostGlueEmitter {
 		}
 		out.append("          return [").append(String.join(", ", staged)).append("];\n        },\n        ");
 		out.append(exportResult(export.returnType(), surface.reentrant())).append(",\n      );\n    };\n\n");
+	}
+
+	// An export through the canonical ABI: its arguments staged and its answer decoded
+	// by the layouts, its error arm thrown after the call.
+	private static void witEntryPoint(StringBuilder out, Surface surface, Export export, WitExport wit) {
+		Map<CanonicalLayout, String> layouts = layoutNames(surface);
+		List<String> params = new ArrayList<>();
+		for (int i = 0; i < wit.params().size(); i++) {
+			params.add("p" + i);
+		}
+		String abi = "abi$" + jsName(export.exportName());
+		out.append("  /** `").append(export.exportName()).append("` -- ").append(wit.signature()).append(" */\n");
+		out.append("  const ")
+			.append(abi)
+			.append(" = exported([")
+			.append(String.join(", ", wit.params().stream().map(layouts::get).toList()))
+			.append("], ")
+			.append(wit.spilled() == null ? "null" : layouts.get(wit.spilled()))
+			.append(", ")
+			.append(wit.result() == null ? "null" : layouts.get(wit.result()))
+			.append(", ")
+			.append(wit.retptr())
+			.append(");\n");
+		out.append("  const ")
+			.append(factoryName(export))
+			.append(" =\n    (run) =>\n    (")
+			.append(String.join(", ", params))
+			.append(") => {\n      ")
+			.append(wit.raises() ? "const answer = call(" : "return call(")
+			.append("\n        run,\n        ")
+			.append(entryName(export))
+			.append(",\n        () => ")
+			.append(abi)
+			.append(".stage([")
+			.append(String.join(", ", params))
+			.append("]),\n        ")
+			.append(abi)
+			.append(".decode,\n      );\n");
+		if (wit.raises()) {
+			out.append("      return typeof answer?.then === \"function\" ? answer.then(settled) : settled(answer);\n");
+		}
+		out.append("    };\n\n");
 	}
 
 	// The mirror of the import side's read(2) shape: the CALLER passes the buffer, and an

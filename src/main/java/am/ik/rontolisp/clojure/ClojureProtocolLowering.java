@@ -1535,10 +1535,14 @@ final class ClojureProtocolLowering {
 
 	/**
 	 * A {@code reify}, {@code deftype} or {@code defrecord} body: its protocol groups, in
-	 * the order each protocol is first named (a protocol named twice is one group), and
-	 * its implementation of the host interfaces it names ({@link ClojureInterfaces}).
+	 * the order each protocol is first named (a protocol named twice is one group), its
+	 * implementation of the host interfaces it names ({@link ClojureInterfaces}), and the
+	 * binary names of the interfaces it names, protocols' and hosts' in the order first
+	 * named (the interfaces its class implements directly), and of those the program
+	 * defines (a protocol's, a {@code definterface}'s), which extend none.
 	 */
-	record TypeBody(List<ClojureLowering.ImplGroup> groups, ClojureInterfaces.InterfaceBody interfaces) {
+	record TypeBody(List<ClojureLowering.ImplGroup> groups, ClojureInterfaces.InterfaceBody interfaces,
+			List<String> named, List<String> defined) {
 	}
 
 	/**
@@ -1562,12 +1566,16 @@ final class ClojureProtocolLowering {
 		Map<String, ClojureLowering.ProtocolDef> protocols = new LinkedHashMap<>();
 		List<ClojureInterfaces.HostInterface> named = new ArrayList<>();
 		Map<String, List<ClojureLowering.TypeMethod>> byProtocol = new LinkedHashMap<>();
+		Set<String> direct = new LinkedHashSet<>();
+		Set<String> own = new LinkedHashSet<>();
 		for (LispVal datum : rest) {
 			if (datum instanceof LispSymbol s && !s.name().startsWith(":")) {
 				ClojureLowering.ProtocolDef def = protocolOf(ctx, s.name());
 				if (def != null) {
 					protocols.putIfAbsent(s.name(), def);
 					byProtocol.computeIfAbsent(s.name(), ignored -> new ArrayList<>());
+					direct.add(interfaceName(def.key()));
+					own.add(interfaceName(def.key()));
 					continue;
 				}
 				ClojureInterfaces.HostInterface defined = ClojureInterfaces.defined(ctx, s.name());
@@ -1575,12 +1583,17 @@ final class ClojureProtocolLowering {
 					if (!named.contains(defined)) {
 						named.add(defined);
 					}
+					direct.add(defined.name());
+					own.add(defined.name());
 					continue;
 				}
 				ClojureInterfaces.HostInterface one = ClojureInterfaces.resolve(ctx, s.name(), what);
 				ClojureInterfaces.checkNamed(what, one);
 				if (one != ClojureInterfaces.OBJECT_METHODS && !named.contains(one)) {
 					named.add(one);
+				}
+				if (one != ClojureInterfaces.OBJECT_METHODS) {
+					direct.add(one.name());
 				}
 			}
 		}
@@ -1642,7 +1655,7 @@ final class ClojureProtocolLowering {
 		ClojureInterfaces.InterfaceBody interfaces = closure.isEmpty() && interfaceMethods.isEmpty()
 				? ClojureInterfaces.InterfaceBody.EMPTY
 				: new ClojureInterfaces.InterfaceBody(closure, interfaceMethods);
-		return new TypeBody(groups, interfaces);
+		return new TypeBody(groups, interfaces, List.copyOf(direct), List.copyOf(own));
 	}
 
 	/** Whether the protocol declares the method at the parameter count. */
@@ -2068,6 +2081,7 @@ final class ClojureProtocolLowering {
 		for (String protocolKey : new TreeSet<>(def.protocols())) {
 			bodyProtocols.add(LispString.literal(protocolKey));
 		}
+		forms.add(typeBasesNote(ctx, def, body));
 		forms.add(ClojureLowerUtil.list(new LispSymbol(REGISTER_TAG), typeTagForm(def),
 				LispString.literal(def.className()), ctx.quote(ClojureLowerUtil.list(bodyProtocols))));
 		ctx.usedProtocols = true;
@@ -2309,6 +2323,42 @@ final class ClojureProtocolLowering {
 
 	/** The tag store ({@code clojure.lisp}), answering the tag. */
 	static final String REGISTER_TAG = "RONTOLISP::%CLOJURE-REGISTER-TYPE-TAG";
+
+	/**
+	 * The statement noting a type's bases ({@code clojure.lisp}), a statement of
+	 * {@link ClojureArms.Family#TYPE_BASES}.
+	 */
+	static final String NOTE_TYPE_BASES = "RONTOLISP::%CLOJURE-NOTE-TYPE-BASES";
+
+	/** What a record's class implements beside the interfaces its body names. */
+	private static final List<String> RECORD_INTERFACES = List.of("clojure.lang.IRecord", "clojure.lang.IHashEq",
+			"clojure.lang.IObj", "clojure.lang.ILookup", "clojure.lang.IKeywordLookup", "clojure.lang.IPersistentMap",
+			"java.util.Map", "java.io.Serializable");
+
+	/**
+	 * The statement noting the bases of a record's or deftype's class, the oracle's
+	 * {@code bases} of it (clj 1.12.6, 2026-11-26): {@code Object}, the interfaces its
+	 * body names, then {@link #RECORD_INTERFACES} for a record, {@code IType} for a
+	 * deftype. The oracle orders the body's interfaces by a hash set, so their order
+	 * here, the body's, is one it may answer. The interfaces the program defines follow,
+	 * whose bases are none.
+	 */
+	private static LispVal typeBasesNote(ClojureLowering ctx, ClojureLowering.TypeDef def, TypeBody body) {
+		Set<String> bases = new LinkedHashSet<>();
+		bases.add("java.lang.Object");
+		bases.addAll(body.named());
+		bases.addAll(def.record() ? RECORD_INTERFACES : List.of("clojure.lang.IType"));
+		List<LispVal> names = new ArrayList<>();
+		for (String base : bases) {
+			names.add(LispString.literal(base));
+		}
+		List<LispVal> defined = new ArrayList<>();
+		for (String name : body.defined()) {
+			defined.add(LispString.literal(name));
+		}
+		return ClojureLowerUtil.list(new LispSymbol(NOTE_TYPE_BASES), typeTagForm(def),
+				ctx.quote(ClojureLowerUtil.list(names)), ctx.quote(ClojureLowerUtil.list(defined)));
+	}
 
 	/** {@code satisfies?} of a protocol value ({@code clojure.lisp}). */
 	static final String SATISFIES_CALL = "RONTOLISP::%CLOJURE-SATISFIES";
