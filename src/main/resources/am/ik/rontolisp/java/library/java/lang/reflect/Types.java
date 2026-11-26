@@ -50,6 +50,10 @@ final class Types {
     // then answers with the types it erases to
     static native Object generic0(Class<?> holder, Object member, int what, Object declaration);
 
+    // new annotations written on a type parameter of a declaration of a class (member null),
+    // a method or a constructor (generic0), by its place, that may stand on one; null for none
+    static native Object variableAnnotations0(Class<?> holder, Object member, int index);
+
     static Type[] types(Object[] made) {
         Type[] taken = new Type[made == null ? 0 : made.length];
         for (int index = 0; index < taken.length; index++) {
@@ -79,6 +83,18 @@ final class Types {
             return taken;
         }
         return types((Object[]) made);
+    }
+
+    // the type of this in a class's instance methods: a parameterized type of its type
+    // variables where it or the class around an inner class has some, else the class
+    static Type self(Class<?> type) {
+        TypeVariable<?>[] variables = type.getTypeParameters();
+        Class<?> outer = rontolisp.internal.AnnotatedTypes.owner(type);
+        Type owner = outer == null ? null : rontolisp.internal.AnnotatedTypes.inner(type) ? self(outer) : outer;
+        if (variables.length == 0 && !(owner instanceof ParameterizedType)) {
+            return type;
+        }
+        return new Parameterized(type, owner, variables);
     }
 
     // whether bounds are Object's alone, which a text leaves out
@@ -283,6 +299,24 @@ final class Types {
 
         public Type[] getBounds() {
             return types((Object[]) generic0(holder, member, 10 + index, declaration));
+        }
+
+        public AnnotatedType[] getAnnotatedBounds() {
+            return rontolisp.internal.AnnotatedTypes.all(getBounds(),
+                    rontolisp.internal.AnnotatedTypes.annotated0(holder, member, 10 + index), 0);
+        }
+
+        public <T extends Annotation> T getAnnotation(Class<T> annotationClass) {
+            return getDeclaredAnnotation(annotationClass);
+        }
+
+        public Annotation[] getAnnotations() {
+            return getDeclaredAnnotations();
+        }
+
+        // the annotations written on its declaration that may stand on a type parameter
+        public Annotation[] getDeclaredAnnotations() {
+            return AccessibleObject.annotations(variableAnnotations0(holder, member, index));
         }
 
         public D getGenericDeclaration() {

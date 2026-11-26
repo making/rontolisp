@@ -49,6 +49,12 @@ public final class RecordComponent implements AnnotatedElement {
         return made != null ? (Type) made : type;
     }
 
+    // its type as the declaration names it, with the type annotations written in it
+    public AnnotatedType getAnnotatedType() {
+        return rontolisp.internal.AnnotatedTypes.of(getGenericType(),
+                rontolisp.internal.AnnotatedTypes.annotated0(declaring, name, 1));
+    }
+
     // the record's method answering the component
     public Method getAccessor() {
         try {

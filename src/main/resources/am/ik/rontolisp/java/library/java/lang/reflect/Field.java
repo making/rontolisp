@@ -109,6 +109,12 @@ public final class Field extends AccessibleObject implements Member {
         return made != null ? (Type) made : type;
     }
 
+    // its type as the declaration names it, with the type annotations written in it
+    public AnnotatedType getAnnotatedType() {
+        return rontolisp.internal.AnnotatedTypes.of(getGenericType(),
+                rontolisp.internal.AnnotatedTypes.annotated0(declaring, name, 1));
+    }
+
     public String toGenericString() {
         String written = Modifier.toString(flags & Modifier.fieldModifiers());
         return (written.isEmpty() ? "" : written + " ") + getGenericType().getTypeName() + " "

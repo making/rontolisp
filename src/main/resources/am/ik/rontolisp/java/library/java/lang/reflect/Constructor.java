@@ -77,6 +77,22 @@ public final class Constructor<T> extends Executable {
         return -1 - index;
     }
 
+    // the class it makes, with the type annotations written on the constructor
+    public AnnotatedType getAnnotatedReturnType() {
+        return rontolisp.internal.AnnotatedTypes.of(declaring,
+                rontolisp.internal.AnnotatedTypes.annotated0(declaring, member(), 1));
+    }
+
+    // the type of the instance around an inner member class's instance, with the
+    // annotations of the receiver parameter; none of any other class's
+    public AnnotatedType getAnnotatedReceiverType() {
+        if (!rontolisp.internal.AnnotatedTypes.inner(declaring)) {
+            return null;
+        }
+        return rontolisp.internal.AnnotatedTypes.of(Types.self(rontolisp.internal.AnnotatedTypes.owner(declaring)),
+                rontolisp.internal.AnnotatedTypes.annotated0(declaring, member(), 4));
+    }
+
     public TypeVariable<Constructor<T>>[] getTypeParameters() {
         return Types.variables(Types.generic0(declaring, -1 - index, 0, this));
     }

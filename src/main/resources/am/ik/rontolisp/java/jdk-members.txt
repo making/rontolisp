@@ -3264,6 +3264,9 @@ m 17 trySetAccessible boolean - -
 A @jdk.internal.reflect.CallerSensitive()
 k 4 - -
 A @java.lang.Deprecated(forRemoval=false, since="17")
+C java.lang.reflect.AnnotatedArrayType 1537 java.base - java.lang.reflect.AnnotatedType
+m 1025 getAnnotatedGenericComponentType java.lang.reflect.AnnotatedType - -
+m 1025 getAnnotatedOwnerType java.lang.reflect.AnnotatedType - -
 C java.lang.reflect.AnnotatedElement 1537 java.base - -
 m 1025 getAnnotation java.lang.annotation.Annotation java.lang.Class -
 g <T:Ljava/lang/annotation/Annotation;>(Ljava/lang/Class<TT;>;)TT;
@@ -3277,6 +3280,23 @@ m 1 getDeclaredAnnotationsByType [Ljava.lang.annotation.Annotation; java.lang.Cl
 g <T:Ljava/lang/annotation/Annotation;>(Ljava/lang/Class<TT;>;)[TT;
 m 1 isAnnotationPresent boolean java.lang.Class -
 g (Ljava/lang/Class<+Ljava/lang/annotation/Annotation;>;)Z
+C java.lang.reflect.AnnotatedParameterizedType 1537 java.base - java.lang.reflect.AnnotatedType
+m 1025 getAnnotatedActualTypeArguments [Ljava.lang.reflect.AnnotatedType; - -
+m 1025 getAnnotatedOwnerType java.lang.reflect.AnnotatedType - -
+C java.lang.reflect.AnnotatedType 1537 java.base - java.lang.reflect.AnnotatedElement
+m 1 getAnnotatedOwnerType java.lang.reflect.AnnotatedType - -
+m 1025 getAnnotation java.lang.annotation.Annotation java.lang.Class -
+g <T:Ljava/lang/annotation/Annotation;>(Ljava/lang/Class<TT;>;)TT;
+m 1025 getAnnotations [Ljava.lang.annotation.Annotation; - -
+m 1025 getDeclaredAnnotations [Ljava.lang.annotation.Annotation; - -
+m 1025 getType java.lang.reflect.Type - -
+C java.lang.reflect.AnnotatedTypeVariable 1537 java.base - java.lang.reflect.AnnotatedType
+m 1025 getAnnotatedBounds [Ljava.lang.reflect.AnnotatedType; - -
+m 1025 getAnnotatedOwnerType java.lang.reflect.AnnotatedType - -
+C java.lang.reflect.AnnotatedWildcardType 1537 java.base - java.lang.reflect.AnnotatedType
+m 1025 getAnnotatedLowerBounds [Ljava.lang.reflect.AnnotatedType; - -
+m 1025 getAnnotatedOwnerType java.lang.reflect.AnnotatedType - -
+m 1025 getAnnotatedUpperBounds [Ljava.lang.reflect.AnnotatedType; - -
 C java.lang.reflect.Array 17 java.base java.lang.Object -
 m 265 get java.lang.Object java.lang.Object,int java.lang.IllegalArgumentException,java.lang.ArrayIndexOutOfBoundsException
 m 265 getBoolean boolean java.lang.Object,int java.lang.IllegalArgumentException,java.lang.ArrayIndexOutOfBoundsException
@@ -15855,7 +15875,6 @@ N java.lang.invoke.VarHandle 1025 java.base
 N java.lang.invoke.VarHandle$AccessMode 16409 java.base
 N java.lang.module.ModuleDescriptor 17 java.base
 N java.lang.reflect.AccessFlag 16401 java.base
-N java.lang.reflect.AnnotatedType 1537 java.base
 N java.net.Authenticator 1025 java.base
 N java.net.ContentHandlerFactory 1537 java.base
 N java.net.CookieHandler 1025 java.base

@@ -508,6 +508,11 @@ own" is a number of our own, not a JDK's.
   JLS 9.6.4.1 for `@Target`, 9.7.5 for a container. The JDK's signatures and annotations in
   `jdk-members.txt` are read by `JavaJdkMembersTest` through the public API
   (`getGeneric*`, `getDeclaredAnnotations`, an annotation's `toString`), as l64's are.
+- **m30 annotated types, a type variable's annotations, `@Target` checked**: the interfaces'
+  members as JDK 25's reflection lists them (`AnnotatedType.getAnnotatedOwnerType` a default);
+  JLS 9.6.4.1 and 9.7.4; the texts, equality, owners, receivers, the parameters' alignment,
+  which declaration carries a `TYPE_USE` annotation, where javac writes a declaration's own
+  ahead of a qualified name and javac's three refusals: JDK 25's answers to probes of our own.
 - **l00 `java.sql`'s interfaces, `DriverManager`, the `SQLException` family, `javax.sql`**: the
   interfaces (`java.sql`, `javax.sql`, `javax.transaction.xa`'s two,
   `javax.xml.transform`'s two) were written by a script of ours from the member signatures
