@@ -497,6 +497,19 @@ interleaved call, every export is entered through `promising` once the host mark
 an entry, and a call reachable from the module's load path is a compile error, as
 an `:async t` import's is.
 
+The other direction is the same: a
+[`rontolisp:wit-export`](../reference/functions/rontolisp-wit-export.md#compound-types)
+of a world whose functions carry such types is a core export over the canonical
+ABI's core values, and the glue's entry point for it, the label in camelCase, is
+called with the JavaScript values above and answers one. Its arguments are
+staged and its answer read inside the call's allocation bracket. A `result`
+answer returns its ok value and throws the error arm as a `WitError`.
+
+```js
+const lisp = instantiate(module);
+lisp.flip({ x: 1, y: 2 }); // { x: 2, y: 1 }
+```
+
 #### `wasi:keyvalue` over Workers KV
 
 The glue answers `wasi:keyvalue/store@0.2.0-draft2` and

@@ -178,9 +178,28 @@ world とエクスポートするインタフェースが定義する型をす�
 
 次のものは受け渡せず、エクスポートの WIT の行を示すコンパイルエラーになります。`flags`、
 リソースのハンドル、`stream`、`future`、インタフェースが `use` で別のインタフェースから
-取り込んだ型、`async func` の中の複合型です。コアモジュール (`-o out.wasm` だけ、
-`--no-wasi`) と `--no-gc` はフラットな型だけをエクスポートでき、それ以外の型を含む world を
-拒否します。
+取り込んだ型、`async func` の中の複合型です。WASI モジュール (`-o out.wasm` だけ) と
+`--no-gc` はフラットな型だけをエクスポートでき、それ以外の型を含む world を拒否します。
+
+`--no-wasi` のモジュールも複合型をエクスポートできます。コアのエクスポートは正準 ABI の
+コアの値を受け取り、[`--emit-js-glue`](../../guides/wasm-host-boundary.md#wit-interfaces-beyond-the-flat-set)
+のファイルがそれを下ろし、持ち上げます。各エクスポートはラベルを camelCase にした名前の
+エントリポイントになり、ホストのインポートが受け取るのと同じ JavaScript の値で呼びます
+(record はオブジェクト、variant は `{ tag, val }`、none は `undefined`、64 ビットは BigInt)。
+結果が `result` なら ok 側の値を返し、error 側はグルーの `WitError` として投げます。
+`--reentrant` はこのエクスポートを拒否します。
+
+```js
+import { instantiate, WitError } from "./shapes.js";
+
+const lisp = instantiate(new WebAssembly.Module(bytes));
+lisp.flip({ x: 1, y: 2 }); // { x: 2, y: 1 }
+try {
+  lisp.area({ tag: "dot" });
+} catch (error) {
+  if (error instanceof WitError) console.log(error.payload); // a dot has no area
+}
+```
 
 ## チェックされる内容
 
@@ -193,7 +212,7 @@ world とエクスポートするインタフェースが定義する型をす�
   `wit/greeter.wit:5: export 'greet' declares 1 parameter(s), but (defun greet ...) takes 2`
   (エクスポートされる関数は必須引数のみを取ります。`&optional` / `&rest` /
   `&key` は拒否されます)
-- エクスポートで受け渡せない WIT 型。コアモジュールと `--no-gc` ではフラットな型以外、
+- エクスポートで受け渡せない WIT 型。WASI モジュールと `--no-gc` ではフラットな型以外、
   それ以外の出力でも `flags`、ハンドル、`stream`、`future`、別のインタフェースの型
 - `--no-gc --component` での `async func` (アダプタのないリアクターには非同期の
   機構がありません)
