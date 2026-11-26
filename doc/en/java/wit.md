@@ -332,6 +332,23 @@ world's export carries no record, list or variant yet, where a Lisp program's
 holding its bits both ways: a `u32` of 4294967295 is the `int` -1, and the `int` -1 an
 export answers for a `u32` is 4294967295.
 
+An `async func` export is a static method answering its value, as any other. The component
+lifts it async, so the call may wait where the method blocks, as in a `Thread.sleep` or a call
+of an imported `async func`; a sync export that blocks traps (`cannot block a synchronous
+task`). It takes the types above, and `--no-gc` refuses it
+([`rontolisp:wit-export`](../reference/functions/rontolisp-wit-export.md)).
+
+```console
+export pause: async func(ms: u32) -> u32;
+```
+
+```console
+public static int pause(int ms) throws InterruptedException {
+    Thread.sleep(ms);
+    return ms;
+}
+```
+
 ## Limitations
 
 - A WASM module takes the types `rontolisp:wit-import` takes there: a Preview 1 core module
@@ -349,8 +366,8 @@ export answers for a `u32` is 4294967295.
   tell apart; a resource of another interface; a tuple in an error arm thrown as a
   `WitException`, for which no type is written (a `WitResult` answer carries it).
 - A world's export takes `bool`, the integers, `f64` and `string`; an `async func` export is
-  refused. Two exports of one label (a function of the world and an interface's, or two
-  interfaces') are two methods, each of its own class.
+  refused under `--no-gc`. Two exports of one label (a function of the world and an
+  interface's, or two interfaces') are two methods, each of its own class.
 - An exception an export leaves uncaught is reported on standard error by the line a JDK
   writes (`Exception in thread "main" java.lang.IllegalStateException: ...`), then the call
   traps; so is one the static initialization run by the first call leaves. A component

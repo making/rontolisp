@@ -1424,7 +1424,7 @@ exports the component's entry points.** The user's request (2026-11-24): the opp
   export list a composition checks).
 - **The check** (`JavaWitExports.Checker`; the world through `WitExportDirective.describe`, so a
   type the export boundary does not carry is refused at its WIT line in `wit-export`'s words)
-  refuses an instance method (no host has an instance) and an `async func` export; two exports
+  refuses an instance method (no host has an instance); two exports
   of one label are two methods, keyed apart in `:names` (`.kb/wit.md`). Only the program's own
   classes are checked and exported (`Source.partial`).
 - **Where a program starts** (`JavaLowering.exportEntries`): an entry class with no `main`
@@ -1436,6 +1436,19 @@ exports the component's entry points.** The user's request (2026-11-24): the opp
   `@WitExport` classes exported nowhere: both would need the export path to run the setup
   without `main` (`_start` is both), else the first export call runs `main`. Decided against
   until a program needs it.
+- **An `async func`** is a static method answering its value, decided from what the Lisp side
+  lowers: `wit-export` lifts the same `defun` with `:async t` (`ComponentWriter`'s async
+  function type, the one byte that differs: 73,214 B either way for a `Thread.sleep` world),
+  so the call's task may block where the method does. Not a `WitFuture<T>` result: the WIT's
+  result is `T`, a `future<T>` another signature. Measured 2026-11-26, wasmtime 51:
+  `Thread.sleep(20)` in an async export answers, in a sync one traps (`cannot block a
+  synchronous task before returning`); `--component --no-wasi` lifts it async too, where a
+  sleep is a bare trap, sync or async. jco 1.42.0 calls an async export of a `--no-wasi`
+  component (and of a Lisp WASI component); it translates no Java WASI component at all,
+  async or not ("exceptions proposal not enabled": EH mode). `--no-gc` is refused by
+  `wit-export`'s check at the WIT line. A sleeping export imports `wasi:cli/exit`:
+  `Thread.currentThread()` makes a `Thread`, whose id counter is `synchronized`, and the wasm
+  monitor entry reaches `%java-unforeseen`.
 - **The lowering**: an unsigned integer crosses through a `defun` `<function>%wit` converting
   it; a `u64` past `Long.MAX_VALUE` traps (`.kb/wit.md`). An EAGER class is initialized in the
   top level, which the reactor runs in the first export call, a LAZY one at the top of its
@@ -1457,7 +1470,7 @@ exports the component's entry points.** The user's request (2026-11-24): the opp
   imported `wasi:cli/exit`, which no export calls: 291 B, not the 1 KB first estimated), the
   Lisp one of `examples/wit/rust-calls-lisp` 3,879 B over `(find c "aeiouAEIOU")`.
 - **Pinned by** `JavaWitImportTest.aClassImplementsTheWorldAComponentExports` (each scalar kind,
-  an interface, static state, each refusal, no `wasi:cli/exit`; JDK, interpreter, JVM,
+  an interface, static state, an `async func` that sleeps, each refusal, no `wasi:cli/exit`; JDK, interpreter, JVM,
   component, the `--no-gc` component and its bare trap) and
   `examples.yaml`'s `java/rust-calls-java`; by hand, the example's `CounterTest` under
   `rontolisp test`, `MavenBuildE2eTest` with no `<mainClass>`.
