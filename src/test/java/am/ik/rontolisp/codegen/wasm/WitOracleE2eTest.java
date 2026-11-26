@@ -247,27 +247,35 @@ class WitOracleE2eTest {
 		// The two directions meet: what a wit-import lowers a wit-export lifts, and
 		// back. The example's command, composed with the component that exports the
 		// interface, prints what it prints on the interpreter, where the exporting
-		// file's functions answer in process.
+		// file's functions answer in process -- whichever language implements the
+		// world: the Lisp file, or the Java class beside it, whose records, sealed
+		// interface and lists the same values are.
 		Path shapes = Path.of("examples/wit/shapes");
 		java.io.ByteArrayOutputStream interpreted = new java.io.ByteArrayOutputStream();
 		new am.ik.rontolisp.cli.RontoLispCli(new java.io.ByteArrayInputStream(new byte[0]),
 				new java.io.PrintStream(interpreted, true, StandardCharsets.UTF_8))
 			.run(new String[] { shapes.resolve("app.lisp").toString() });
-		compileFileViaCli(shapes.resolve("shapes.lisp"), "shapes", List.of("--component"));
 		compileFileViaCli(shapes.resolve("app.lisp"), "app", List.of("--component"));
-		Path composed = this.tempDir.resolve("composed.wasm");
-		Process compose = new ProcessBuilder("wasm-tools", "compose", this.tempDir.resolve("app.wasm").toString(), "-d",
-				this.tempDir.resolve("shapes.wasm").toString(), "-o", composed.toString())
-			.redirectErrorStream(true)
-			.start();
-		String composing = new String(compose.getInputStream().readAllBytes(), StandardCharsets.UTF_8);
-		assertThat(compose.waitFor()).as(composing).isZero();
-		Process run = new ProcessBuilder("wasmtime", "run", composed.toString()).redirectErrorStream(true).start();
-		String printed = new String(run.getInputStream().readAllBytes(), StandardCharsets.UTF_8);
-		assertThat(run.waitFor()).as(printed).isZero();
-		assertThat(printed).isEqualTo(interpreted.toString(StandardCharsets.UTF_8))
-			.contains("bounds   ((:X 1 :Y 1) (:X 3 :Y 9))")
-			.contains("area     \"a dot has no area\"");
+		Map<String, List<String>> exporting = new java.util.LinkedHashMap<>();
+		exporting.put("shapes.lisp", List.of("--component"));
+		exporting.put("Shapes.java", List.of("--component", "--java-source-path", "rontolisp-java-api/src/main/java"));
+		for (Map.Entry<String, List<String>> exporter : exporting.entrySet()) {
+			compileFileViaCli(shapes.resolve(exporter.getKey()), "shapes", exporter.getValue());
+			Path composed = this.tempDir.resolve("composed.wasm");
+			Process compose = new ProcessBuilder("wasm-tools", "compose", this.tempDir.resolve("app.wasm").toString(),
+					"-d", this.tempDir.resolve("shapes.wasm").toString(), "-o", composed.toString())
+				.redirectErrorStream(true)
+				.start();
+			String composing = new String(compose.getInputStream().readAllBytes(), StandardCharsets.UTF_8);
+			assertThat(compose.waitFor()).as(composing).isZero();
+			Process run = new ProcessBuilder("wasmtime", "run", composed.toString()).redirectErrorStream(true).start();
+			String printed = new String(run.getInputStream().readAllBytes(), StandardCharsets.UTF_8);
+			assertThat(run.waitFor()).as(printed).isZero();
+			assertThat(printed).as(exporter.getKey())
+				.isEqualTo(interpreted.toString(StandardCharsets.UTF_8))
+				.contains("bounds   ((:X 1 :Y 1) (:X 3 :Y 9))")
+				.contains("area     \"a dot has no area\"");
+		}
 	}
 
 	@Test

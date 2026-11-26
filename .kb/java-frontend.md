@@ -1427,6 +1427,28 @@ exports the component's entry points.** The user's request (2026-11-24): the opp
   refuses an instance method (no host has an instance); two exports
   of one label are two methods, keyed apart in `:names` (`.kb/wit.md`). Only the program's own
   classes are checked and exported (`Source.partial`).
+- **The types are `@WitImport`'s, one mapping for both** (`JavaWitTypes`: `Table` the check,
+  `Converters` the generated conversions; the import's `Checker` and `Writer` and the export's
+  extend them). Decided: a named type is a member type of the class holding the export -- the
+  `@WitExport` class for the world's own, the interface's member class for an exported
+  interface's --, as an import's is of its interface; a tuple any record of the components.
+  Overloads are told apart by the declared types alone (`fits`), then the one chosen is checked:
+  a definition is checked once, so a rejected candidate must not mark it.
+- **A compound export goes through generated Java** (`JavaWitExports.wrappers`, a class
+  `<Holder>$WitExport` per holder, each method `Object`s in and out, reached in
+  `exportEntries`; `JavaBoundary.Export.canonical` is `lower`'s test, `JavaHostBoundary.flat`). A flat export
+  beside it keeps the method, or the `%wit` defun. The directive carries `:octets t` (a
+  `list<u8>` is the `byte[]`, no conversion) and `:envelope t`: a top-level `result` follows
+  the declaration as an import's does (`JavaWitImports.thrown`) -- the `WitResult` converted, or
+  the ok arm with `catch (WitException e)` making the error arm, its `error()` cast to the
+  mapping's type (another class: a `ClassCastException`, uncaught). Trap: the wrappers are kept
+  in world order (a `LinkedHashMap`); an identity map's order reached them differently each run
+  and the component's bytes with it.
+- **A `u64`**: flat, the `long` as it is, no mask (a negative answer traps at the boundary). The
+  mask it had answered a number the wasm-GC integer rounds (`Long.MIN_VALUE + 1` came out as
+  9223372036854775808) and a constant `--no-gc` refuses to compile. In a compound ANSWER the
+  canonical lowering stores a negative integer's 64 bits, so there a `long` crosses whole; a
+  `u64` argument past `Long.MAX_VALUE` traps at the lift either way (`.kb/wit.md`).
 - **Where a program starts** (`JavaLowering.exportEntries`): an entry class with no `main`
   starts at the source tree's `@WitExport` classes, found as the index finds classes, so the
   Maven plugin's entry may be any file declaring one. Elsewhere than on a component it is
@@ -1449,9 +1471,10 @@ exports the component's entry points.** The user's request (2026-11-24): the opp
   async too, though nothing of the scalar subset waits (`.kb/no-gc-scalar-wasm.md`, "An `async
   func`"). A sleeping export imports `wasi:cli/exit`:
   `Thread.currentThread()` makes a `Thread`, whose id counter is `synchronized`, and the wasm
-  monitor entry reaches `%java-unforeseen`.
-- **The lowering**: an unsigned integer crosses through a `defun` `<function>%wit` converting
-  it; a `u64` past `Long.MAX_VALUE` traps (`.kb/wit.md`). An EAGER class is initialized in the
+  monitor entry reaches `%java-unforeseen`. Flat types only: a compound type in an `async func`
+  is refused at its WIT line by `describe` (`.todo/m82`).
+- **The lowering**: a flat export's `u8`, `u16` or `u32` crosses through a `defun`
+  `<function>%wit` converting it; a `u64` past `Long.MAX_VALUE` traps (`.kb/wit.md`). An EAGER class is initialized in the
   top level, which the reactor runs in the first export call, a LAZY one at the top of its
   static methods, as no entry form initializes the class such a program starts at
   ("java.util.logging", "The host's log").
@@ -1470,10 +1493,22 @@ exports the component's entry points.** The user's request (2026-11-24): the opp
   above (8,164 while it
   imported `wasi:cli/exit`, which no export calls: 291 B, not the 1 KB first estimated), the
   Lisp one of `examples/wit/rust-calls-lisp` 3,879 B over `(find c "aeiouAEIOU")`.
+- **Measured** (2026-11-26, wasmtime 51): `examples/wit/shapes/Shapes.java` 102,959 B / 37,528
+  gzip against the Lisp file's 69,764 / 26,645 (`ArrayList`, `Optional`, the string `+`, the
+  uncaught report); a world of one `flip(point) -> point` 15,739 B against the counter's 15,076.
+  Its `--emit-wit` is the Lisp component's, byte for byte, and `app.lisp` composed with it
+  prints the same lines; 1,500,000 composed calls (five exports of records, lists, an option, a
+  thrown error arm) under `-W max-memory-size=50331648`, no growth. Byte-identical before and
+  after, 12 outputs: the counter (GC, `--no-gc`, `--no-wasi` components), `JavaWitImportTest`'s
+  `Kinds`, `PageHits` (component and class), the Lisp shapes pair and counter, the Clojure
+  greeter, the Worker.
 - **Pinned by** `JavaWitImportTest.aClassImplementsTheWorldAComponentExports` (each scalar kind,
-  an interface, static state, an `async func` that sleeps, each refusal, no `wasi:cli/exit`; JDK, interpreter, JVM,
-  component, the `--no-gc` component and its bare trap) and
-  `examples.yaml`'s `java/rust-calls-java`; by hand, the example's `CounterTest` under
+  an interface, static state, an `async func` that sleeps, each refusal, no `wasi:cli/exit`; JDK,
+  interpreter, JVM, component, the `--no-gc` component and its bare trap; a world of every
+  compound kind, both spellings of a `result`, its refusals) and `examples.yaml`'s
+  `java/rust-calls-java` and `wit/shapes/Shapes.java`,
+  `WitOracleE2eTest.aComponentCallsWhatAnotherExportsOverCompoundTypes` (the Lisp command
+  composed with the Java component); by hand, the example's `CounterTest` under
   `rontolisp test`, `MavenBuildE2eTest` with no `<mainClass>`.
 
 ## A reactor of public static methods (2026-11-24, l94)

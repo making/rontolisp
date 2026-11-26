@@ -307,7 +307,8 @@ With `--no-gc` too, a class of scalar values
 ([A reactor on `--no-gc`](index.md#a-reactor-on---no-gc)) compiles to a component of the
 scalar backend, which runs its static initialization when it is instantiated. The counter
 above, its `indexOf` written as comparisons, is 2,040 bytes there and 12,988 without
-`--no-gc`.
+`--no-gc`. A world carrying a type other than `bool`, the integers, `f64` and `string` is
+refused there at its WIT line: the scalar backend has no value for a record or a list.
 
 Under a JDK, on the interpreter and on the JVM the annotation does nothing: `vowelCount` is
 an ordinary static method, which a program or a test calls. A program with no `main` is
@@ -325,19 +326,99 @@ Counter.java:6:24: vowelCount (vowel-count of world counter, wit/vowels.wit:4): 
 is s32, which is int in Java, not long
 ```
 
-The types are those of [the table above](#the-types) that a world's export carries:
-`bool`, the integers, `f64` and `string`. Any other is refused at its WIT line: a Java
-world's export carries no record, list or variant yet, where a Lisp program's
-`rontolisp:wit-export` does. An unsigned integer is the Java type of its width
-holding its bits both ways: a `u32` of 4294967295 is the `int` -1, and the `int` -1 an
-export answers for a `u32` is 4294967295.
+### The types of an export
+
+The types are those of [the table above](#the-types), but the ones no world's export
+carries, each refused at its WIT line: `flags`, a resource, a `stream`, a `future`, and a
+type another interface defines (`use`). A named type is a member type, as an imported
+interface's is: of the annotated class for a type the world defines, of the interface's
+member class for a type an exported interface defines. A tuple is a record of the
+program's, declared anywhere.
+
+```console
+interface geometry {
+  record point { x: s32, y: s32 }
+  variant shape { circle(f64), rect(point), dot }
+
+  flip: func(p: point) -> point;
+  area: func(s: shape) -> result<f64, string>;
+}
+
+world shapes {
+  record summary { count: u32, total: f64 }
+
+  export geometry;
+  export summarize: func(areas: list<f64>) -> summary;
+}
+```
+
+```console
+@WitExport(value = "shapes", wit = "wit/shapes.wit")
+public class Shapes {
+
+    public record Summary(int count, double total) {
+    }
+
+    public static Summary summarize(List<Double> areas) {
+        ...
+    }
+
+    public static class Geometry {
+
+        public record Point(int x, int y) {
+        }
+
+        public sealed interface Shape {
+
+            record Circle(double value) implements Shape {
+            }
+
+            record Rect(Point value) implements Shape {
+            }
+
+            record Dot() implements Shape {
+            }
+        }
+
+        public static Point flip(Point p) {
+            return new Point(p.y(), p.x());
+        }
+
+        public static double area(Shape s) {
+            if (s instanceof Shape.Dot) {
+                throw new WitException("a dot has no area", "a dot has no area");
+            }
+            ...
+        }
+    }
+}
+```
+
+```bash
+wasmtime run --invoke 'flip({x: 1, y: 2})' shapes.wasm   # {x: 2, y: 1}
+wasmtime run --invoke 'area(dot)' shapes.wasm            # err("a dot has no area")
+```
+
+A method answering a `result` declares a `WitResult<T, E>`, or its ok arm (`void` for
+none), as an imported interface's method does. The error arm is then a `WitException` the
+method throws, whose `error()` is the error of its Java type (`null` for none); any other
+exception is one the export leaves uncaught ([Limitations](#limitations)). An `Optional`,
+a `List`, a record or a `WitResult` answered as `null` is a `NullPointerException` there.
+
+[`examples/wit/shapes/Shapes.java`](https://github.com/making/rontolisp/tree/develop/examples/wit/shapes)
+implements the world of the Lisp example beside it; the Lisp command of that example calls
+either component, composed with it, and prints the same lines.
+
+An unsigned integer is the Java type of its width holding its bits both ways: a `u32` of
+4294967295 is the `int` -1, and the `int` -1 an export answers for a `u32` is 4294967295.
 
 An `async func` export is a static method answering its value, as any other. The component
 lifts it async, so the call may wait where the method blocks, as in a `Thread.sleep` or a call
 of an imported `async func`; a sync export that blocks traps (`cannot block a synchronous
-task`). It takes the types above. `--no-gc --component` lifts it async too, but nothing
-in the scalar subset waits: it has no thread to sleep in and no object for a `@WitImport`
-binding.
+task`). It takes `bool`, the integers, `f64` and `string` alone (any other type in an
+`async func` is refused at its WIT line). `--no-gc --component` lifts it async too, but
+nothing in the scalar subset waits: it has no thread to sleep in and no object for a
+`@WitImport` binding.
 
 ```console
 export pause: async func(ms: u32) -> u32;
@@ -357,7 +438,9 @@ public static int pause(int ms) throws InterruptedException {
   handles), a component and a `--no-wasi` module everything but `flags`. A member of any
   other type is refused at its WIT line where the program calls it, as `wit-import` refuses
   it.
-- A `u64` past `Long.MAX_VALUE` crosses no WASM boundary.
+- A `u64` past `Long.MAX_VALUE` crosses no WASM boundary: the call traps. One exception:
+  inside a compound value an export answers (a record's field, a list's element) a
+  negative `long` is the `u64` of its bits.
 - A native executable (`--native`) runs a Preview 1 module whose runner provides no WIT
   interface, so a program calling one does not start there.
 - Refused at the declaration: a `stream` or a `future` the program hands the host, a
@@ -366,8 +449,10 @@ public static int pause(int ms) throws InterruptedException {
   `option` of a `bool`, a `list`, `flags` or an `option`, whose none the boundary cannot
   tell apart; a resource of another interface; a tuple in an error arm thrown as a
   `WitException`, for which no type is written (a `WitResult` answer carries it).
-- A world's export takes `bool`, the integers, `f64` and `string`. Two exports of one label (a function of the world and an
-  interface's, or two interfaces') are two methods, each of its own class.
+- A world's export carries no `flags`, resource, `stream` or `future` and no type of
+  another interface; an `async func` export takes `bool`, the integers, `f64` and `string`
+  alone. Two exports of one label (a function of the world
+  and an interface's, or two interfaces') are two methods, each of its own class.
 - An exception an export leaves uncaught is reported on standard error by the line a JDK
   writes (`Exception in thread "main" java.lang.IllegalStateException: ...`), then the call
   traps; so is one the static initialization run by the first call leaves. A component

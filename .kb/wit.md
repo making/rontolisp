@@ -204,13 +204,20 @@ LOWERED as an import's argument is, by the one generator (`WasmComponentImportCo
   `--emit-js-glue` ([wasm-import.md](wasm-import.md), "A WIT interface beyond the flat set").
   `describe` (the front ends) answers a compound type's whole shape (`WitTypeMapper.shape`, as
   an import member's) after these refusals -- all but `--no-gc`'s and a Preview 1 module's,
-  which need the output; a flat type keeps its primitive shape. The Java subset still refuses a
-  compound export itself (`JavaHostBoundary.requireFlat`, `.todo/m80`). The refused types and
-  the hosts not measured: `.todo/m82`.
+  which need the output; a flat type keeps its primitive shape, the primitive its `wit` and its
+  `definition`, so a front end tells a canonical export by a `wit` that is no flat primitive's
+  (`JavaHostBoundary.flat`). The refused types and the hosts not measured: `.todo/m82`.
 - `:envelope t` on the directive: a top-level `result`'s function answers the envelope itself,
   so `lower` writes no `<f>%wit-export`. The Clojure lowering passes it: its wrapper makes the
   envelope from an `ex-info` (one catch, no wit.lisp; [clojure-frontend.md](clojure-frontend.md),
-  "Host boundary"). Pin: `WitExportDirectiveTest.lowersATypeBeyondTheFlatSetIntoTheCanonicalFormOrRefusesItAgainstTheWitLine`.
+  "Host boundary"). So does the Java lowering, whose wrappers convert a `WitResult` or catch a
+  `WitException` ([java-frontend.md](java-frontend.md), "WIT exports"). Pin:
+  `WitExportDirectiveTest.lowersATypeBeyondTheFlatSetIntoTheCanonicalFormOrRefusesItAgainstTheWitLine`.
+- **A `u64` RESULT past 2^63 - 1 is not exact-or-trap** (measured 2026-11-26, wasmtime 51, flat
+  and canonical alike): the house integer is a float there, so `2^63 + 1` answers
+  9223372036854775808 and `2^64 - 1` traps; a NEGATIVE integer traps flat, and in a canonical
+  compound value (a list's element, a record's field) crosses as its 64 bits (-1 ->
+  18446744073709551615). A `u32` of -1 traps in both.
 - `:octets t` on the directive: a `list<u8>` parameter is the `(unsigned-byte 8)` vector, not
   text. A `list<u8>` answered is a string or a packed vector, anything else traps (`reverse` of a
   packed vector is a general one).
