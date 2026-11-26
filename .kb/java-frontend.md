@@ -3936,6 +3936,9 @@ and the JVM answer every line a JDK's but the helpful `NullPointerException` and
   sets of the three views against a JDK, no difference.
 - **`fileKey`**: a JDK's is `(dev=<hex>,ino=<decimal>)`, its hash `(int) (dev + ino)`
   (measured with `/proc/self/ns/net`, ino 4026531840); "Hard links and a file's key" below.
+  The inode is written unsigned: a WASI host's is a 64-bit hash, negative for about half the
+  files (measured 2026-11-26, wasmtime 51.0.0, both wasm legs); the java-spec case's `hard
+  link key` stats forty fresh files so that a signed print fails on every run.
 - **Measured** (wasm bytes; the artefacts' `sizes/`): byte-identical (wasm, component,
   class): a program of no file, one of collections, `examples/java/shop`, one reading and
   writing through `Files`, one of `java.io.File`, a Lisp program of files. The slots of

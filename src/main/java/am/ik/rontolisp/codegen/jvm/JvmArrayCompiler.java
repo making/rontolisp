@@ -21,6 +21,7 @@ import am.ik.rontolisp.LispNames;
 import am.ik.rontolisp.LispNil;
 import am.ik.rontolisp.LispSymbol;
 import am.ik.rontolisp.LispVal;
+import am.ik.rontolisp.compiler.ArgumentOrder;
 import am.ik.rontolisp.compiler.OperandTypes;
 
 /**
@@ -507,8 +508,9 @@ final class JvmArrayCompiler {
 		List<LispVal> args = cons.toList();
 		// Every argument form runs before anything is checked, as CL evaluates a call's
 		// arguments: the array expression once (left on the stack for the read, its
-		// reference kept in a temp), then each subscript, checked as an integer where it
-		// is evaluated. Only then the array and its rank (emitRankCheck), and the read
+		// reference kept in a temp), then each subscript, checked as an integer once the
+		// last of them is evaluated (compileSubscripts). Only then the array and its rank
+		// (emitRankCheck), and the read
 		// helper checks the bounds -- the interpreter's order (.kb/error-handling.md, "A
 		// rank mismatch"). subscriptCount is the ORIGINAL number of subscripts at this
 		// call site (0 for a bare (aref a), which reads a rank-0 array's single element),
@@ -535,15 +537,14 @@ final class JvmArrayCompiler {
 					JvmArrayRuntimeBuilder.AREF1_DESC);
 		}
 		else if (subscriptCount == 2) {
-			compileSubscript(args.get(2), ctx, className);
-			compileSubscript(args.get(3), ctx, className);
+			compileSubscripts(args.subList(2, 4), null, false, ctx, className);
 			emitRankCheck(ctx, className, arrSlot, LispNames.AREF, subscriptCount);
 			invokeNamedHelper(ctx, className,
 					fvOr(ctx, JvmFloatArrayRuntimeBuilder.AREF2, JvmArrayRuntimeBuilder.AREF2),
 					JvmArrayRuntimeBuilder.AREF2_DESC);
 		}
 		else {
-			emitSubscriptArray(args, 2, subscriptCount, ctx, className);
+			compileSubscripts(args.subList(2, args.size()), null, true, ctx, className);
 			emitRankCheck(ctx, className, arrSlot, LispNames.AREF, subscriptCount);
 			invokeNamedHelper(ctx, className,
 					fvOr(ctx, JvmFloatArrayRuntimeBuilder.AREFN, JvmArrayRuntimeBuilder.AREFN),
@@ -621,8 +622,7 @@ final class JvmArrayCompiler {
 		}
 		JvmExprCompiler.compileExpr(args.get(1), ctx, className);
 		emitHostArrayGuard(ctx, LispNames.ROW_MAJOR_ASET);
-		compileSubscript(args.get(2), ctx, className);
-		JvmExprCompiler.compileExpr(args.get(3), ctx, className);
+		compileSubscripts(args.subList(2, 3), args.get(3), false, ctx, className);
 		invokeNamedHelper(ctx, className, ivOr(ctx, JvmIntArrayRuntimeBuilder.ASET1, JvmFloatArrayRuntimeBuilder.ASET1,
 				JvmArrayRuntimeBuilder.ASET1), JvmArrayRuntimeBuilder.ASET1_DESC);
 	}
@@ -723,8 +723,8 @@ final class JvmArrayCompiler {
 		}
 		List<LispVal> args = cons.toList();
 		// The order compileAref above evaluates and checks in, the value evaluated with
-		// the other arguments before the rank check; the store helper then coerces the
-		// value and checks the bounds.
+		// the other arguments before the subscripts' checks; the store helper then
+		// coerces the value and checks the bounds.
 		int subscriptCount = args.size() - 3;
 		LispVal value = args.get(args.size() - 1);
 		JvmExprCompiler.compileExpr(args.get(1), ctx, className);
@@ -741,22 +741,18 @@ final class JvmArrayCompiler {
 					JvmArrayRuntimeBuilder.ASET1_DESC);
 		}
 		else if (subscriptCount == 1) {
-			compileSubscript(args.get(2), ctx, className);
-			JvmExprCompiler.compileExpr(value, ctx, className);
+			compileSubscripts(args.subList(2, 3), value, false, ctx, className);
 			emitStore1(ctx, className, arrSlot);
 		}
 		else if (subscriptCount == 2) {
-			compileSubscript(args.get(2), ctx, className);
-			compileSubscript(args.get(3), ctx, className);
-			JvmExprCompiler.compileExpr(value, ctx, className);
+			compileSubscripts(args.subList(2, 4), value, false, ctx, className);
 			emitRankCheck(ctx, className, arrSlot, LispNames.ASET, subscriptCount);
 			invokeNamedHelper(ctx, className,
 					fvOr(ctx, JvmFloatArrayRuntimeBuilder.ASET2, JvmArrayRuntimeBuilder.ASET2),
 					JvmArrayRuntimeBuilder.ASET2_DESC);
 		}
 		else {
-			emitSubscriptArray(args, 2, subscriptCount, ctx, className);
-			JvmExprCompiler.compileExpr(value, ctx, className);
+			compileSubscripts(args.subList(2, args.size() - 1), value, true, ctx, className);
 			emitRankCheck(ctx, className, arrSlot, LispNames.ASET, subscriptCount);
 			invokeNamedHelper(ctx, className,
 					fvOr(ctx, JvmFloatArrayRuntimeBuilder.ASETN, JvmArrayRuntimeBuilder.ASETN),
@@ -812,17 +808,84 @@ final class JvmArrayCompiler {
 				new LispCons(arrayVar, new LispCons(placeParts.get(2), new LispCons(parts.get(2), LispNil.INSTANCE)))));
 	}
 
-	// Packages the rank subscript expressions starting at args[firstSub] into an
-	// Object[] (evaluated left to right) for the generic _arefN/_asetN helpers.
-	private static void emitSubscriptArray(List<LispVal> args, int firstSub, int rank, JvmLispCompiler.Ctx ctx,
-			String className) {
-		JvmEmitHelper.emitIntConst(ctx, rank);
-		ctx.body.anewarray(ctx.objectClass);
+	/**
+	 * Pushes an access's subscripts, each checked as an integer, and then a store's
+	 * value: every form evaluated before any check, as the interpreter orders them. Each
+	 * subscript is checked where it is evaluated unless a later form could tell
+	 * ({@link ArgumentOrder#subscriptChecksWait}); then the forms run first -- two of
+	 * them over one {@code swap}, more through temps -- and the checks follow in order.
+	 * @param subscripts the subscript forms
+	 * @param value the store's value form, or null for a read
+	 * @param asArray whether the subscripts go into one {@code Object[]}, for the generic
+	 * {@code _arefN}/{@code _asetN} helpers
+	 * @param ctx the compile context, its operator the access's
+	 * @param className the class being generated
+	 */
+	private static void compileSubscripts(List<LispVal> subscripts, @Nullable LispVal value, boolean asArray,
+			JvmLispCompiler.Ctx ctx, String className) {
+		int rank = subscripts.size();
+		if (!ArgumentOrder.subscriptChecksWait(subscripts, value, subscript -> checksSubscript(subscript, ctx),
+				name -> JvmArithCompiler.isQuietVariable(name, ctx))) {
+			if (asArray) {
+				JvmEmitHelper.emitIntConst(ctx, rank);
+				ctx.body.anewarray(ctx.objectClass);
+				for (int i = 0; i < rank; i++) {
+					ctx.body.dup();
+					JvmEmitHelper.emitIntConst(ctx, i);
+					compileSubscript(subscripts.get(i), ctx, className);
+					ctx.body.aastore();
+				}
+			}
+			else {
+				for (LispVal subscript : subscripts) {
+					compileSubscript(subscript, ctx, className);
+				}
+			}
+			if (value != null) {
+				JvmExprCompiler.compileExpr(value, ctx, className);
+			}
+			return;
+		}
+		if (!asArray && rank + (value == null ? 0 : 1) == 2) {
+			JvmExprCompiler.compileExpr(subscripts.get(0), ctx, className);
+			JvmExprCompiler.compileExpr(value == null ? subscripts.get(1) : value, ctx, className);
+			ctx.body.swap();
+			emitSubscriptCheck(ctx);
+			ctx.body.swap();
+			if (value == null) {
+				emitSubscriptCheck(ctx);
+			}
+			return;
+		}
+		int[] slots = new int[rank];
 		for (int i = 0; i < rank; i++) {
-			ctx.body.dup();
-			JvmEmitHelper.emitIntConst(ctx, i);
-			compileSubscript(args.get(firstSub + i), ctx, className);
-			ctx.body.aastore();
+			JvmExprCompiler.compileExpr(subscripts.get(i), ctx, className);
+			slots[i] = ctx.allocTemp();
+			ctx.body.astore(slots[i]);
+		}
+		int valueSlot = -1;
+		if (value != null) {
+			JvmExprCompiler.compileExpr(value, ctx, className);
+			valueSlot = ctx.allocTemp();
+			ctx.body.astore(valueSlot);
+		}
+		if (asArray) {
+			JvmEmitHelper.emitIntConst(ctx, rank);
+			ctx.body.anewarray(ctx.objectClass);
+		}
+		for (int i = 0; i < rank; i++) {
+			if (asArray) {
+				ctx.body.dup();
+				JvmEmitHelper.emitIntConst(ctx, i);
+			}
+			ctx.body.aload(slots[i]);
+			emitSubscriptCheck(ctx);
+			if (asArray) {
+				ctx.body.aastore();
+			}
+		}
+		if (value != null) {
+			ctx.body.aload(valueSlot);
 		}
 	}
 
@@ -915,6 +978,15 @@ final class JvmArrayCompiler {
 		}
 		ctx.body.i2l();
 		JvmEmitHelper.boxLong(ctx);
+	}
+
+	/**
+	 * Whether the check of a subscript could fail: anything but an integer literal and a
+	 * variable that holds a {@code long} ({@link JvmIntFusionCompiler#holdsLong}).
+	 */
+	private static boolean checksSubscript(LispVal subscript, JvmLispCompiler.Ctx ctx) {
+		return !(subscript instanceof LispInteger)
+				&& !(subscript instanceof LispSymbol sym && JvmIntFusionCompiler.holdsLong(sym.name(), ctx));
 	}
 
 	/**

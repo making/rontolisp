@@ -1574,9 +1574,20 @@ bounds.**
   one subscript's type `VECTOR`; a `type-error` handler written for SBCL catches the same thing here.
   Rejected: a `simple-error` (a class SBCL never signals for this).
 - **Why subscripts before the array** (SBCL checks the array first where it checks at all): on the
-  compiled backends each subscript is type-checked where it is evaluated, after the array, so checking
-  the rank last needs only the array's reference again; the other order would hold every subscript
-  unchecked in a temp.
+  compiled backends a subscript is type-checked as soon as nothing observable is left to evaluate,
+  after the array, so checking the rank last needs only the array's reference again; the other order
+  would hold every subscript unchecked in a temp.
+- **A subscript's check waits for the later argument forms** (`ArgumentOrder.subscriptChecksWait`):
+  where a checked subscript is followed by a later subscript or a store's value that is not
+  `isQuiet`, every subscript is evaluated unchecked and checked after the last form. Elsewhere each
+  is checked where it is evaluated, which nothing can tell apart. Checked: JVM anything but an
+  integer literal or a `JvmIntFusionCompiler.holdsLong` variable; wasm (EH mode only) anything
+  `answersInteger` does not cover. JVM: two forms over one `swap`, more through temps; the fused
+  store keeps its old fallback order unless `ArefLeaf.checkWaits` (the shape it declined before).
+  Measured 2026-11-26 (default / size level): the bench and size-report programs byte-identical
+  but matmul `.class` +139 / +24 B (rank-2 stores over dual dotimes counters; run time unchanged,
+  15 alternating runs mean 178 / 177 ms), sort `.class` +8 / +12 B (the library's
+  `(setf (aref v i) (car l))`) and zlib (chipz) `.class` +8 / +14 B, `.wasm` +60 / +44 B.
 - **Interpreter**: `Environment.rankedArray` after `subscriptValues`; the per-representation
   `flatIndex` checks stay as internal guards no access reaches.
 - **JVM**: array into a temp, subscripts (`_ckIdx`), store value, then the array again through the
@@ -1592,7 +1603,8 @@ bounds.**
 - **SBCL 2.2.9 is no oracle for WHEN**: compiled `(aref v x)` over an unknown type and `(funcall #'aref
   m 1)` read a rank-2 array row-major without a rank check. The project keeps its own contract: the rank
   always checked, a non-integer subscript `INTEGER`, subscripts first.
-- Pinned by `ArefRankAndSubscriptChecksFixture.ORDER_SOURCE` (the three suites above),
+- Pinned by `ArefRankAndSubscriptChecksFixture.ORDER_SOURCE` (the three suites above; the rows
+  before the last a non-integer subscript beside a traced later form),
   `*FunctionValueAref*ChecksRankAndBounds` (the `#'` rows) and
   `JvmLispCompilerTest#compileAndRunArefRejectsAWrongSubscriptCount`.
 

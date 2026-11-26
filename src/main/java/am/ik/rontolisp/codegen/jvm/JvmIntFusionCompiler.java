@@ -203,6 +203,12 @@ final class JvmIntFusionCompiler {
 		 */
 		boolean store;
 
+		/**
+		 * Whether a store's fallback checks the index after the value: the index may be
+		 * no integer and a value leaf can be observed ({@link #classifyStore}).
+		 */
+		boolean checkWaits;
+
 		int storeIndexSlot = -1;
 
 		ArefLeaf(LispVal arrayExpr, int site) {
@@ -416,6 +422,15 @@ final class JvmIntFusionCompiler {
 	static boolean declaredLong(String name, JvmLispCompiler.Ctx ctx) {
 		Object binding = ctx.declaredIntegers.get(name);
 		return binding != null && !ctx.specialVars.contains(name) && binding.equals(bindingOf(name, ctx));
+	}
+
+	/**
+	 * Whether a read of the name always answers an integer within {@code long}: an exact
+	 * raw local ({@link RawLocal#isExact}) or a {@link #declaredLong} variable.
+	 */
+	static boolean holdsLong(String name, JvmLispCompiler.Ctx ctx) {
+		RawLocal raw = ctx.rawLocals.get(name);
+		return raw != null && raw.isExact() || declaredLong(name, ctx);
 	}
 
 	/**
@@ -1112,9 +1127,9 @@ final class JvmIntFusionCompiler {
 
 	/**
 	 * A store's tree: the array's leaf first, as the generic store evaluates it, its
-	 * index under it, then the value; null where a part does not classify, or where the
-	 * index may not be an integer -- which the generic store reports as soon as it is
-	 * evaluated -- while a value leaf after it can be observed.
+	 * index under it, then the value; null where a part does not classify. An index that
+	 * may be no integer while a value leaf can be observed is checked by the fallback
+	 * after the value ({@link ArefLeaf#checkWaits}), as the generic store checks it.
 	 */
 	private static @Nullable Node classifyStore(LispCons cons, DeclaredArrayTypes.Pin pin, JvmLispCompiler.Ctx ctx,
 			Site site) {
@@ -1139,7 +1154,8 @@ final class JvmIntFusionCompiler {
 				LispVal evaluated = evaluatedForm(leaf);
 				if (evaluated != null
 						&& !ArgumentOrder.isQuiet(evaluated, name -> JvmArithCompiler.isQuietVariable(name, ctx))) {
-					return null;
+					target.checkWaits = true;
+					break;
 				}
 			}
 		}
@@ -2415,7 +2431,7 @@ final class JvmIntFusionCompiler {
 			}
 			case ExprLeaf leaf -> sb.append(leaf.trusted ? 'E' : 'e').append(leafIndex(leaf, leaves));
 			case ArefLeaf leaf -> {
-				sb.append(leaf.store ? 's' : 'a').append(leafIndex(leaf, leaves));
+				sb.append(leaf.store ? leaf.checkWaits ? 'w' : 's' : 'a').append(leafIndex(leaf, leaves));
 				if (leaf.pin != null) {
 					// One representation's arm is another method than every arm.
 					sb.append(':').append(leaf.pin.kind().name());
@@ -4087,9 +4103,10 @@ final class JvmIntFusionCompiler {
 
 	/**
 	 * A store method's fallback: the unfused {@code %aset} from the same arguments, in
-	 * its order -- the index computed and checked an integer, the value computed, the
-	 * array checked of rank 1, the store helper coercing the value and checking the bound
-	 * -- under the store's operator, so each reports as the generic store does.
+	 * its order -- the index computed, checked an integer (after the value where
+	 * {@link ArefLeaf#checkWaits}), the value computed, the array checked of rank 1, the
+	 * store helper coercing the value and checking the bound -- under the store's
+	 * operator, so each reports as the generic store does.
 	 */
 	private static void emitStoreFallback(Pending pending, JvmLispCompiler.Ctx ctx, String className) {
 		OpNode root = (OpNode) pending.root();
@@ -4097,18 +4114,25 @@ final class JvmIntFusionCompiler {
 		ctx.body.aload(target.arrParam);
 		emitFallback(java.util.Objects.requireNonNull(target.indexNode), ctx, className);
 		@Nullable String outer = ctx.operator;
-		ctx.restoreSite(target.site);
-		ctx.operator = LispNames.ASET;
-		try {
-			JvmArrayCompiler.emitSubscriptCheck(ctx);
-		}
-		finally {
-			ctx.operator = outer;
+		if (!target.checkWaits) {
+			ctx.restoreSite(target.site);
+			ctx.operator = LispNames.ASET;
+			try {
+				JvmArrayCompiler.emitSubscriptCheck(ctx);
+			}
+			finally {
+				ctx.operator = outer;
+			}
 		}
 		emitFallback(root.args().get(1), ctx, className);
 		ctx.restoreSite(target.site);
 		ctx.operator = LispNames.ASET;
 		try {
+			if (target.checkWaits) {
+				ctx.body.swap();
+				JvmArrayCompiler.emitSubscriptCheck(ctx);
+				ctx.body.swap();
+			}
 			JvmArrayCompiler.emitStore1(ctx, className, target.arrParam);
 		}
 		finally {

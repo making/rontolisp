@@ -98,6 +98,32 @@ public final class ArgumentOrder {
 	}
 
 	/**
+	 * Whether an array access must hold its subscripts' type checks until its last
+	 * argument form has run: a subscript the access checks is followed -- by a later
+	 * subscript or by a store's value -- by a form whose evaluation can be observed
+	 * ({@link #isQuiet}). Every argument form runs before any check, as the interpreter
+	 * evaluates them (`.kb/error-handling.md`, "A rank mismatch"); where this answers
+	 * {@code false}, checking each subscript where it is evaluated cannot be told apart.
+	 * @param subscripts the subscript forms, in order
+	 * @param value the store's value form, or null for a read
+	 * @param checked whether the access checks the type of a subscript form
+	 * @param quietVariable whether a read of the named variable can neither fail nor
+	 * change anything where the access is compiled
+	 * @return {@code true} when the checks wait for the last argument form
+	 */
+	public static boolean subscriptChecksWait(List<LispVal> subscripts, @Nullable LispVal value,
+			Predicate<LispVal> checked, Predicate<String> quietVariable) {
+		boolean pending = false;
+		for (LispVal subscript : subscripts) {
+			if (pending && !isQuiet(subscript, quietVariable)) {
+				return true;
+			}
+			pending |= checked.test(subscript);
+		}
+		return pending && value != null && !isQuiet(value, quietVariable);
+	}
+
+	/**
 	 * Whether a form's value, when it returns one, is a real number in a program that
 	 * cannot observe a complex: a number literal, or a call to an arithmetic operator.
 	 * Converting such a value to a float cannot signal, so an operation need not wait for
