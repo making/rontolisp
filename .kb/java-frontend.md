@@ -2170,6 +2170,28 @@ again after its key left the map, holds the value uncounted, where a JDK's `size
 to `-1`. Hash codes are the constants' identity numbers ("The decisions"). Pin:
 `an-enum-set-is-a-bit-of-each-constant-and-an-enum-map-a-slot`.
 
+- **The constants come from the enum the call names, not from `getEnumConstants`**: the
+  universe is `Support.universe(Class)` (a private `Class.universe` over the same slot). A call
+  making one -- an `EnumSet` static but `copyOf(EnumSet)`/`complementOf`, an `EnumMap`
+  constructor but `EnumMap(EnumMap)`, by a call, a reference, `new`, an anonymous or named
+  subclass's `super(..)` -- names the enum as its type argument (`enumUniverse`): that enum is
+  called `values()` of at the call and its class object alone holds the constants
+  (`JavaClasses.universes`). A type argument that is no enum of source (a type variable, a raw
+  type) sets `enumConstants`, as reaching `getEnumConstants` does; calls inside
+  `EnumSet`/`EnumMap` take their caller's. Rejected: lowering `noneOf(X.class)` alone -- `of`,
+  `range` and `copyOf` reach the class through `getDeclaringClass()` and would keep every enum.
+- **Measured** (wasm, 2026-11-26): the basic view read by name 350,810 -> 307,169 (removing the
+  set's constants altogether: 306,849), with `posix:permissions` and the permission calls
+  309,363 -> 265,074; `EnumSet`s and an `EnumMap` over three enums beside a fourth 152,256 ->
+  148,888; one `EnumSet` 128,442 -> 125,558. Every enum otherwise unmade -- `ChronoField` with
+  `ValueRange`, `ChronoUnit`, `Month`, `DayOfWeek` and 14 more -- left the file program.
+  Byte-identical (wasm and class): no `EnumSet`, a program reaching `getEnumConstants`,
+  `Files` without views, `examples/java/shop`, a Lisp program.
+- Pins: JavaLoweringTest `theLibraryIsJavaSourceLoweredAsFarAsTheProgramReaches` (an enum held
+  but in no set has no `values()`; a type variable gives every enum's) and the standalone
+  `a-set-or-a-map-of-enum-constants-takes-the-constants-of-the-enum-its-call-names` (each way
+  of making one, in a program not reaching `getEnumConstants`, on four backends).
+
 ## The sequenced collections (2026-11-20, k55)
 
 **Invariant: a list, a deque, a linked or sorted set and a linked or sorted map are a
@@ -3924,8 +3946,8 @@ and the JVM answer every line a JDK's but the helpful `NullPointerException` and
   file program 79-87 B of wasm and 2,092 B of class. `getPosixFilePermissions` and
   `setPosixFilePermissions` 256,381 -> 256,397; with the basic view by name too 329,595 ->
   343,110 (the views' own code); the basic view by name alone 268,969 -> 340,630, the
-  `EnumSet` a `posix:permissions` value is making the program reach `getEnumConstants`, so
-  every enum's `values()` (`.todo/m57`). `getOwner` alone 175,843.
+  `EnumSet` a `posix:permissions` value made the program reach `getEnumConstants`, so every
+  enum's `values()`; no longer ("The enum collections"). `getOwner` alone 175,843.
 - **Pinned by** java-spec
   `a-program-makes-reads-copies-moves-lists-and-is-refused-its-files-through-java-nio-file`
   (`views` .. `unix set refused`, each with its `wasi:` line). EPERM and a foreign principal are
@@ -4910,7 +4932,8 @@ no object.**
   lowered code, 3,728 B of wasm for 29.
 - **A class object initializes nothing; an enum's constants do**: what holds an enum's class
   object counts as calling its `values()` (`enumValues`), only in a program reaching
-  `getEnumConstants`.
+  `getEnumConstants` (an `EnumSet` or `EnumMap` names its enum instead: "The enum
+  collections").
 - **`==` of two parameterizations no value has both of** is the compiler's `incomparable
   types: Class<String> and Class<Integer>` (`distinctArguments`).
 - **Not the language's** (`deviations.md`): reflection beyond "Annotations read where the

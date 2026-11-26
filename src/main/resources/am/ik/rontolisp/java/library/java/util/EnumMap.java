@@ -23,7 +23,7 @@ public class EnumMap<K extends Enum<K>, V> extends AbstractMap<K, V> implements 
 
     public EnumMap(Class<K> keyType) {
         this.keyType = keyType;
-        this.keys = keyType.getEnumConstants();
+        this.keys = rontolisp.internal.Support.universe(keyType);
         this.vals = new Object[keys.length];
         this.held = new boolean[keys.length];
     }
