@@ -460,7 +460,8 @@ public final class WitExportDirective {
 
 	// The shape of an export's type for a front end that binds its own names: a type the
 	// flat boundary carries as that primitive, any other whole (aliases followed, every
-	// nested type resolved, as an import's member is described) once the refusals every
+	// nested type resolved, as an import's member is: WitTypeMapper.shape) once the
+	// refusals every
 	// backend makes have passed -- lower's, but --no-gc's and a core module's, which it
 	// makes knowing the output.
 	private static WitTypeMapper.Shape shapeOf(WitType type, String exportName, String what, WitFunc func,
@@ -476,7 +477,7 @@ public final class WitExportDirective {
 					"export '" + exportName + "' is an async func, and an async export carries the flat types only ("
 							+ supportedWitTypes() + ")");
 		}
-		return WitImportDirective.shapeOf(type, resolver, scope);
+		return WitTypeMapper.shape(type, resolver, scope);
 	}
 
 	/**

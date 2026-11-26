@@ -197,7 +197,7 @@ LOWERED as an import's argument is, by the one generator (`WasmComponentImportCo
   a type of another interface (`use`), a compound type in an `async func`; `--no-gc`, which has
   no value a record could be (no cons); a core module (Preview 1, `--no-wasi`), in the compiler,
   which knows the output's shape (`.todo/m79`). `describe` (the front ends) answers a compound
-  type's whole shape (`WitImportDirective.shapeOf`, as an import member's) after these refusals --
+  type's whole shape (`WitTypeMapper.shape`, as an import member's) after these refusals --
   all but `--no-gc`'s and a core module's, which need the output; a flat type keeps its primitive
   shape. The Java subset still refuses a compound export itself (`JavaHostBoundary.requireFlat`,
   `.todo/m80`). The refused types and the hosts not measured: `.todo/m82`.
