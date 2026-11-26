@@ -8951,6 +8951,21 @@ public final class LispNames {
 	public static final String CONS_CAS_CDR_INTERNAL_QUALIFIED = RONTOLISP_PKG + "::" + CONS_CAS_CDR_INTERNAL;
 
 	/**
+	 * The internal {@code rontolisp::%host-stub-class} primitive:
+	 * {@code (%host-stub-class name flags super interfaces members)} answers the host
+	 * class named {@code name} with the access {@code flags}, the superclass
+	 * {@code super}, the space-separated {@code interfaces} and {@code members}
+	 * signatures and no code, defined at its first call
+	 * ({@code runtime/RontoStubClasses}), or nil where the host defines none (a native
+	 * image). Interpreter and JVM only; the Clojure front end's {@code clojure.lang}
+	 * classes as {@code java.lang.Class} objects.
+	 */
+	public static final String HOST_STUB_CLASS_INTERNAL = "%HOST-STUB-CLASS";
+
+	/** The canonical spelling of {@code rontolisp::%host-stub-class}. */
+	public static final String HOST_STUB_CLASS_INTERNAL_QUALIFIED = RONTOLISP_PKG + "::" + HOST_STUB_CLASS_INTERNAL;
+
+	/**
 	 * The internal {@code rontolisp::%condition-variable-new} primitive: a fresh
 	 * condition variable ({@code runtime/RontoConditionVariable}), behind
 	 * {@code bordeaux-threads:make-condition-variable}. Interpreter and JVM only.

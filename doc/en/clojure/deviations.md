@@ -102,7 +102,7 @@ Conformance is partial by design. Where behavior departs from the Clojure oracle
 - An integer inside the long range is a plain integer whatever made it: an `N` literal
   (`2N`), `bigint`, `biginteger`, a `BigInt` sum or product (`(+ 1N 2)`) and an integral
   ratio answer (`(* 1/2 2)`, `(rationalize 1.0)`) print without the oracle's `N` (`3`, not
-  `3N`), `int?` answers `true` and `class` `:java.lang.Long` for them, and a bit operation
+  `3N`), `int?` answers `true` and `class` `java.lang.Long` for them, and a bit operation
   takes them where the oracle refuses its `BigInt`. An integer past the long range is the
   oracle's `BigInt` and prints its `N` under `pr` and `print` (`str` leaves it out, like the
   oracle's toString); a `biginteger` past it prints the `N` too, where the oracle's
@@ -186,8 +186,8 @@ Conformance is partial by design. Where behavior departs from the Clojure oracle
   (`java.net.URISyntaxException`) stays a host object. On the interpreter and the JVM, an
   exception a Java member throws, and a host object thrown, is the host's own, like the
   oracle's: a catch takes it by its class and binds that very object. `class` of an
-  exception the program built answers its class name as a keyword (`:java.lang.Exception`, where the oracle
-  answers the host class), `:java.lang.RuntimeException` for an error naming no class; `.printStackTrace` writes the `toString` line to `*err*` (the oracle writes it
+  exception the program built answers its class (`java.lang.RuntimeException` for an error
+  naming no class); `.printStackTrace` writes the `toString` line to `*err*` (the oracle writes it
   and a line per frame to the process's stderr, whatever `*err*` is bound to) and
   `.getStackTrace` answers an empty vector (so `Throwable->map` answers `:trace []` and no
   `:at` in its `:via` maps); `.getClass` answers what `class` does. On the
@@ -222,8 +222,8 @@ Conformance is partial by design. Where behavior departs from the Clojure oracle
   exists here.
 - Multimethod dispatch values compare like map keys (by `=`, vectors included);
   dispatch through a hierarchy prefers the strictly most specific method, then
-  `prefer-method` choices. A `defmethod` over a host class stores under the keyword
-  `class` answers for it; a true nil maps onto the `(:C%NIL)` marker,
+  `prefer-method` choices. A `defmethod` over a class stores under the tag `class` answers
+  inside a dispatch function (a core class's kind keyword); a true nil maps onto the `(:C%NIL)` marker,
   so no table ever keys on nil, while a dispatch value that literally is `:nil`
   keeps its keyword row, like the oracle (a `class` call inside the dispatch
   function answers nil itself for a nil argument, so the null test maps it onto
@@ -232,8 +232,8 @@ Conformance is partial by design. Where behavior departs from the Clojure oracle
   nested inside an inline dispatch datum (inlined at the call site the same way),
   like the oracle);
   an `Object` method catches past the search but ahead of the default. A throwable,
-  stream or number class stores under its name as a keyword (the one `class` answers:
-  `:java.lang.Long`, `:java.lang.Double`, `:clojure.lang.Ratio`, `:clojure.lang.BigInt`,
+  stream or number class stores under its name as a keyword (`:java.lang.Long`,
+  `:java.lang.Double`, `:clojure.lang.Ratio`, `:clojure.lang.BigInt`,
   `:java.math.BigDecimal`, `:java.lang.Number`), and the search
   follows its Java supers like the oracle's inheritance, interfaces (`java.io.Serializable`,
   `java.io.Closeable`) and `Object` included; `isa?`, `derive`, `underive`, `parents`,
@@ -242,20 +242,16 @@ Conformance is partial by design. Where behavior departs from the Clojure oracle
   supers like the oracle. In a program spelling a class value (a class literal or
   `Class/forName`), `parents`, `ancestors` and `descendants` answer each such super as the value its name reads as,
   so `(contains? (ancestors Long) Number)` is `true` and the set prints `java.lang.Number`;
-  elsewhere it is the keyword (`:java.lang.Number`). The class of a throwable or a stream
-  stays its keyword, so it is no member of such a set. A core kind (`:string`, `:map`, ...) adds the supers of the
+  elsewhere it is the keyword (`:java.lang.Number`). A core kind (`:string`, `:map`, ...) adds the supers of the
   values it stands for: a function `isa?` `clojure.lang.IFn` and its `ancestors` hold it,
-  interfaces and `Object` included, like the oracle's inheritance; a class name in value
-  position reads as that keyword (`(= clojure.lang.IFn (class (fn [])))` stays `false`),
-  so does any other class of the oracle's `clojure.lang` (a keyword no value here
-  answers: a `defmethod` on `clojure.lang.PersistentVector$ChunkedSeq` never matches),
-  and so does a number's class (`(= Long (class 1))` is `true`; `Long` prints as
-  `:java.lang.Long`).
+  interfaces and `Object` included, like the oracle's inheritance. A `defmethod` on a
+  `clojure.lang` class no value here has (`clojure.lang.PersistentVector$ChunkedSeq`) never
+  matches.
   A record or a deftype stands for host classes that are no one value here: it `isa?`
   `Object` and the interface of each protocol its body implements (`user.P`, so a method on
   the interface takes it, like the oracle's), and its `ancestors` add `Object`, but its host
-  class's other supers are not modeled. Since the
-  keyword is the class here, a keyword spelled `:java.lang.Exception` is that class too.
+  class's other supers are not modeled. Since a class's tag is a keyword here, a keyword
+  spelled `:java.lang.Exception` dispatches as that class too.
   A host class object (`class` of a host object, interpreter and JVM) is the same class as
   its name's keyword and, by its simple name, a core kind's, so
   `(isa? (class (java.util.ArrayList.)) java.util.List)` is `true` -- and so is its `isa?`
@@ -269,8 +265,8 @@ Conformance is partial by design. Where behavior departs from the Clojure oracle
 - `(methods mt)` and `get-method`, `remove-method`, `prefer-method` read a multimethod's
   name (a `defmulti` var, through an alias or a referred one) where the program lowers, so
   a name no `defmulti` made is refused there; any other argument (a local, a var's deref)
-  reads the run-time registry below, like the values. The map `methods` answers keys a host
-  class row by the keyword `class` answers for it, where the oracle keys it by the `Class`.
+  reads the run-time registry below, like the values. The map `methods` answers keys a row
+  a class spelling stored by the class, like the oracle's.
   `prefers` answers each dispatch value with the set preferred over it, and
   `remove-all-methods` clears the methods and the preferences, answering the
   multimethod; both take the name the same way. As values (`methods`,
@@ -283,7 +279,7 @@ Conformance is partial by design. Where behavior departs from the Clojure oracle
   calls. A function holding no registered multimethod still refuses there.
   `get-method`, and a multimethod's `.getMethod` and `.dispatchFn`, answer what the
   oracle's `MultiFn` does, but a multimethod's `Object` method also answers a keyword
-  dispatch value (`class` answers a keyword for a value's class here).
+  dispatch value (a class's tag is a keyword here).
 - `satisfies?` takes the protocol's name and a value, `extend` the type's name and then
   a protocol and a method map any number of times: a local bound to a protocol or a type
   is refused at lowering. `extends?` of two names reads the tables at lowering; of a
@@ -472,13 +468,15 @@ Conformance is partial by design. Where behavior departs from the Clojure oracle
   `bounded-count` of a seq a lazy-or-strict verb realized strictly counts whole, where the
   oracle's stays lazy and stops at the bound; `print-dup` of a record or a queue prints as
   `pr` prints it, where the oracle prints its `toString`.
-- `class` answers a keyword naming the kind (`:string`, `:keyword`, `:map`, ...);
-  the oracle answers host classes, which no wasm backend has. A number answers its
-  class's name as a keyword (`:java.lang.Long`, `:java.lang.Double`,
-  `:clojure.lang.Ratio`, `:clojure.lang.BigInt` past a long, `:java.math.BigDecimal`);
-  `1N` is a `Long` here, since it reads as a plain integer. A record or deftype
-  answers its class, printing like the oracle's (`user.R`); a host object (interpreter and
-  JVM) its host class.
+- `class` answers the oracle's class but where a value here stands for several of the
+  oracle's ([class](reference/class.md)): every function is a `clojure.lang.AFunction`,
+  every seq that is no lazy seq a `clojure.lang.PersistentList`, a two-member vector a
+  `PersistentVector`, a typed array a `PersistentVector`, `1N` a `Long` (it reads as a
+  plain integer). The class is a `java.lang.Class` on the interpreter and in a JVM program
+  using Java interop, a `clojure.lang` class there one defined with the oracle's name,
+  modifiers and supertypes whose members are the statics this front end answers (so
+  `.getMethods` lists those alone); elsewhere a class value that prints, compares and
+  hashes the same way, whose Java methods are host calls (refused on the wasm backends).
 - A [byte array](reference/byte-array.md) prints as the oracle's `#object["[B" ...]` without
   the identity hash, and `str` answers `[B` (the oracle's `[B@1b6d3586`). `aset` stores any
   integer from -128 to 127 in one, where the oracle's reflection takes only a `Byte`
@@ -527,7 +525,7 @@ Conformance is partial by design. Where behavior departs from the Clojure oracle
   `BigInt` refuses, and a computed `Class` object is refused as no `Class`.
 - A `java.nio.charset.StandardCharsets` field or `Charset/forName` of a string literal (a
   [charset](reference/byte-array.md)) prints as the oracle's `#object` without the identity
-  hash, and `class` answers its class's keyword. Only UTF-8, ISO-8859-1 and US-ASCII encode
+  hash. Only UTF-8, ISO-8859-1 and US-ASCII encode
   and decode: `.getBytes` or `String.` with another (UTF-16, say) is the oracle's
   `java.io.UnsupportedEncodingException` of its name. `Charset/forName` of anything but a
   literal, and a `Charset` a Java member answers, stay host objects (interpreter and JVM),
@@ -583,7 +581,7 @@ Conformance is partial by design. Where behavior departs from the Clojure oracle
   `false`). `.intern` of a string is the
   string, so only `identical?` could tell the interning apart. `java.util.Locale/US` (and
   `ROOT`, `ENGLISH`) is its `toString` text (`"en_US"`, `""`, `"en"`): `str` and `.toString`
-  match the oracle, while `pr`, `class` (`:string`) and `string?` read the string.
+  match the oracle, while `pr`, `class` (`java.lang.String`) and `string?` read the string.
   `.toUpperCase`/`.toLowerCase` of one argument map as the bare call whatever the argument
   is, where the oracle casts it to a `Locale`.
 - A zero-argument `(java.util.HashMap.)` (or `(new java.util.HashMap)`) is the empty map
@@ -684,10 +682,10 @@ Conformance is partial by design. Where behavior departs from the Clojure oracle
   `ArraySeq` are `false` of them too, where the oracle answers `true`. A
   protocol's own name (`P`, a var) is an unknown name, where the oracle throws a
   `ClassCastException`; its interface (`user.P`) answers like the oracle's.
-  A class value `class` answered tells what `class` tells: `(instance? (class 1) 1.5)` and
-  `(instance? (class {}) (sorted-map))` are `true`, and a subclass is walked only for an
-  exception or a runtime error, so `(instance? (class #inst "2020") ts)` of a
-  `java.sql.Timestamp` is `false`. A keyword is taken for the class keyword `class` answers,
+  A class value `class` answered for a kind's values takes every value of the kind:
+  `(instance? (class {}) (sorted-map))` is `true`. Where no host is (the wasm backends) a
+  subclass is walked only for an exception or a runtime error, so
+  `(instance? (class #inst "2020") ts)` of a `java.sql.Timestamp` is `false` there. A keyword is taken for the class tag it names,
   so `(instance? :a x)` through a var answers `false`, where the oracle throws a
   `ClassCastException`; that exception's message has no module tail.
 - `clojure.core$long` (any `clojure.core$` munged name of a core function) is the class
@@ -1096,9 +1094,7 @@ Conformance is partial by design. Where behavior departs from the Clojure oracle
   the oracle's classpath does not hold. `rontolisp test` is no `clj` command: it follows
   the cognitect test-runner's defaults (namespaces ending in `-test` under `test`).
 - A reader conditional takes `:rontolisp` too, ahead of `:clj` where a form names it
-  first. Under `{:read-cond :preserve}`, `class` of a reader conditional or tagged literal
-  answers `:clojure.lang.ReaderConditional`/`:clojure.lang.TaggedLiteral` like every class
-  keyword here, and `(reader-conditional nil false)` prints `#?()`, as one read from `#?()`
+  first. `(reader-conditional nil false)` prints `#?()`, as one read from `#?()`
   does. In a branch not
   taken, `::alias/kw` of an unknown alias reads (the oracle refuses it); the runtime
   reader splices `#?@(:clj nil)` as nothing (the oracle refuses it) and takes `:features`

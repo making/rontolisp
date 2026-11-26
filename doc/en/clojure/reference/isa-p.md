@@ -9,8 +9,9 @@ component `isa?` the matching one), or ancestor membership through the hierarchy
 one, or `h` in the three-argument form. Answers `true` or `false`; the multimethod dispatch
 search is built on it.
 
-A class spelling as `child` or `parent` is the keyword `class` answers for its values, as in a
-`defmethod`: `String` is `:string`, a record its tag, a throwable or stream class its name. A
+A class spelling as `child` or `parent` is the tag `class` answers for its values inside a
+dispatch function, as in a `defmethod`: `String` is `:string`, a record its tag, a throwable or
+stream class its name, and a class value `class` answered reads the same way. A
 throwable or stream class keyword `isa?` each of its Java supers, interfaces included, and
 whatever they derive from, like the oracle's Java inheritance; every class `isa?` `Object`.
 A kind keyword (`:string`, `:function`, ...) `isa?` each of the host supers of the values

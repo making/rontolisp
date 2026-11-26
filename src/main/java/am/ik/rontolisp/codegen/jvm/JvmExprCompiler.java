@@ -658,6 +658,10 @@ final class JvmExprCompiler {
 					compileConsCas(qn.member(), cons, ctx, className);
 					return;
 				}
+				if (LispNames.HOST_STUB_CLASS_INTERNAL.equals(qn.member())) {
+					compileHostStubClass(cons, ctx, className);
+					return;
+				}
 				if (JvmLispCompiler.CONDITION_VARIABLE_METHODS.containsKey(qn.member())) {
 					compileConditionVariable(qn.member(), cons, ctx, className);
 					return;
@@ -2759,6 +2763,22 @@ final class JvmExprCompiler {
 		};
 		ctx.body.invokestatic(ctx.cp.methodRef(ctx.cp.classEntry(JvmLispCompiler.FILE_MODES_CLASS), method,
 				"(" + "Ljava/lang/Object;".repeat(arity) + ")Ljava/lang/Object;"));
+	}
+
+	/**
+	 * Compiles {@code %host-stub-class} onto {@code runtime/RontoStubClasses.stub}, which
+	 * travels with the class.
+	 */
+	private static void compileHostStubClass(LispCons cons, JvmLispCompiler.Ctx ctx, String className) {
+		List<LispVal> items = cons.toList();
+		if (items.size() != 6) {
+			throw new UnsupportedOperationException("%host-stub-class expects 5 arguments, got " + (items.size() - 1));
+		}
+		for (int i = 1; i <= 5; i++) {
+			compileExpr(items.get(i), ctx, className);
+		}
+		ctx.body.invokestatic(ctx.cp.methodRef(ctx.cp.classEntry(JvmLispCompiler.STUB_CLASSES_CLASS), "stub",
+				"(" + "Ljava/lang/Object;".repeat(5) + ")Ljava/lang/Object;"));
 	}
 
 	/**

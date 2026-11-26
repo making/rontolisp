@@ -6,9 +6,9 @@
 
 `child` が `parent` と関係するかどうかを返します。等価、要素ごとのベクター派生（各要素が対応するものへ `isa?`）、または階層 -- グローバルのもの、3 引数形式では `h` -- を通る祖先 membership のいずれかです。`true` か `false` を返し、multimethod のディスパッチ検索はこれの上に組み立てられています。
 
-`child` や `parent` に書いたクラス名は、`defmethod` と同じく `class` がその値に答える
-キーワードです。`String` は `:string`、record はそのタグ、throwable やストリームのクラスは
-その名前です。throwable やストリームのクラスのキーワードは、オラクルの Java の継承と同じく
+`child` や `parent` に書いたクラス名は、`defmethod` と同じくディスパッチ関数の中で `class` が
+その値に答えるタグです。`String` は `:string`、record はそのタグ、throwable やストリームのクラスは
+その名前で、`class` が答えたクラス値も同じく読みます。throwable やストリームのクラスのキーワードは、オラクルの Java の継承と同じく
 インタフェースを含む各スーパータイプとそれらの派生先に `isa?` です。どのクラスも `Object` に
 `isa?` です。種類のキーワード（`:string`、`:function` など）はそれが表す値のホストの
 スーパータイプの各々に `isa?` です（インタフェースを含みます）。`(isa? (class "a") java.io.Serializable)`

@@ -232,11 +232,11 @@ class ClojureRingAdapterTest {
 			.send(HttpRequest.newBuilder(uri(port, "/octets"))
 				.POST(HttpRequest.BodyPublishers.ofByteArray(upload))
 				.build(), HttpResponse.BodyHandlers.ofString())
-			.body()).isEqualTo("[:org.eclipse.jetty.ee9.nested.HttpInput true true 5 255 254 [65 195 169]]");
+			.body()).isEqualTo("[org.eclipse.jetty.ee9.nested.HttpInput true true 5 255 254 [65 195 169]]");
 		assertThat(
 				client.send(HttpRequest.newBuilder(uri(port, "/octets")).build(), HttpResponse.BodyHandlers.ofString())
 					.body())
-			.isEqualTo("[:org.eclipse.jetty.ee9.nested.HttpInput true true 0 -1 -1 []]");
+			.isEqualTo("[org.eclipse.jetty.ee9.nested.HttpInput true true 0 -1 -1 []]");
 		assertThat(client
 			.send(HttpRequest.newBuilder(uri(port, "/relay"))
 				.POST(HttpRequest.BodyPublishers.ofByteArray(upload))
@@ -339,8 +339,8 @@ class ClojureRingAdapterTest {
 		assertThat(lines.get(6)).as("a byte stream over a resource the module carries")
 			.isEqualTo("[200,\"h\u00e9llo\\n\",[]]");
 		assertThat(lines.subList(7, 9)).as("the body an InputStream of the request's octets, empty without one")
-			.containsExactly("[200,\"[:org.eclipse.jetty.ee9.nested.HttpInput true true 3 65 195 [169]]\",[]]",
-					"[200,\"[:org.eclipse.jetty.ee9.nested.HttpInput true true 0 -1 -1 []]\",[]]");
+			.containsExactly("[200,\"[org.eclipse.jetty.ee9.nested.HttpInput true true 3 65 195 [169]]\",[]]",
+					"[200,\"[org.eclipse.jetty.ee9.nested.HttpInput true true 0 -1 -1 []]\",[]]");
 		assertThat(lines.subList(0, 5)).containsExactly(
 				"[200,\"get G /info a=1&b=%20x ring-test :http HTTP/1.1 true\",[\"x-kw=k\",\"x-multi=a\",\"x-multi=b\"]]",
 				"[201,\"echo:hé|\\\"\\\"|-1|3|text/plain\",[]]", "[200,\"[\\\"l1\\\" \\\"l2\\\"]\",[]]",

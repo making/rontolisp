@@ -1146,11 +1146,11 @@ public final class ClojureLowering {
 	boolean hostClassWalkEmitted;
 
 	/**
-	 * Whether the program can hold a class value that is no keyword: a class literal or a
-	 * {@code Class/forName} (a host class object, a designator where no host is). The
-	 * hierarchy readers then answer each class of the rows as the value its name reads as
-	 * ({@link ClojureHierarchyLowering#CLASS_OBJECTS}), so {@code (ancestors Long)} holds
-	 * {@code Number}.
+	 * Whether the program can hold a class value: a class literal, a {@code class} call
+	 * or a {@code Class/forName} (a host class object, a designator where no host is).
+	 * The hierarchy readers then answer each class of the rows as the value its name
+	 * reads as ({@link ClojureHierarchyLowering#CLASS_OBJECTS}), so
+	 * {@code (ancestors Long)} holds {@code Number}.
 	 */
 	boolean classObjects;
 
@@ -1352,8 +1352,8 @@ public final class ClojureLowering {
 	 * another function, or inlined from a recorded definition at the call site (see
 	 * {@link #inlineDispatchCall(String, List)}) -- while an explicit {@code :nil}
 	 * keyword keeps its row, like the oracle. Saved and restored around the dispatch
-	 * lowering (see {@link #defmultiForms(List)}), so an ordinary {@code class} keeps
-	 * answering the {@code :nil} keyword.
+	 * lowering (see {@link ClojureDispatchLowering#defmultiForms}), so an ordinary
+	 * {@code class} keeps answering the {@code :nil} keyword.
 	 */
 	boolean inDispatchFn;
 
@@ -4568,7 +4568,7 @@ public final class ClojureLowering {
 				return ClojureBindingLowering.defForms(this, form, items, null);
 			}
 			if (items != null && !items.isEmpty() && ClojureLowerUtil.isSymbolNamed(items.get(0), "defmulti")) {
-				return ClojureDispatchLowering.defmultiForms(this, items);
+				return ClojureDispatchLowering.defmultiForms(this, form, items);
 			}
 			if (items != null && !items.isEmpty() && ClojureLowerUtil.isSymbolNamed(items.get(0), "defprotocol")) {
 				return ClojureProtocolLowering.defprotocolForms(this, items);
@@ -4919,7 +4919,7 @@ public final class ClojureLowering {
 			return ClojureLoopLowering.areduceOf(this, items);
 		}
 		if (ClojureLowerUtil.isSymbolNamed(head, "defmulti")) {
-			List<LispVal> forms = ClojureDispatchLowering.defmultiForms(this, items);
+			List<LispVal> forms = ClojureDispatchLowering.defmultiForms(this, form, items);
 			return forms.size() == 1 ? forms.get(0) : ClojureLowerUtil.cons(ClojureLowerUtil.sym("progn"), forms);
 		}
 		if (ClojureLowerUtil.isSymbolNamed(head, "defmethod")) {

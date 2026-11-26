@@ -109,10 +109,10 @@ final class ClojureDispatchLowering {
 	 * takes the values {@code class} answers it for and the conditions of a subclass, a
 	 * host class object asks the host. Both arguments are evaluated once, in order.
 	 */
-	private static LispVal classValueInstance(ClojureLowering ctx, LispVal cls, LispVal lowered) {
+	static LispVal classValueInstance(ClojureLowering ctx, LispVal cls, LispVal lowered) {
 		LispSymbol c = ctx.freshTemp();
 		LispSymbol x = ctx.freshTemp();
-		LispVal test = ClojureLowerUtil.list(new LispSymbol(CLASS_INSTANCE_P), c, x, classForm(ctx, x));
+		LispVal test = ClojureLowerUtil.list(new LispSymbol(CLASS_INSTANCE_P), c, x, classTagForm(ctx, x));
 		return ClojureLowerUtil.list(ClojureLowerUtil.sym("let*"),
 				ClojureLowerUtil.list(ClojureLowerUtil.list(c, cls), ClojureLowerUtil.list(x, lowered)),
 				ctx.booleanAnswer(test));
@@ -628,15 +628,35 @@ final class ClojureDispatchLowering {
 	}
 
 	/**
-	 * {@code class}: the value's kind as a keyword. The oracle answers host classes,
-	 * which no wasm backend has -- the keyword names the kind instead, on every backend
-	 * alike. A value of no Clojure kind answers its host class when it is a host object
-	 * (interpreter and JVM), else the refusal. Inside a {@code defmulti} dispatch
-	 * function (see {@link #defmultiForms(List)}) a nil answers nil itself instead, so
-	 * the dispatcher's null test maps it onto the nil method's marker while an explicit
-	 * {@code :nil} keyword keeps its row, like the oracle.
+	 * {@code class}: the value's class value ({@link #CLASS_OF} over its dispatch tag,
+	 * {@link #classTagForm}): the host's {@code java.lang.Class} where the program
+	 * reaches the host, its {@code (:C%CLASS name)} designator elsewhere, the oracle's
+	 * class's name either way; nil for nil. Inside a {@code defmulti} dispatch function
+	 * (see {@link #defmultiForms}) it is the tag itself, which the method table is keyed
+	 * by.
 	 */
 	static LispVal classForm(ClojureLowering ctx, LispVal lowered) {
+		if (ctx.inDispatchFn) {
+			return classTagForm(ctx, lowered);
+		}
+		// a class value: the hierarchy readers answer class values too
+		ctx.classObjects = true;
+		LispSymbol one = ctx.freshTemp();
+		return ClojureLowerUtil.list(ClojureLowerUtil.sym("let*"),
+				ClojureLowerUtil.list(List.of(ClojureLowerUtil.list(one, lowered))),
+				ClojureLowerUtil.list(new LispSymbol(CLASS_OF), classTagForm(ctx, one), one));
+	}
+
+	/**
+	 * {@code class}'s answer as a tag: the kind keyword the method tables are keyed by (a
+	 * kind the oracle gives several classes one keyword), a class keyword for a class of
+	 * no kind, a record's or deftype's designator, a host object's class. A value of no
+	 * Clojure kind answers its host class when it is a host object (interpreter and JVM),
+	 * else the refusal. Inside a {@code defmulti} dispatch function a nil answers nil
+	 * itself instead, so the dispatcher's null test maps it onto the nil method's marker
+	 * while an explicit {@code :nil} keyword keeps its row, like the oracle.
+	 */
+	static LispVal classTagForm(ClojureLowering ctx, LispVal lowered) {
 		LispSymbol one = ctx.freshTemp();
 		List<LispVal> branches = new ArrayList<>();
 		// a record or deftype answers its tag, the (:C%CLASS "ns.Name") designator its
@@ -739,12 +759,13 @@ final class ClojureDispatchLowering {
 		branches.add(ClojureLowerUtil.list(
 				ClojureLowerUtil.list(new LispSymbol(ClojurePredicateLowering.CLASS_DESIGNATOR_P), one),
 				ClojureLowerUtil.list(new LispSymbol("RONTOLISP::%CLOJURE-DESIGNATOR-CLASS"))));
+		// an atom is a cons: ahead of the list's branch
+		branches.add(ClojureLowerUtil.list(ClojureStateLowering.isAtomForm(one),
+				ClojureCollectionLowering.keywordForm("atom")));
 		branches.add(ClojureLowerUtil.list(ClojureLowerUtil.list(ClojureLowerUtil.sym("consp"), one),
 				ClojureCollectionLowering.keywordForm("list")));
 		branches.add(ClojureLowerUtil.list(ClojureLowerUtil.list(ClojureLowerUtil.sym("functionp"), one),
 				ClojureCollectionLowering.keywordForm("function")));
-		branches.add(ClojureLowerUtil.list(ClojureStateLowering.isAtomForm(one),
-				ClojureCollectionLowering.keywordForm("atom")));
 		// an exception or a runtime error answers its class: an arm a program that can
 		// hold none sheds (ClojureArms.Family.EXCEPTION)
 		ctx.readsConditionClass = true;
@@ -801,13 +822,15 @@ final class ClojureDispatchLowering {
 		if (knownClass == null || ClojureClassBases.isStreamClass(knownClass)) {
 			out = ClojureLowerUtil.list(ClojureLowerUtil.sym("if"),
 					ClojureLowerUtil.list(new LispSymbol(ClojureInteropLowering.STREAM_P), recv),
-					streamClassKeyword(recv), out);
+					ClojureLowerUtil.list(new LispSymbol(CLASS_OF), streamClassKeyword(recv), recv), out);
 		}
 		if (knownClass == null || ClojureThrowables.chainOf(knownClass) != null) {
 			ctx.readsConditionClass = true;
 			out = ClojureLowerUtil.list(ClojureLowerUtil.sym("if"),
 					ClojureLowerUtil.list(new LispSymbol(EXCEPTION_P), recv),
-					ClojureLowerUtil.list(new LispSymbol(EXCEPTION_CLASS), recv), out);
+					ClojureLowerUtil.list(new LispSymbol(CLASS_OF),
+							ClojureLowerUtil.list(new LispSymbol(EXCEPTION_CLASS), recv), recv),
+					out);
 		}
 		return out;
 	}
@@ -820,52 +843,21 @@ final class ClojureDispatchLowering {
 
 	/**
 	 * {@code type}: the logically true {@code :type} entry of the value's metadata
-	 * ({@code rontolisp::%clojure-type-tag}), else the host class where the oracle
-	 * answers one, else what {@code class} answers. A pattern answers the host
-	 * {@code java.util.regex.Pattern} class where a host is, its {@code (:C%CLASS
-	 * name)} designator where none is -- the same split a bare class literal lowers to --
-	 * since only the oracle's answer hits the registry's {@code class-schemas} entry, so
-	 * {@code (m/schema #"a")} builds the regex schema (f98); {@code class} keeps the
-	 * {@code :pattern} keyword. Every other colliding kind answers the designator
-	 * ({@code rontolisp::%clojure-type-designator} over {@code class}'s kind keyword): a
-	 * registry lookup falls through to {@code (type x)} on a miss, where the oracle's
-	 * class misses every entry but {@code Pattern}'s, so the designator misses the same
-	 * way and an unregistered function, keyword, string, symbol, boolean, nil, map or set
-	 * refuses with {@code :malli.core/invalid-schema} instead of looping through (or
-	 * mistyping under) the colliding kind entry. Inside a {@code defmulti} dispatch
-	 * function a nil answers nil, as {@code class} does there.
+	 * ({@code rontolisp::%clojure-type-tag}), else what {@code class} answers, like the
+	 * oracle's {@code (or (get (meta x) :type) (class x))}. A schema registry's lookup
+	 * falls through to {@code (type x)} on a miss, which a class value misses like the
+	 * oracle's (malli's {@code class-schemas} keys {@code Pattern}'s), so an unregistered
+	 * value refuses with {@code :malli.core/invalid-schema}. Inside a {@code defmulti}
+	 * dispatch function the class is its tag, as {@code class} answers there.
 	 */
 	static LispVal typeForm(ClojureLowering ctx, LispVal lowered) {
 		LispSymbol one = ctx.freshTemp();
 		LispSymbol tag = ctx.freshTemp();
-		LispSymbol kind = ctx.freshTemp();
-		LispVal designator = ClojureLowerUtil.list(ClojureLowerUtil.sym("let*"),
-				ClojureLowerUtil.list(ClojureLowerUtil.list(kind, classForm(ctx, one))),
-				ClojureLowerUtil.list(new LispSymbol(TYPE_DESIGNATOR), kind, one));
 		return ClojureLowerUtil.list(ClojureLowerUtil.sym("let*"),
 				ClojureLowerUtil.list(ClojureLowerUtil.list(one, lowered),
 						ClojureLowerUtil.list(tag, ClojureLowerUtil.list(new LispSymbol(TYPE_TAG), one))),
-				ClojureLowerUtil.list(ClojureLowerUtil.sym("if"), tag, tag,
-						ClojureLowerUtil.list(ClojureLowerUtil.sym("if"), ClojureStringLowering.isPatternForm(one),
-								patternClass(ctx), designator)));
+				ClojureLowerUtil.list(ClojureLowerUtil.sym("if"), tag, tag, classForm(ctx, one)));
 	}
-
-	/**
-	 * What {@code type} answers for a pattern: the host {@code java.util.regex.Pattern}
-	 * class where a host is (the {@code Class/forName} object a bare class literal lowers
-	 * to), its {@code (:C%CLASS name)} designator where none is (which a bare class
-	 * literal lowers to instead, never a {@code java:static} wasm refuses).
-	 */
-	private static LispVal patternClass(ClojureLowering ctx) {
-		if (!ctx.hostTarget) {
-			return ClojureCoreLowering.classDesignator(PATTERN_CLASS);
-		}
-		return ClojureLowerUtil.cons(ClojureInteropLowering.JAVA_STATIC, List.of(LispString.literal("java.lang.Class"),
-				LispString.literal("forName"), LispString.literal(PATTERN_CLASS)));
-	}
-
-	/** The host class {@code type} answers for a pattern. */
-	private static final String PATTERN_CLASS = "java.util.regex.Pattern";
 
 	/** {@code type} as a value: a one-argument lambda over the same read. */
 	static LispVal typeValue(ClojureLowering ctx) {
@@ -877,18 +869,18 @@ final class ClojureDispatchLowering {
 	static final String TYPE_TAG = "RONTOLISP::%CLOJURE-TYPE-TAG";
 
 	/**
-	 * {@code type}'s answer for {@code class}'s kind keyword: the host class designator
-	 * where the kind collides with a schema registry entry, else the keyword itself
-	 * ({@code clojure.lisp}).
+	 * {@code class}'s answer from a value's dispatch tag ({@code clojure.lisp}): the
+	 * class value of the class the tag's values have.
 	 */
-	static final String TYPE_DESIGNATOR = "RONTOLISP::%CLOJURE-TYPE-DESIGNATOR";
+	static final String CLASS_OF = "RONTOLISP::%CLOJURE-CLASS-OF";
 
 	/**
-	 * The kind keyword {@code class} answers for a type designator's host class, or nil
-	 * when it names none ({@code clojure.lisp}): what the multimethod dispatcher and
-	 * {@code instance?} read a designator through.
+	 * A run-time dispatch value as the method tables key it ({@code clojure.lisp}): a
+	 * class value of a kind's class (a host class or a designator) its kind keyword, any
+	 * other value itself. A view of {@link ClojureArms.Family#CLASS_DESIGNATOR}: a
+	 * program making no class value folds it to the value.
 	 */
-	static final String DESIGNATOR_KIND = "RONTOLISP::%CLOJURE-DESIGNATOR-KIND";
+	static final String DISPATCH_KIND = "RONTOLISP::%CLOJURE-DISPATCH-KIND";
 
 	// IO entry points: spit/slurp/line-seq over the eval IO layer (plus the
 	// clojure.java.io/reader constructor and the line-seq reader arity)
@@ -897,8 +889,10 @@ final class ClojureDispatchLowering {
 	 * The host spellings a {@code defmethod} dispatch value may name, to the
 	 * {@code class}-keyword the dispatcher actually produces for them. The table mirrors
 	 * {@code class} (and {@code extend-protocol} targets): every collection spelling
-	 * merges into its kind. A number's class is no kind: {@code class} answers its own
-	 * name's keyword, a chained class ({@link ClojureClassBases#NUMBER_SUPERS}).
+	 * merges into its kind, the classes {@code class} answers for a kind's values
+	 * ({@code PersistentVector}, {@code PersistentArrayMap} ...) too. A number's class is
+	 * no kind: {@code class} answers its own name's keyword, a chained class
+	 * ({@link ClojureClassBases#NUMBER_SUPERS}).
 	 */
 	static final Map<String, String> DISPATCH_CLASS_KEYWORDS = Map.ofEntries(Map.entry("String", "string"),
 			Map.entry("CharSequence", "string"), Map.entry("Boolean", "boolean"), Map.entry("Keyword", "keyword"),
@@ -908,7 +902,11 @@ final class ClojureDispatchLowering {
 			Map.entry("List", "list"), Map.entry("Seq", "list"), Map.entry("Sequential", "list"),
 			Map.entry("Collection", "list"), Map.entry("IPersistentList", "list"),
 			Map.entry("IPersistentCollection", "list"), Map.entry("Fn", "function"), Map.entry("IFn", "function"),
-			Map.entry("Function", "function"), Map.entry("Atom", "atom"));
+			Map.entry("Function", "function"), Map.entry("Atom", "atom"), Map.entry("PersistentVector", "vector"),
+			Map.entry("PersistentArrayMap", "map"), Map.entry("PersistentHashMap", "map"),
+			Map.entry("PersistentTreeMap", "map"), Map.entry("PersistentHashSet", "set"),
+			Map.entry("PersistentTreeSet", "set"), Map.entry("PersistentList", "list"), Map.entry("LazySeq", "list"),
+			Map.entry("AFunction", "function"));
 
 	/**
 	 * Whether the dispatch datum is the nil spelling: the symbol the reader answers for
@@ -1230,16 +1228,20 @@ final class ClojureDispatchLowering {
 	 * default, a defined {@code Object} method catches the rest, like the oracle's (which
 	 * it always beats); without one the slot is nil and the search decides alone.
 	 */
-	static List<LispVal> defmultiForms(ClojureLowering ctx, List<LispVal> items) {
+	static List<LispVal> defmultiForms(ClojureLowering ctx, @Nullable LispVal form, List<LispVal> items) {
 		ClojureLowerUtil.isTrue(items.size() >= 3, "defmulti takes a name, a dispatch function and options");
 		String name = ClojureLowerUtil.plainName(items.get(1), "defmulti");
 		int at = 2;
-		if (items.get(at) instanceof LispString) {
-			at++; // the docstring
+		LispString doc = null;
+		if (items.get(at) instanceof LispString text) {
+			doc = text;
+			at++;
 		}
+		LispVal attrMap = null;
 		List<LispVal> attr = ClojureLowerUtil.items(items.get(at));
 		if (attr != null && !attr.isEmpty() && ClojureLowerUtil.isSymbolNamed(attr.get(0), "%hash-map")) {
-			at++; // the attr map
+			attrMap = items.get(at);
+			at++;
 		}
 		ClojureLowerUtil.isTrue(at < items.size(), "defmulti takes a name, a dispatch function and options");
 		LispVal dispatchDatum = items.get(at++);
@@ -1261,6 +1263,10 @@ final class ClojureDispatchLowering {
 			return List.of(ClojureLowering.NIL_CONST);
 		}
 		String key = ctx.intern(name, ClojureLowerUtil.nameIsPrivate(items.get(1)));
+		// the var's metadata: the name's, the docstring and the attr map, like the
+		// oracle's (tools.analyzer.jvm reads its passes' :pass-info off it)
+		List<LispVal> metaStore = ClojureVarLowering.record(ctx, key, form, items.get(1), null, doc, attrMap, false,
+				false);
 		ctx.multimethods.add(key);
 		ctx.globals.put(key, ClojureLowering.Kind.FUNCTION);
 		ctx.macros.remove(key); // a definition wins over the macro it shadows
@@ -1297,8 +1303,7 @@ final class ClojureDispatchLowering {
 						ClojureLowerUtil.list(disp,
 								ClojureLowerUtil.list(ClojureLowerUtil.sym("if"), nilTest,
 										ClojureCollectionLowering.nilMarkerForm(),
-										ClojureLowerUtil.list(ClojureLowerUtil.sym("or"),
-												ClojureLowerUtil.list(new LispSymbol(DESIGNATOR_KIND), raw), raw))),
+										ClojureLowerUtil.list(new LispSymbol(DISPATCH_KIND), raw))),
 						ClojureLowerUtil.list(miss,
 								ClojureLowerUtil.list(ClojureLowerUtil.sym("list"), ClojureLowering.NIL_CONST)),
 						ClojureLowerUtil.list(found,
@@ -1307,7 +1312,7 @@ final class ClojureDispatchLowering {
 				ClojureLowerUtil.list(ClojureLowerUtil.sym("if"),
 						ClojureLowerUtil.list(ClojureLowerUtil.sym("eq"), found, miss), missForm,
 						ClojureLowerUtil.list(ClojureLowerUtil.sym("apply"), found, args)));
-		List<LispVal> forms = new ArrayList<>();
+		List<LispVal> forms = new ArrayList<>(metaStore);
 		forms.add(ClojureLowerUtil.list(ClojureLowerUtil.sym("setq"), methods, ClojureCollectionLowering.makeTable()));
 		forms.add(ClojureLowerUtil.list(ClojureLowerUtil.sym("setq"), fallback, defaultForm));
 		forms.add(ClojureLowerUtil.list(ClojureLowerUtil.sym("setq"), prefers, ClojureCollectionLowering.makeTable()));
@@ -1669,14 +1674,42 @@ final class ClojureDispatchLowering {
 			// tries past the hierarchy search but ahead of the default -- one closure
 			// in both, so get-method answers the same method either way
 			LispSymbol object = tableGlobal(key, "%object");
-			return ClojureLowerUtil.list(ClojureLowerUtil.sym("setq"), object,
-					ClojureLowerUtil.list(ClojureLowerUtil.sym("setf"),
-							ClojureLowerUtil.list(ClojureLowerUtil.sym("gethash"),
-									ClojureCollectionLowering.keywordForm("object"), methods),
-							lambda));
+			return classRow(methods, ClojureCollectionLowering.keywordForm("object"), "java.lang.Object",
+					ClojureLowerUtil
+						.list(ClojureLowerUtil.sym("setq"), object,
+								ClojureLowerUtil
+									.list(ClojureLowerUtil.sym("setf"),
+											ClojureLowerUtil.list(ClojureLowerUtil.sym("gethash"),
+													ClojureCollectionLowering.keywordForm("object"), methods),
+											lambda)));
 		}
-		return ClojureCollectionLowering.tablePut(methods, dispatchKeyForm(ctx, keyDatum), lambda);
+		LispVal keyForm = dispatchKeyForm(ctx, keyDatum);
+		LispVal put = ClojureCollectionLowering.tablePut(methods, keyForm, lambda);
+		if (keyDatum instanceof LispSymbol s && !s.name().startsWith(":") && ctx.typeDefOf(s.name()) == null
+				&& dispatchClassKey(ctx, s.name()) != null) {
+			// a class spelling's row is under the tag class answers inside a dispatch
+			// function; methods keys it by the class value, like the oracle's
+			return classRow(methods, keyForm, ClojureNamespaceLowering.resolveClass(ctx, s.name()), put);
+		}
+		return put;
 	}
+
+	/**
+	 * {@code (progn (note methods key name) store)}: the store of a class-spelled
+	 * method's row, after the note that its key stands for the class {@code name}
+	 * ({@link #NOTE_CLASS_ROW}), which {@code methods} reads. A program calling no
+	 * {@code methods} sheds the note ({@link ClojureArms.Family#METHOD_CLASS_ROW}).
+	 */
+	private static LispVal classRow(LispSymbol methods, LispVal key, String name, LispVal store) {
+		return ClojureLowerUtil.list(ClojureLowerUtil.sym("progn"),
+				ClojureLowerUtil.list(new LispSymbol(NOTE_CLASS_ROW), methods, key, LispString.literal(name)), store);
+	}
+
+	/**
+	 * The note that a method table's key stands for a class ({@code clojure.lisp}): what
+	 * {@code methods} keys that row by.
+	 */
+	static final String NOTE_CLASS_ROW = "RONTOLISP::%CLOJURE-NOTE-CLASS-ROW";
 
 	/**
 	 * Whether the multimethod argument of one of the six introspection verbs

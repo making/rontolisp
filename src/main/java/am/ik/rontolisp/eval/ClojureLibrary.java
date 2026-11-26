@@ -70,14 +70,15 @@ public final class ClojureLibrary {
 	 * the library's host arms, one {@code defun} per arm, each defining the same name and
 	 * answering what the host arm answers for a value that is no host object:
 	 * {@code %clojure-host-class} ({@code class} of a value of no Clojure kind) refuses,
-	 * {@code %clojure-host-class-name} (the printer), {@code %clojure-host-string}
+	 * {@code %clojure-host-class-name} (the printer), {@code %clojure-host-class-named}
+	 * (a class value, which is its designator there), {@code %clojure-host-string}
 	 * ({@code str}), {@code %clojure-host-instance-p} ({@code inst?}, {@code uuid?},
-	 * {@code uri?}, {@code class?}), {@code %clojure-host-class-instance-p}
-	 * ({@code instance?} of a class value) and {@code %clojure-host-throwable} (an
-	 * exception's view of a value) answer NIL, {@code %clojure-host-method}
-	 * ({@code .getMessage} of a value that is no exception) refuses, and
-	 * {@code %clojure-other-hash} ({@code hash} of a value of no Clojure kind) answers
-	 * its identity hash.
+	 * {@code uri?}, {@code class?}), {@code %clojure-host-class-instance-p} and
+	 * {@code %clojure-host-class-assignable-p} ({@code instance?} of a class value), and
+	 * {@code %clojure-host-throwable} (an exception's view of a value) answer NIL,
+	 * {@code %clojure-host-method} ({@code .getMessage} of a value that is no exception)
+	 * refuses, and {@code %clojure-other-hash} ({@code hash} of a value of no Clojure
+	 * kind) answers its identity hash.
 	 */
 	private static final String HOST_ARMS_WITHOUT_JAVA = """
 			(defun rontolisp::%clojure-host-class (x)
@@ -85,6 +86,9 @@ public final class ClojureLibrary {
 			  (error "class needs a value of a known kind"))
 			(defun rontolisp::%clojure-host-class-name (x)
 			  (declare (ignore x))
+			  nil)
+			(defun rontolisp::%clojure-host-class-named (name)
+			  (declare (ignore name))
 			  nil)
 			(defun rontolisp::%clojure-host-string (x)
 			  (declare (ignore x))
@@ -94,6 +98,9 @@ public final class ClojureLibrary {
 			  nil)
 			(defun rontolisp::%clojure-host-class-instance-p (c x)
 			  (declare (ignore c x))
+			  nil)
+			(defun rontolisp::%clojure-host-class-assignable-p (c d)
+			  (declare (ignore c d))
 			  nil)
 			(defun rontolisp::%clojure-host-throwable (x)
 			  (declare (ignore x))

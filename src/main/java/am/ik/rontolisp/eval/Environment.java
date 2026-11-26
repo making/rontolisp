@@ -101,6 +101,7 @@ import am.ik.rontolisp.runtime.RontoInflate;
 import am.ik.rontolisp.runtime.RontoIoFileStream;
 import am.ik.rontolisp.runtime.RontoProcess;
 import am.ik.rontolisp.runtime.RontoStringInputStream;
+import am.ik.rontolisp.runtime.RontoStubClasses;
 import am.ik.rontolisp.reader.LispReader;
 import org.jspecify.annotations.Nullable;
 
@@ -3144,6 +3145,24 @@ public final class Environment implements Scope {
 			return requireCasCell(LispNames.CONS_CAS_CDR_INTERNAL, args.get(0)).compareAndSetCdr(args.get(1),
 					args.get(2)) ? LispTrue.INSTANCE : LispNil.INSTANCE;
 		}));
+		String stub = LispNames.HOST_STUB_CLASS_INTERNAL_QUALIFIED;
+		env.defineFunction(stub, new LispFunction(stub, args -> {
+			requireArgCount(LispNames.HOST_STUB_CLASS_INTERNAL, args, 5);
+			if (!(args.get(1) instanceof LispInteger flags)) {
+				throw new LispEvalException(
+						LispNames.HOST_STUB_CLASS_INTERNAL + ": not an integer: " + args.get(1).print());
+			}
+			Class<?> defined = RontoStubClasses.define(stubText(args.get(0)), (int) flags.value(),
+					stubText(args.get(2)), stubText(args.get(3)), stubText(args.get(4)));
+			return defined == null ? LispNil.INSTANCE : new LispJavaObject(defined);
+		}));
+	}
+
+	private static String stubText(LispVal value) {
+		if (value instanceof LispString text) {
+			return text.value();
+		}
+		throw new LispEvalException(LispNames.HOST_STUB_CLASS_INTERNAL + ": not a string: " + value.print());
 	}
 
 	private static LispCons requireCasCell(String name, LispVal cell) {

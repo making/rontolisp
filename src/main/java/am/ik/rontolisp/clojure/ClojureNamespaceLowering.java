@@ -993,8 +993,8 @@ final class ClojureNamespaceLowering {
 	}
 
 	/**
-	 * The imported classes of TARGET in PAIRS, each a symbol of its FQN: the explicit
-	 * imports over the default ones they shadow.
+	 * The imported classes of TARGET in PAIRS, each its class value: the explicit imports
+	 * over the default ones they shadow.
 	 */
 	private static void importPairs(ClojureLowering ctx, String target, List<LispVal> pairs) {
 		Map<String, String> imports = new java.util.TreeMap<>(DEFAULT_IMPORTS);
@@ -1004,7 +1004,8 @@ final class ClojureNamespaceLowering {
 		}
 		for (Map.Entry<String, String> imported : imports.entrySet()) {
 			pairs.add(quotedSymbol(ctx, imported.getKey()));
-			pairs.add(quotedSymbol(ctx, imported.getValue()));
+			// the class value, as the oracle maps an import to its Class
+			pairs.add(ClojureInteropLowering.classValueForm(imported.getValue()));
 		}
 	}
 
