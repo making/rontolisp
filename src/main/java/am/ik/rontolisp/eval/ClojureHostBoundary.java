@@ -11,7 +11,6 @@ import java.util.Set;
 import am.ik.rontolisp.clojure.ClojureBoundary;
 import am.ik.rontolisp.clojure.ClojureFiles;
 import am.ik.rontolisp.compiler.BoundaryType;
-import am.ik.rontolisp.compiler.BoundaryType;
 import am.ik.rontolisp.compiler.WitExportDirective;
 import am.ik.rontolisp.compiler.WitImportDirective;
 import am.ik.rontolisp.compiler.WitSource;
@@ -90,13 +89,6 @@ public final class ClojureHostBoundary implements ClojureBoundary {
 		}
 		List<Function> exports = new ArrayList<>();
 		for (WitExportDirective.Export export : described.exports()) {
-			if (export.canonical()) {
-				// the tier converts no compound value for an export yet
-				throw new LispReadException(export.at() + ": export '" + export.name()
-						+ "' carries a WIT type the Clojure tier's export boundary does not support yet (supported: "
-						+ BoundaryType.witNames() + "); a Lisp program's rontolisp:wit-export carries it on a "
-						+ "component");
-			}
 			exports.add(new Function(export.name(), export.key(), Origin.FUNCTION, params(export.params()),
 					type(export.result()), export.async(), export.at()));
 		}

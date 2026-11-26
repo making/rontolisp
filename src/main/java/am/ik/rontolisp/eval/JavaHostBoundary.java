@@ -7,6 +7,7 @@ import java.util.List;
 import java.util.Locale;
 import java.util.Objects;
 
+import am.ik.rontolisp.compiler.BoundaryType;
 import am.ik.rontolisp.compiler.WitExportDirective;
 import am.ik.rontolisp.compiler.WitImportDirective;
 import am.ik.rontolisp.compiler.WitSource;
@@ -128,14 +129,25 @@ public final class JavaHostBoundary implements JavaBoundary {
 		}
 		List<Export> exports = new ArrayList<>();
 		for (WitExportDirective.Export export : described.exports()) {
+			boolean canonical = false;
 			List<Param> params = new ArrayList<>();
 			for (WitTypeMapper.Param param : export.params()) {
+				canonical |= !flat(param.shape());
 				params.add(new Param(param.name(), Objects.requireNonNull(type(param.shape()))));
 			}
-			exports.add(new Export(export.name(), export.iface(), export.key(), List.copyOf(params),
-					type(export.result()), export.async(), export.at(), export.canonical()));
+			WitTypeMapper.Shape result = export.result();
+			canonical |= result != null && !flat(result);
+			exports.add(new Export(export.name(), export.iface(), export.key(), List.copyOf(params), type(result),
+					export.async(), export.at(), canonical));
 		}
 		return new WitWorld(described.name(), source.path(), List.copyOf(exports));
+	}
+
+	// Whether a described type is one the flat boundary carries: the directive describes
+	// such a one as the primitive it resolves to, and any other whole, as the WIT spells
+	// it -- so an export of a type that is not flat is one its lowering makes canonical.
+	private static boolean flat(WitTypeMapper.Shape shape) {
+		return BoundaryType.forWitName(shape.wit()) != null;
 	}
 
 	/**

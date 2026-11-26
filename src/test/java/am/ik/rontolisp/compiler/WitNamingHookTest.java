@@ -353,31 +353,29 @@ class WitNamingHookTest {
 				  export run: func();
 				}
 				""", "w.wit")).hasMessageContaining("w.wit:3: export 'run' collides with the component's wasi:cli/run");
-		// a type outside the flat set is described whole, its export marked as one the
-		// canonical ABI carries; what no export carries is refused in lower's words
+		// a compound type arrives whole, aliases followed; what no export carries is
+		// refused
 		String compound = """
 				package local:w;
 				world w {
-				  record point { x: s32, y: s32 }
-				  flags marks { seen }
-				  export pts: func(n: u32) -> list<point>;
-				  export %s;
+				  type pts = list<s32>;
+				  export pts: func() -> pts;
+				}
+				world v {
+				  flags perms { read }
+				  export grant: func(p: perms);
 				}
 				""";
-		List<WitExportDirective.Export> exports = WitExportDirective
-			.describe(new WitExportDirective.Directive("w.wit", null), compound.formatted("size: func() -> u32"),
-					"w.wit")
-			.exports();
-		assertThat(exports.stream().map(WitExportDirective.Export::canonical)).containsExactly(true, false);
-		WitTypeMapper.Shape points = shape(exports.get(0).result());
-		assertThat(points.rep()).isEqualTo(WitTypeMapper.Rep.LIST);
-		assertThat(shape(points.element()).definition()).isEqualTo("point");
-		assertThat(shape(points.element()).parts().stream().map(WitTypeMapper.Part::label)).containsExactly("x", "y");
-		assertThat(exports.get(0).params().get(0).shape().definition()).isEqualTo("u32");
-		assertThatThrownBy(() -> WitExportDirective.describe(new WitExportDirective.Directive("w.wit", null),
-				compound.formatted("seen: func() -> option<marks>"), "w.wit"))
-			.hasMessageContaining("w.wit:6: export 'seen': the WIT type of the result holds the flags 'marks', which "
-					+ "an export does not carry");
+		WitTypeMapper.Shape pts = shape(
+				WitExportDirective.describe(new WitExportDirective.Directive("w.wit", "w"), compound, "w.wit")
+					.exports()
+					.get(0)
+					.result());
+		assertThat(pts.rep() + " of " + shape(pts.element()).definition()).isEqualTo("LIST of s32");
+		assertThatThrownBy(
+				() -> WitExportDirective.describe(new WitExportDirective.Directive("w.wit", "v"), compound, "w.wit"))
+			.hasMessageContaining("w.wit:8: export 'grant': the WIT type of p holds the flags 'perms', which an export "
+					+ "does not carry");
 		assertThatThrownBy(() -> WitExportDirective.describe(new WitExportDirective.Directive("w.wit", null), """
 				package local:w;
 				world w {

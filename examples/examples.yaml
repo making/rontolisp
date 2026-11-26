@@ -518,7 +518,8 @@ examples:
     backends: [jvm-compile, wasm-component]
     note: >-
       implements wit/greeter.wit with rontolisp.wit/export: each world export is the
-      var its label names, a bool crossing in Clojure's spelling. jvm-compile pins that
+      var its label names, a bool, a list of records and a result crossing in
+      Clojure's spelling (a vector of maps, an ex-info for the error arm). jvm-compile pins that
       the same world check runs where nothing is exported. Host-invoked (wasmtime run
       --invoke 'shout("Ada", true)' -> "HELLO, ADA!!!"), so the harness only compiles;
       ClojureWitBoundaryTest runs the invokes

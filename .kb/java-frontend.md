@@ -1436,7 +1436,7 @@ exports the component's entry points.** The user's request (2026-11-24): the opp
   a definition is checked once, so a rejected candidate must not mark it.
 - **A compound export goes through generated Java** (`JavaWitExports.wrappers`, a class
   `<Holder>$WitExport` per holder, each method `Object`s in and out, reached in
-  `exportEntries`; `JavaBoundary.Export.canonical` is the directive's own test). A flat export
+  `exportEntries`; `JavaBoundary.Export.canonical` is `lower`'s test, `JavaHostBoundary.flat`). A flat export
   beside it keeps the method, or the `%wit` defun. The directive carries `:octets t` (a
   `list<u8>` is the `byte[]`, no conversion) and `:envelope t`: a top-level `result` follows
   the declaration as an import's does (`JavaWitImports.thrown`) -- the `WitResult` converted, or

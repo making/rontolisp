@@ -97,11 +97,6 @@ class WitExportDirectiveTest {
 		// and the program a reactor
 		assertThat(WitExportDirective.parse(form("(rontolisp:wit-export \"w.wit\" :world \"analyzer\" :reactor t)")))
 			.isEqualTo(new Directive("w.wit", "analyzer", null, true));
-		// a front end's own: its list<u8> octets, its functions answering a result's
-		// envelope
-		assertThat(WitExportDirective
-			.parse(form("(rontolisp:wit-export \"w.wit\" :world \"analyzer\" :octets t :envelope t)")))
-			.isEqualTo(new Directive("w.wit", "analyzer", null, false, true, true));
 	}
 
 	@Test
@@ -265,13 +260,14 @@ class WitExportDirectiveTest {
 		assertThat(printed(lower(wit, Backend.WASM_COMPONENT, signalling))).contains(
 				"(DEFUN |longest%wit-export| (P0) (HANDLER-CASE (CONS :OK (|longest| P0)) (RONTOLISP:WIT-ERROR (E)"
 						+ " (CONS :ERROR (RONTOLISP:WIT-ERROR-PAYLOAD E)))))");
-		// A front end whose functions answer the envelope themselves says so, and no
-		// defun is made around one.
-		assertThat(printed(WitExportDirective.lower(new Directive(WIT, null, null, false, false, true), wit, WIT,
-				defuns(signalling), Backend.WASM_COMPONENT)))
-			.doesNotContain("%wit-export")
-			.contains("(RONTOLISP:WASM-EXPORT '|longest| :AS \"longest\" :WIT ");
 		assertThat(printed(lower(wit, Backend.OTHER, program))).doesNotContain("DEFUN");
+		// Under :envelope t the function answers the envelope itself (a front end's
+		// wrapper makes it), so the export names the function.
+		Directive envelope = WitExportDirective.parse(form("(rontolisp:wit-export \"world.wit\" :envelope t)"));
+		assertThat(envelope.envelope()).isTrue();
+		assertThat(printed(WitExportDirective.lower(envelope, wit, WIT, defuns(signalling), Backend.WASM_COMPONENT)))
+			.doesNotContain("DEFUN")
+			.contains("(RONTOLISP:WASM-EXPORT '|longest| :AS \"longest\"");
 		// The scalar backend has no value a list could be, and says so at the line.
 		assertThatThrownBy(() -> lower(wit, Backend.WASM_NO_GC_COMPONENT, program))
 			.isInstanceOf(UnsupportedOperationException.class)
