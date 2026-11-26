@@ -13817,12 +13817,35 @@
   (make-hash-table :test 'equal)
   "Each class name the host was asked for to its Class, or :none.")
 
+(defvar rontolisp::%clojure-host-classes
+  :unknown
+  "Whether the host makes class values (%clojure-host-classes-p), once asked.")
+
+(defun rontolisp::%clojure-host-classes-p ()
+  "Whether the host makes class values: whether it defines a stub class, which a
+   native image does not (nor does it answer the reflection a class value's
+   readers ask), so every class value there is a designator -- one
+   representation for every class of a program."
+  (if (eq rontolisp::%clojure-host-classes :unknown)
+      (setq rontolisp::%clojure-host-classes
+            (if (rontolisp::%clojure-stub-class
+                 (assoc "clojure.lang.IFn" rontolisp::%clojure-lang-classes
+                        :test #'equal))
+                t
+                nil)))
+  rontolisp::%clojure-host-classes)
+
 (defun rontolisp::%clojure-host-class-named (name)
   "The host's Class named NAME, nil where it has and makes none: a clojure.lang
-   class's stub (%clojure-stub-class), any other the host's Class/forName answer.
-   A host arm like %clojure-host-class: a program with no java: operator gets a
-   body answering nil, so its class values are designators."
-  (let ((known (gethash name rontolisp::%clojure-host-classes-named)))
+   class's stub (%clojure-stub-class), any other the host's Class/forName answer;
+   nil for every name where the host makes no class value
+   (%clojure-host-classes-p). A host arm like %clojure-host-class: a program with
+   no java: operator gets a body answering nil, so its class values are
+   designators."
+  (let ((known
+         (if (rontolisp::%clojure-host-classes-p)
+             (gethash name rontolisp::%clojure-host-classes-named)
+             :none)))
     (cond ((eq known :none) nil)
           (known known)
           (t

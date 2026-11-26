@@ -2219,11 +2219,12 @@ class ClojureLoweringTest {
 
 	@Test
 	void aMacroExpansionHoldingAClassValueLowersAsAConstant() {
-		// a class value has no readable form, but both kinds that reach an expansion
-		// are constants: a (:C%CLASS name) designator (what type answers at macro time)
-		// travels as the construction it is, the same value on every backend
+		// a class value has no readable form, but both kinds that reach an expansion --
+		// a host class, a designator (a native image's) -- lower as the class's source
+		// spelling would, the same form on the binary as on the JVM
 		assertThat(macroLowered("(defmacro mcv-t [v] `'~(mapv type v)) (mcv-t [a 1])"))
-			.contains("(LIST :C%CLASS \"clojure.lang.Symbol\")");
+			.contains("(VECTOR (RONTOLISP::%CLOJURE-CLASS-VALUE \"clojure.lang.Symbol\")"
+					+ " (RONTOLISP::%CLOJURE-CLASS-VALUE \"java.lang.Long\"))");
 		// a host java.lang.Class (a class literal a macro body evaluates) as the class
 		// literal's own spelling, the forName object where the host is; in :tag
 		// metadata it is ignored by the backends and visible in (meta #'x), like the

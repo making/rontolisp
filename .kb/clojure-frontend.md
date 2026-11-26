@@ -2137,8 +2137,11 @@ real `Class` objects, so a class value of another shape would be unequal to them
   answers (`PersistentArrayMap/createAsIfByAssoc` ...), so reflection -- tools.analyzer.jvm's
   `validate` above all -- sees what a call can reach. `PersistentQueue` stays out: it is a
   deftype of the shipped `clojure.lang` namespace, whose class value is its tag.
-- Traps: a native image defines no class (`org.graalvm.nativeimage.imagecode`), so the binary's
-  interpreter answers designators for `clojure.lang` classes; the rows are literal strings
+- Traps: a native image defines no class (`org.graalvm.nativeimage.imagecode`) and registers no
+  reflection a class value's readers ask, so there every class value is a designator
+  (`%clojure-host-classes-p`, probed by defining the `IFn` stub): a host class in the binary's
+  REPL crashed on `Class.getInterfaces` (`MissingReflectionRegistrationError`, an `Error` no
+  `handler-case` takes) before the probe. The rows are literal strings
   (an interface list is one space-separated string), since on the JVM a string `format` builds
   is no `java.lang.String` and the runtime class reads quoted strings only.
 - **Readers**: a `Class/forName` of a `clojure.lang` row name answers the stub, one or three
@@ -2154,7 +2157,8 @@ real `Class` objects, so a class value of another shape would be unequal to them
 - Deviations (user doc `reference/class.md`): one class per kind's value -- every fn
   `AFunction`, every strict seq `PersistentList`, a two-member vector `PersistentVector`;
   records and deftypes keep their designators on every backend, so Java sees no class of
-  theirs (a handle); a stub's `getMethods` lists the answered statics alone.
+  theirs (a handle); a stub's `getMethods` lists the answered statics alone; `supers`/`bases`
+  stay refused (`.todo/m64`).
 - Measured 2026-11-26 (oracle `clj` 1.12.6): tools.analyzer.jvm 1.2.3 analyzes all 18 forms of
   "core.async and tools.analyzer.jvm"'s list to the oracle's op and tag (interpreter, run-time
   `analyze` over the copy with `RT`/`Compiler/LOADER` patched); core.match 1.1.1 and schema
@@ -2645,12 +2649,14 @@ real `Class` objects, so a class value of another shape would be unequal to them
   `anon-fn-reads-as-fn-star-over-generated-parameters`,
   `a-macro-argument-holding-an-anonymous-fn-expands` (oracle-identical but the parameter
   numbers).
-- **A class value decodes to a constant** (`ClojureMacroLowering.decodeClass`): a
-  `(:C%CLASS name)` designator travels under `%embedded` as its construction (a `quote` round
-  trip would turn its head into a `:C%KEYWORD` wrapper). A host `java.lang.Class` a body
-  evaluated decodes to the class literal's spelling: its `forName` object where a host is,
-  else (and for a name no spelling loads, `clojure.core$long`) the designator. So datascript's
-  `defn+` `:tag` is the oracle's class on the interpreter and the JVM, a designator on wasm.
+- **A class value decodes to a constant** (`ClojureMacroLowering.classSpelling`): a host
+  `java.lang.Class` a body evaluated and a `(:C%CLASS name)` designator alike decode to what the
+  class's source spelling lowers to (`classValue`, `classKeyword`: `%clojure-class-value` or the
+  `forName` object), else -- a record's or deftype's class -- the designator's construction
+  under `%embedded` (a `quote` round trip would turn its head into a `:C%KEYWORD` wrapper). One
+  form for both, since the binary's macro-time class values are designators ("Class values")
+  and its IR must be the JVM's (`ClojureNativeLoweringE2eTest`). So datascript's `defn+` `:tag`
+  is the oracle's class on the interpreter and the JVM, a designator on wasm.
   Pins: clojure-spec `a-macro-expansion-holding-a-class-value-lowers`,
   `a-macro-expansions-tag-metadata-holds-the-class-value` (the host legs),
   `ClojureLoweringTest#aMacroExpansionHoldingAClassValueLowersAsAConstant`.
