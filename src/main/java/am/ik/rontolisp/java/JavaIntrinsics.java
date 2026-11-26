@@ -2397,6 +2397,9 @@ final class JavaIntrinsics {
 				(lowering, call) -> call("copy-structure", call.argument(0)));
 		natives.put("rontolisp.internal.Support.readDouble(String)", runtime("read-double"));
 		natives.put("rontolisp.internal.Support.utf8(String)", runtime("utf8-bytes"));
+		// the constants an enum's class object holds for a set or a map made over it
+		natives.put("rontolisp.internal.Support.universe(Class)",
+				(lowering, call) -> lowering.library("java.lang.Class", "universe", List.of(call.argument(0))));
 		natives.put("rontolisp.internal.Support.utf8String(byte[],int,int)", runtime("utf8-string"));
 		// the standard streams: the host's, which are streams of characters
 		natives.put("java.io.StandardOutput.write0(boolean,String)",

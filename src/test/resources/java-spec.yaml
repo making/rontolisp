@@ -15894,6 +15894,69 @@ standalone:
       [two words] 9
       [] 0
       changed,two words,
+  # An EnumSet or an EnumMap whose enum its call names -- by a reference, a call, a
+  # creation, a class under the map -- takes that enum's constants from its class object,
+  # in a program that never reaches getEnumConstants, so no other enum's class object
+  # holds them (Kept's: JavaLoweringTest); a file of its own, since the corpus reaches it.
+  - name: a-set-or-a-map-of-enum-constants-takes-the-constants-of-the-enum-its-call-names
+    file: Universes.java
+    source: |
+      import java.util.*;
+      import java.util.function.Function;
+
+      public class Universes {
+          enum Suit { CLUBS, DIAMONDS, HEARTS, SPADES }
+
+          enum Size { S, M, L }
+
+          enum Day { MON, TUE, WED }
+
+          enum Shape {
+              CIRCLE {
+                  int corners() {
+                      return 0;
+                  }
+              },
+              SQUARE {
+                  int corners() {
+                      return 4;
+                  }
+              };
+
+              abstract int corners();
+          }
+
+          enum Level { DEBUG, INFO }
+
+          enum Coin { HEADS, TAILS }
+
+          enum Tone { LOW, HIGH }
+
+          enum Grade { A, B }
+
+          enum Kept { ONE, TWO }
+
+          public static void main(String[] args) {
+              Function<Class<Suit>, EnumSet<Suit>> none = EnumSet::noneOf;
+              EnumSet<Suit> suits = none.apply(Suit.class);
+              suits.add(Suit.SPADES);
+              Object kept = Kept.TWO;
+              System.out.println(suits + " " + EnumSet.of(Size.L, Size.S) + " " + EnumSet.range(Day.TUE, Day.WED) + " "
+                      + EnumSet.copyOf(List.of(Shape.SQUARE)) + " " + EnumSet.allOf(Level.class) + " "
+                      + kept.getClass().getSimpleName());
+              Map<Coin, Integer> plain = new HashMap<>();
+              plain.put(Coin.TAILS, 2);
+              EnumMap<Tone, String> under = new EnumMap<>(Tone.class) {
+              };
+              under.put(Tone.HIGH, "h");
+              EnumMap<Grade, Integer> grades = new EnumMap<>(Grade.class);
+              grades.put(Grade.B, 2);
+              System.out.println(new EnumMap<>(plain) + " " + under + " " + grades + " " + suits.contains(Suit.CLUBS));
+          }
+      }
+    stdout: |
+      [SPADES] [S, L] [TUE, WED] [SQUARE] [DEBUG, INFO] Kept
+      {TAILS=2} {HIGH=h} {B=2} false
   # A program of several files: the classes the file names are found under the root of its
   # source tree -- the directory its package names it below -- by their packages and names,
   # with every class of the file found (Polygon, beside Square). Single-type, on-demand and
