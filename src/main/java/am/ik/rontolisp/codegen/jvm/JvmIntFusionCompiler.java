@@ -46,7 +46,9 @@ import org.jspecify.annotations.Nullable;
  * tree from the SAME arguments through the generic runtime helpers the per-op compilers
  * call ({@code _add}-family, {@code _logand}-family), so a bailing fast path reproduces
  * the generic result bit for bit, including promotion to {@code BigInteger} and the
- * division-by-zero error shape. Outlining is what keeps the double emission from pushing
+ * division-by-zero error shape. A fallback of more than a few operations is a method of
+ * its own ({@code _fxb$N}, {@link #emitMethods}), so the fused method the JIT compiles
+ * and inlines is the fast path. Outlining is what keeps the double emission from pushing
  * an enclosing method toward HotSpot's 8000-bytecode {@code HugeMethodLimit}
  * ({@code .kb/hot-path-method-size.md}): the enclosing method holds one
  * {@code invokestatic} where the generic emission held the whole per-op chain, and
@@ -3086,16 +3088,105 @@ final class JvmIntFusionCompiler {
 	// ------------------------------------------------------------- method body pass
 
 	/**
-	 * Emits one pending fused method's body into a fresh context (the compiler's fused
-	 * pass, after every program body is compiled): guards + unboxes each leaf once, the
-	 * raw fast path under an {@code ArithmeticException} region whose handler is the
-	 * bail, and the generic-helper fallback.
+	 * A fallback of at most this many bytecodes stays in its fused method; a longer one
+	 * is a method of its own the bail calls. HotSpot's C2 inlines a method this small
+	 * wherever it is called ({@code MaxInlineSize}), so outlining one would move nothing
+	 * out of the compiled fast path.
 	 */
-	static void emitMethodBody(Pending pending, JvmLispCompiler.Ctx ctx, String className) {
+	private static final int FALLBACK_INLINE_LIMIT = 35;
+
+	/**
+	 * One method of the fused pass: a pending site's own, or the fallback its bail calls.
+	 */
+	record Emitted(JvmLispCompiler.Ctx ctx, Utf8Entry nameUtf8, Utf8Entry descUtf8) {
+	}
+
+	/**
+	 * Emits one pending fused method (the compiler's fused pass, after every program body
+	 * is compiled): guards + unboxes each leaf once, the raw fast path -- under an
+	 * {@code ArithmeticException} region whose handler is the bail where one of its
+	 * operations can throw -- and the generic-helper fallback. A fallback past
+	 * {@link #FALLBACK_INLINE_LIMIT} is the method {@code _fxb$N} the bail calls with the
+	 * fused method's own arguments: the fused method is then the fast path alone, and a
+	 * bail the JIT has seen once compiles as that one call
+	 * ({@code .kb/jvm-int-fusion.md}, "The fallback is a method of its own").
+	 * @param pending the method to emit
+	 * @param fresh makes the context of one method
+	 * @param className the class being generated
+	 * @return the fused method, then its fallback when it has one of its own
+	 */
+	static List<Emitted> emitMethods(Pending pending, java.util.function.Supplier<JvmLispCompiler.Ctx> fresh,
+			String className) {
+		JvmLispCompiler.Ctx ctx = fresh.get();
+		Emitted fused = new Emitted(ctx, pending.nameUtf8(), pending.descUtf8());
 		if (pending.isProbe()) {
 			emitProbeBody(pending, ctx, className);
-			return;
+			return List.of(fused);
 		}
+		if (!canBail(pending)) {
+			emitMethodBody(pending, ctx, className, null);
+			return List.of(fused);
+		}
+		// The fallback first, as the method it would be: its size decides where it goes.
+		JvmLispCompiler.Ctx fallback = fresh.get();
+		StringBuilder desc = new StringBuilder(pending.descUtf8().stringValue());
+		int slot = assignParameters(pending.leaves());
+		for (Node leaf : pending.leaves()) {
+			// A draw is the prologue's (RandomLeaf): the fallback takes what it decided.
+			if (leaf instanceof RandomLeaf l) {
+				l.longSlot = slot;
+				slot += 2;
+				if (l.limitExpr != null) {
+					l.flagSlot = slot++;
+					l.boxSlot = slot++;
+				}
+				desc.insert(desc.indexOf(")"), l.limitExpr == null ? "J" : "JILjava/lang/Object;");
+			}
+		}
+		fallback.nextLocal = slot;
+		fallback.maxLocals = Math.max(fallback.maxLocals, slot);
+		emitFallbackBody(pending, fallback, className);
+		if (fallback.body.size() <= FALLBACK_INLINE_LIMIT) {
+			forgetFallback(pending.root());
+			emitMethodBody(pending, ctx, className, null);
+			return List.of(fused);
+		}
+		Utf8Entry nameUtf8 = ctx.cp.utf8Entry("_fxb$" + pending.nameUtf8().stringValue().substring("_fx$".length()));
+		Utf8Entry descUtf8 = ctx.cp.utf8Entry(desc.toString());
+		emitMethodBody(pending, ctx, className, ctx.cp.methodRef(ctx.cp.classEntry(className), nameUtf8, descUtf8));
+		return List.of(fused, new Emitted(fallback, nameUtf8, descUtf8));
+	}
+
+	/**
+	 * Clears what one emission of the fallback left on the tree
+	 * ({@link #countFallbackUses}, {@link CelledCall#fallbackSlot}), for the next.
+	 */
+	private static void forgetFallback(Node node) {
+		switch (node) {
+			case CelledCall call -> {
+				call.fallbackUses = 0;
+				call.fallbackSlot = -1;
+				for (Node arg : call.args) {
+					forgetFallback(arg);
+				}
+			}
+			case OpNode op -> {
+				for (Node arg : op.args()) {
+					forgetFallback(arg);
+				}
+			}
+			case ArefLeaf leaf -> forgetFallback(java.util.Objects.requireNonNull(leaf.indexNode));
+			default -> {
+			}
+		}
+	}
+
+	/**
+	 * The fused method's body; its bail runs the fallback in place, or calls
+	 * {@code outlined} when the fallback is that method.
+	 */
+	private static void emitMethodBody(Pending pending, JvmLispCompiler.Ctx ctx, String className,
+			@Nullable MethodRefEntry outlined) {
 		State state = java.util.Objects.requireNonNull(ctx.fusedState);
 		int slot = assignParameters(pending.leaves());
 		ctx.nextLocal = slot;
@@ -3279,7 +3370,7 @@ final class JvmIntFusionCompiler {
 			}
 			fallbackBails = doubleBails;
 		}
-		emitBailAndFallback(pending, ctx, state, fallbackBails, tryStart, tryEnd, className);
+		emitBailAndFallback(pending, ctx, fallbackBails, tryStart, tryEnd, className, outlined);
 	}
 
 	/**
@@ -3977,12 +4068,95 @@ final class JvmIntFusionCompiler {
 		ctx.body.dload(slot);
 	}
 
-	private static void emitBailAndFallback(Pending pending, JvmLispCompiler.Ctx ctx, State state,
-			MethodCode.Label bails, MethodCode.Label tryStart, MethodCode.Label tryEnd, String className) {
-		MethodCode.Label handler = ctx.body.newBoundLabel();
-		ctx.stack.enterHandler();
-		ctx.body.pop();
-		ctx.body.labelBinding(bails);
+	/**
+	 * The bail: where the guards branch and, when the fast path can throw, where its
+	 * {@code ArithmeticException} lands -- a fast path of wrapped and bitwise operations
+	 * throws nothing, and a handler over it would only keep a dispatch after each of its
+	 * calls. Then the fallback: in place, or the call of its method with the fused
+	 * method's arguments and what the prologue drew.
+	 */
+	private static void emitBailAndFallback(Pending pending, JvmLispCompiler.Ctx ctx, MethodCode.Label bails,
+			MethodCode.Label tryStart, MethodCode.Label tryEnd, String className, @Nullable MethodRefEntry outlined) {
+		if (!throwsArithmetic(pending)) {
+			ctx.body.labelBinding(bails);
+		}
+		else {
+			MethodCode.Label handler = ctx.body.newBoundLabel();
+			ctx.stack.enterHandler();
+			ctx.body.pop();
+			ctx.body.labelBinding(bails);
+			ctx.body.exceptionCatch(tryStart, tryEnd, handler, ctx.cp.classEntry("java/lang/ArithmeticException"));
+		}
+		if (outlined == null) {
+			emitFallbackBody(pending, ctx, className);
+			return;
+		}
+		for (Node leaf : pending.leaves()) {
+			switch (leaf) {
+				case ExprLeaf l -> ctx.body.aload(l.paramSlot);
+				case ArefLeaf l -> ctx.body.aload(l.arrParam);
+				case RandomLeaf l -> {
+					if (l.limitExpr != null) {
+						ctx.body.aload(l.limitParam);
+					}
+				}
+				case RawLeaf l -> {
+					// A dual local's raw half may hold its shadow's value by now (the
+					// prologue's unbox): the fallback reads the half the flag names.
+					ctx.body.lload(l.rawParam);
+					if (!l.src.isExact()) {
+						ctx.body.aload(l.shadowParam).iload(l.flagParam);
+					}
+				}
+				default -> throw new IllegalStateException("not a registered leaf: " + leaf);
+			}
+		}
+		for (Node leaf : pending.leaves()) {
+			if (leaf instanceof RandomLeaf l) {
+				ctx.body.lload(l.longSlot);
+				if (l.limitExpr != null) {
+					ctx.body.iload(l.flagSlot).aload(l.boxSlot);
+				}
+			}
+		}
+		ctx.body.invokestatic(outlined);
+		if (pending.isCompare()) {
+			ctx.body.ireturn();
+		}
+		else if (pending.cmpMask() == STORE_EFFECT) {
+			ctx.body.return_();
+		}
+		else if (pending.rawReturn()) {
+			ctx.body.lreturn();
+		}
+		else {
+			ctx.body.areturn();
+		}
+	}
+
+	/**
+	 * Whether an operation of the fast path can throw the {@code ArithmeticException} the
+	 * bail catches: the tree's ({@link #fastThrows}), a computed subscript's, a store's
+	 * value's.
+	 */
+	private static boolean throwsArithmetic(Pending pending) {
+		for (Node leaf : pending.leaves()) {
+			if (leaf instanceof ArefLeaf l && fastThrows(java.util.Objects.requireNonNull(l.indexNode))) {
+				return true;
+			}
+		}
+		if (pending.isStore()) {
+			return fastThrows(((OpNode) pending.root()).args().get(1));
+		}
+		return fastThrows(pending.root());
+	}
+
+	/**
+	 * The fallback over the fused method's parameter slots (and, for a draw, the slots
+	 * holding what the prologue drew): the whole tree through the generic helpers,
+	 * answered as the method answers.
+	 */
+	private static void emitFallbackBody(Pending pending, JvmLispCompiler.Ctx ctx, String className) {
 		countFallbackUses(pending.root());
 		if (pending.isCompare()) {
 			OpNode root = (OpNode) pending.root();
@@ -4023,8 +4197,6 @@ final class JvmIntFusionCompiler {
 			emitFallback(pending.root(), ctx, className);
 			ctx.body.areturn();
 		}
-		ClassEntry arithEx = ctx.cp.classEntry("java/lang/ArithmeticException");
-		ctx.body.exceptionCatch(tryStart, tryEnd, handler, arithEx);
 	}
 
 	/**

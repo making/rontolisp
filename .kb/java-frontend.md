@@ -4740,6 +4740,9 @@ names throw). Written from the standards and JDK 25's answers to probes.
   computed in place (l73, [jvm-int-fusion.md](jvm-int-fusion.md), "Exact locals"): SHA3-256
   62-112 ms on Graal, 85-203 on C2. Their arrays read and stored raw: SHA-512 Graal 120-132 ->
   91-106 ms, C2 335-504 -> 138-161 ([jvm-int-fusion.md](jvm-int-fusion.md), "Declared arrays").
+  A fused method's fallback a method of its own: SHA-512 C2 137-138 -> 93-110, Graal 90-93 ->
+  83-85, and on C2 MD5, SHA-1 and SHA-256 a fifth faster ("The fallback is a method of its
+  own"; SHA-512 bails once a digest over a message of whole 8-byte words, at its padding word).
 - **Sizes** (Preview 1 / component / JVM class, bytes): a program naming no digest is
   byte-identical: l72 left `NoDigest`, `RandomOnly`, `Constant`, `Computed`, `Login` and
   `RandomText` so in all three forms, `examples/java/shop` on wasm (324,175 / 335,139; its JVM
