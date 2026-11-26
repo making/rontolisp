@@ -114,6 +114,47 @@ public final class RontoSocketInput extends InputStream {
 	}
 
 	/**
+	 * Reads one character -- a Unicode code point -- off the octets ({@code read-char}).
+	 * The first octet's row of the Unicode standard's table of well-formed UTF-8 (Table
+	 * 3-7) says how many octets follow and what range each may take; each is looked at
+	 * before it is taken. An octet that cannot continue the sequence stays unread, to
+	 * start the next character, and what was taken is one U+FFFD, as is a sequence the
+	 * peer's close cuts short and an octet that starts none: the octets per replacement
+	 * of {@code read-line}'s decoder. An encoded surrogate (ED A0..BF) is taken whole and
+	 * is one U+FFFD, as that decoder answers it.
+	 * @return the code point, or -1 when the peer closed before any octet
+	 * @throws IOException if the socket is closed
+	 */
+	public int readCodePoint() throws IOException {
+		int lead = read();
+		if (lead < 0x80) {
+			return lead;
+		}
+		int need = (lead >= 0xC2 && lead <= 0xDF) ? 1
+				: (lead >= 0xE0 && lead <= 0xEF) ? 2 : (lead >= 0xF0 && lead <= 0xF4) ? 3 : 0;
+		if (need == 0) {
+			return 0xFFFD;
+		}
+		int cp = lead & ((need == 1) ? 0x1F : (need == 2) ? 0x0F : 0x07);
+		int lo = (lead == 0xE0) ? 0xA0 : (lead == 0xF0) ? 0x90 : 0x80;
+		int hi = (lead == 0xF4) ? 0x8F : 0xBF;
+		for (int i = 0; i < need; i++) {
+			if (this.position == this.limit && !fill()) {
+				return 0xFFFD;
+			}
+			int next = this.buffer[this.position] & 0xff;
+			if (next < lo || next > hi) {
+				return 0xFFFD;
+			}
+			this.position++;
+			cp = (cp << 6) | (next & 0x3F);
+			lo = 0x80;
+			hi = 0xBF;
+		}
+		return (cp >= 0xD800 && cp <= 0xDFFF) ? 0xFFFD : cp;
+	}
+
+	/**
 	 * What has come, into {@code octets[offset, offset + length)}: what the buffer holds,
 	 * waiting for the host only when it holds nothing, then what else the host has at
 	 * once. A request of a buffer's size or more is read into the caller's octets.

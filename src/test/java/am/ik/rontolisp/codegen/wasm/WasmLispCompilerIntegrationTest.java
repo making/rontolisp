@@ -17797,10 +17797,12 @@ class WasmLispCompilerIntegrationTest {
 		// The stdin arm of the same bare-read-char contract the socket arm has
 		// (componentTcpBareReadCharSignalsAtPeerClose): at EOF it signals, and with the
 		// end-of-file CLASS -- a look-alike message would leave handler-case unable to
-		// catch what the interpreter and the JVM let it catch.
+		// catch what the interpreter and the JVM let it catch. Before it, a malformed
+		// sequence is one U+FFFD and the octet that cut it short starts the next
+		// character (c3 41), and so is a lead the end of input cuts short (e9).
 		String program = """
 				(rontolisp:async-defun main ()
-				  (print (read-char))
+				  (print (list (char-code (read-char)) (char-code (read-char)) (char-code (read-char))))
 				  (print (handler-case (read-char)
 				           (end-of-file () :signalled)
 				           (error (e) :other))))
@@ -17809,9 +17811,9 @@ class WasmLispCompilerIntegrationTest {
 		byte[] componentBytes = compileFetchComponent(program);
 		wasmtime.copyFileToContainer(Transferable.of(componentBytes), path("stdin-readchar-eof.component.wasm"));
 		ExecResult result = wasmtime.execInContainer("sh", "-c",
-				"printf 'A' | wasmtime run " + path("stdin-readchar-eof.component.wasm"));
+				"printf '\\303A\\351' | wasmtime run " + path("stdin-readchar-eof.component.wasm"));
 		assertThat(result.getExitCode()).as("stderr: %s", result.getStderr()).isZero();
-		assertThat(result.getStdout().trim()).isEqualTo("#\\A\n:SIGNALLED");
+		assertThat(result.getStdout().trim()).isEqualTo("(65533 65 65533)\n:SIGNALLED");
 	}
 
 	@Test
