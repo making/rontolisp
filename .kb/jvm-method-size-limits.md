@@ -193,7 +193,10 @@ byte writer and the pool's own storage. Per-slice history lives in git history.
 - The top level is chunked (`_top$0`, ..., `chunkCodeBudget` 24,000 bytes, `JvmLispCompiler`
   Pass 2b) but only BETWEEN forms, so injected data tables emit as `defvar`/`setq`-append forms
   of 48. Per-arm branches inside a dispatch chain are LOCAL, so 24 KB leaves slack for both
-  limits.
+  limits. The budget counts code, not frames: on the ci-spec corpus (2026-11-26) the chunks'
+  frames hold 4.0 M locals and stack items over 3.16 MB of code, and a change that shrank the
+  code by 8.8 KB grew the classes by 50 KB through the repacking alone
+  ([array-literals.md](array-literals.md), "A `vector` call").
   A check repeated at every call site belongs in a shared helper, not inline: the
   trampoline's bounce unwrap, inline, took the corpus's largest form past the
   headroom (2026-10-03); as `invokestatic _unw` it is a single call
@@ -225,7 +228,9 @@ byte writer and the pool's own storage. Per-slice history lives in git history.
   constants is quoted data, [starlark-frontend.md](starlark-frontend.md)), stop at `method
   _top$0: method code exceeds the JVM's 65535-byte limit: 97874`; 1,500 arguments fit. Each argument is already
   smaller than a method of its own would be, so outlining them saves nothing: the pushes are
-  the bytes. A quoted list of 3,000 elements compiles (the literal builders below).
+  the bytes. A quoted list of 3,000 elements compiles (the literal builders below); a `vector`
+  call fits some 8,000 elements of a 3 B push ([array-literals.md](array-literals.md), "A
+  `vector` call").
   Nor was a Java program's initialization: `(%reporting-uncaught .. init.. (main))` is one
   form with an exit, so the `java-spec.yaml` corpus stopped at `method _top$0: method code
   exceeds the JVM's 65535-byte limit: 65740` (2026-11-20, k55), and one class whose static

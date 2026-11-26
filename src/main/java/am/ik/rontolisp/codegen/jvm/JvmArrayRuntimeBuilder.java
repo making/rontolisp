@@ -101,6 +101,16 @@ final class JvmArrayRuntimeBuilder {
 
 	static final String MAKE_DESC = "(Ljava/lang/Object;Ljava/lang/Object;Ljava/lang/Object;Ljava/lang/Object;)Ljava/lang/Object;";
 
+	/**
+	 * {@code _vectorOf(Object[] elements) -> Object}: the rank-1 array a {@code vector}
+	 * call answers, made from its evaluated elements at once -- what {@code (make-array
+	 * n)} and a store per element would leave: packed while every element is an integer
+	 * {@code Long}, the general list otherwise.
+	 */
+	static final String VECTOR_OF = "_vectorOf";
+
+	static final String VECTOR_OF_DESC = "([Ljava/lang/Object;)Ljava/lang/Object;";
+
 	static final String AREF1 = "_aref1";
 
 	static final String AREF1_DESC = "(Ljava/lang/Object;Ljava/lang/Object;)Ljava/lang/Object;";
@@ -396,12 +406,12 @@ final class JvmArrayRuntimeBuilder {
 	 * would make the under-prediction unrecoverable; {@code JvmArrayRuntimeBuilderTest}
 	 * pins the set against what the two builders actually produce.
 	 */
-	static final Set<String> METHOD_NAMES = Set.of(MAKE, AREF1, AREF2, AREFN, ASET1, ASET2, ASETN, DIMS, TO_STRING,
-			TO_DISPLAY_STRING, FILL_POINTER, SET_FILL_POINTER, HAS_FILL_POINTER, ADJUSTABLE_ARRAY_P, VECTOR_PUSH,
-			VECTOR_POP, VECTOR_PUSH_EXTEND, MAKE_DISPLACED, UNDISPLACE, RM_GET, RM_SET, ARRAY_BECOME, DISP_TARGET,
-			DISP_OFFSET, CHAR_VEC_MAKE, STRV, STR_TO_CHAR_VEC, SUBSEQ_CV, TO_MUT_STR, WIDEN, MAKE_TYPED, ELEMENT_TYPE,
-			DEFAULT_ELEMENT, ADOPT_ELEMENT_TYPE, JAVA_COMPONENT, SET_JAVA_COMPONENT, ALIKE, CHECK_RANK, RANK_ERR,
-			ARRAY_BECOME_DISPLACED, CK_ARRAY, CK_FILL_POINTER, DIMS_TOTAL);
+	static final Set<String> METHOD_NAMES = Set.of(MAKE, VECTOR_OF, AREF1, AREF2, AREFN, ASET1, ASET2, ASETN, DIMS,
+			TO_STRING, TO_DISPLAY_STRING, FILL_POINTER, SET_FILL_POINTER, HAS_FILL_POINTER, ADJUSTABLE_ARRAY_P,
+			VECTOR_PUSH, VECTOR_POP, VECTOR_PUSH_EXTEND, MAKE_DISPLACED, UNDISPLACE, RM_GET, RM_SET, ARRAY_BECOME,
+			DISP_TARGET, DISP_OFFSET, CHAR_VEC_MAKE, STRV, STR_TO_CHAR_VEC, SUBSEQ_CV, TO_MUT_STR, WIDEN, MAKE_TYPED,
+			ELEMENT_TYPE, DEFAULT_ELEMENT, ADOPT_ELEMENT_TYPE, JAVA_COMPONENT, SET_JAVA_COMPONENT, ALIKE, CHECK_RANK,
+			RANK_ERR, ARRAY_BECOME_DISPLACED, CK_ARRAY, CK_FILL_POINTER, DIMS_TOTAL);
 
 	/** An array helper method body ready to be emitted into the generated class. */
 	record ArrayMethod(Utf8Entry name, Utf8Entry desc, MethodCode code) {
@@ -614,6 +624,8 @@ final class JvmArrayRuntimeBuilder {
 		m.aload(list);
 		m.areturn();
 		methods.add(new ArrayMethod(cp.utf8Entry(MAKE), cp.utf8Entry(MAKE_DESC), m));
+		methods.add(buildVectorOf(cp, objectClass, arrayListClass, longClass, longLongValue, longValueOf, nilSentinel,
+				concurrent));
 
 		// _aref1(arr, i): return _rmGet(arr, 1 + ((Long) i).intValue()) -- _rmGet
 		// follows the displacement chain, so every accessor goes through it. A string
@@ -3765,6 +3777,140 @@ final class JvmArrayRuntimeBuilder {
 		m.iinc(idx, 1);
 		m.goto_(fillLoop);
 		m.labelBinding(afterDims);
+	}
+
+	/**
+	 * Builds {@code _vectorOf(Object[] elements) -> Object} ({@link #VECTOR_OF}). The
+	 * shapes are {@code _arrayMake}'s two: a {@code long[]} behind the length-6 header
+	 * while every element is a {@code Long}, the length-3 header and the elements boxed
+	 * otherwise. A packed array's list also holds every element boxed where another
+	 * thread can store into it, as {@code _arrayMake} makes it, and where an element is
+	 * the sentinel integer, whose reader asks the list's slot.
+	 * @param cp the constant pool
+	 * @param objectClass {@code java/lang/Object}
+	 * @param arrayListClass {@code java/util/ArrayList}
+	 * @param longClass {@code java/lang/Long}
+	 * @param longLongValue {@code Long.longValue}
+	 * @param longValueOf {@code Long.valueOf(long)}
+	 * @param nilSentinel the packed array's nil
+	 * @param concurrent whether another thread can run the program's Lisp
+	 * @return the method
+	 */
+	private static ArrayMethod buildVectorOf(ConstantPool cp, ClassEntry objectClass, ClassEntry arrayListClass,
+			ClassEntry longClass, MethodRefEntry longLongValue, MethodRefEntry longValueOf, LongEntry nilSentinel,
+			boolean concurrent) {
+		MethodRefEntry alInitSized = cp.methodRef(arrayListClass, "<init>", "(I)V");
+		MethodRefEntry alAdd = cp.methodRef(arrayListClass, "add", "(Ljava/lang/Object;)Z");
+		MethodRefEntry alAddAll = cp.methodRef(arrayListClass, "addAll", "(Ljava/util/Collection;)Z");
+		MethodRefEntry asList = cp.methodRef(cp.classEntry("java/util/Arrays"), "asList",
+				"([Ljava/lang/Object;)Ljava/util/List;");
+		// Locals: 0 = elements, 1 = n, 2 = list, 3 = dims, 4 = data, 5 = i, 6 = the
+		// element, 7/8 = its value, 9 = whether one is the sentinel.
+		int elements = 0, n = 1, list = 2, dims = 3, data = 4, i = 5, element = 6, value = 7, sentinel = 9;
+		MethodCode m = new MethodCode();
+		m.aload(elements);
+		m.arraylength();
+		m.istore(n);
+		m.new_(arrayListClass);
+		m.dup();
+		m.iload(n);
+		m.loadConstant(1);
+		m.iadd();
+		m.invokespecial(alInitSized);
+		m.astore(list);
+		m.loadConstant(1);
+		m.anewarray(objectClass);
+		m.dup();
+		m.loadConstant(0);
+		m.iload(n);
+		m.i2l();
+		m.invokestatic(longValueOf);
+		m.aastore();
+		m.astore(dims);
+		m.iload(n);
+		m.newarray(TypeKind.LONG);
+		m.astore(data);
+		m.loadConstant(0);
+		m.istore(sentinel);
+		m.loadConstant(0);
+		m.istore(i);
+		MethodCode.Label loop = m.newLabel();
+		MethodCode.Label next = m.newLabel();
+		MethodCode.Label packed = m.newLabel();
+		MethodCode.Label general = m.newLabel();
+		MethodCode.Label fillBoxed = m.newLabel();
+		m.labelBinding(loop);
+		m.iload(i);
+		m.iload(n);
+		m.if_icmpge(packed);
+		m.aload(elements);
+		m.iload(i);
+		m.aaload();
+		m.astore(element);
+		m.aload(element);
+		m.instanceOf(longClass);
+		m.ifeq(general);
+		m.aload(element);
+		m.checkcast(longClass);
+		m.invokevirtual(longLongValue);
+		m.lstore(value);
+		m.aload(data);
+		m.iload(i);
+		m.lload(value);
+		m.lastore();
+		m.lload(value);
+		m.ldc(nilSentinel);
+		m.lcmp();
+		m.ifne(next);
+		m.loadConstant(1);
+		m.istore(sentinel);
+		m.labelBinding(next);
+		m.iinc(i, 1);
+		m.goto_(loop);
+		// list.add(new Object[]{dims, null, null, null, null, data})
+		m.labelBinding(packed);
+		m.aload(list);
+		m.loadConstant(6);
+		m.anewarray(objectClass);
+		m.dup();
+		m.loadConstant(0);
+		m.aload(dims);
+		m.aastore();
+		m.dup();
+		m.loadConstant(5);
+		m.aload(data);
+		m.aastore();
+		m.invokevirtual(alAdd);
+		m.pop();
+		if (!concurrent) {
+			m.iload(sentinel);
+			m.ifne(fillBoxed);
+			m.aload(list);
+			m.areturn();
+		}
+		else {
+			m.goto_(fillBoxed);
+		}
+		// list.add(new Object[]{dims, null, null})
+		m.labelBinding(general);
+		m.aload(list);
+		m.loadConstant(3);
+		m.anewarray(objectClass);
+		m.dup();
+		m.loadConstant(0);
+		m.aload(dims);
+		m.aastore();
+		m.invokevirtual(alAdd);
+		m.pop();
+		m.labelBinding(fillBoxed);
+		m.aload(list);
+		m.aload(elements);
+		m.invokestatic(asList);
+		m.invokevirtual(alAddAll);
+		m.pop();
+		m.aload(list);
+		m.areturn();
+		return new ArrayMethod(cp.utf8Entry(VECTOR_OF), cp.utf8Entry(VECTOR_OF_DESC), m);
 	}
 
 	/**

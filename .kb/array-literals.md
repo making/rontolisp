@@ -299,15 +299,15 @@ the site knows all three at compile time; a Lisp-level helper taxes a tight
 allocation loop. Wasm-specific: `WasmArrayCompiler.compileMake` emits inline at every site,
 where the JVM's is an `invokestatic` on a body emitted once.
 
-## A `vector` call (wasm-GC)
-`(vector e...)` is `WasmArrayCompiler.compileVector`: the elements' pushes, `array.new_fixed`, and
+## A `vector` call
+`(vector e...)` on wasm-GC is `WasmArrayCompiler.compileVector`: the elements' pushes, `array.new_fixed`, and
 `_vec_of` (`WasmBulkRuntimeBuilder.VEC_OF`), which wraps the storage as `(make-array n)` does. Past
 `QUOTED_RUN` (16) elements the storage is `array.new_default` and each run of 16 is
 `array.new_fixed` handed to `_vec_put`, so the stack holds a run at most across the elements'
 calls ([quoted-data.md](quoted-data.md), "A long list is built in runs"). An await among the
 arguments is hoisted before the call (`WasmAwaitNormalizer`), so no element suspends with
-operands on the stack. The interpreter and the JVM keep `expandVector` (`make-array` and an `aset`
-an element, some 30 B an element on the JVM).
+operands on the stack. The interpreter keeps `expandVector` (`make-array` and an `aset` an
+element).
 
 Measured 2026-11-26 (defvars as elements, best case a `global.get` of 2 B): an element ~110 -> 2.9 B
 (the list made a vector ~13 with these globals). 3,000 elements of `(cons i "s")`: 402,697 ->
@@ -315,6 +315,25 @@ Measured 2026-11-26 (defvars as elements, best case a `global.get` of 2 B): an e
 3,345,787, mustache 586,985 -> 570,493. A module with no `vector` site is byte-identical. Pinned by
 `WasmLispCompilerTest#anElementOfALiteralTableOrAVectorCallCostsItsOwnBytes` and
 `WasmLispCompilerIntegrationTest#componentAsyncLambdaCapturesAndArgumentHoistAcrossSuspension`.
+
+On the JVM it is `JvmArrayCompiler.compileVector`: an `Object[]` filled left to right (`dup`,
+index, element, `aastore`) handed to `JvmArrayRuntimeBuilder._vectorOf`, which builds
+`_arrayMake`'s two shapes: packed while every element is a `Long`, the length-3 general header
+otherwise. **Invariant: the shape is what `(make-array n)` and a store per element would leave**,
+so a packed array's list holds the elements boxed where threads can run or an element is
+`Long.MIN_VALUE` ([adjustable-arrays.md](adjustable-arrays.md)). An element holding a loop spills
+the array under it through the usual loop scope ([jvm-osr-backedges.md](jvm-osr-backedges.md)).
+Measured 2026-11-26 (a defvar element, `getstatic` 3 B): an element 30 -> 7 B; a call of 3,000
+was a method of 103,854 B, past the limit, and is 23,876. **Not cut**: a call past some 8,000
+such elements still outgrows its method (10,000: 79,876 B), the case
+[jvm-method-size-limits.md](jvm-method-size-limits.md) records for a call of thousands of small
+arguments. Java examples, `.class` total: the shiori 6,424,436 -> 6,373,476, mustache 882,934 ->
+875,978. The ci-spec corpus (189 sites): code -8,795 B, yet the classes +49,955 B (24,280,657 ->
+24,330,612): the smaller forms pack the top level into 126 chunks instead of 127, and a chunk's
+frames list its live locals (+65,000 frame items); the defuns' frames are unchanged. A program
+with no `vector` call is byte-identical. Pinned by
+`JvmLispCompilerTest#aVectorCallElementCostsItsPushAndOneStore` and ci-spec
+`vector-svref-and-array-introspection-cross-backend`.
 
 ## Tests
 ci-spec `array-literal-freshness-cross-backend`, `rank-zero-arrays-cross-backend`,

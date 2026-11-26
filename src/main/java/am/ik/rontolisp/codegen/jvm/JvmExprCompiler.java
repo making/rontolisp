@@ -2044,7 +2044,7 @@ final class JvmExprCompiler {
 				compileBulkCall(cons, ctx, className, JvmBulkRuntimeBuilder.SORT, JvmBulkRuntimeBuilder.SORT_DESC, 4);
 			case LispNames.ARRAY_ROW_MAJOR_INDEX ->
 				JvmExprCompiler.compileExpr(LispMacroExpander.expandArrayRowMajorIndex(cons), ctx, className);
-			case LispNames.VECTOR -> JvmExprCompiler.compileExpr(LispMacroExpander.expandVector(cons), ctx, className);
+			case LispNames.VECTOR -> JvmArrayCompiler.compileVector(cons, ctx, className);
 			case LispNames.SVREF -> JvmExprCompiler.compileExpr(LispMacroExpander.expandSvref(cons), ctx, className);
 			default -> {
 				return false;
