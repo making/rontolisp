@@ -362,8 +362,7 @@ class WitNamingHookTest {
 				  export pts: func() -> pts;
 				}
 				world v {
-				  flags perms { read }
-				  export grant: func(p: perms);
+				  export grant: func(p: stream<u8>);
 				}
 				""";
 		WitTypeMapper.Shape pts = shape(
@@ -374,8 +373,8 @@ class WitNamingHookTest {
 		assertThat(pts.rep() + " of " + shape(pts.element()).definition()).isEqualTo("LIST of s32");
 		assertThatThrownBy(
 				() -> WitExportDirective.describe(new WitExportDirective.Directive("w.wit", "v"), compound, "w.wit"))
-			.hasMessageContaining("w.wit:8: export 'grant': the WIT type of p holds the flags 'perms', which an export "
-					+ "does not carry");
+			.hasMessageContaining(
+					"w.wit:7: export 'grant': the WIT type of p holds a stream, which an export does not " + "carry");
 		assertThatThrownBy(() -> WitExportDirective.describe(new WitExportDirective.Directive("w.wit", null), """
 				package local:w;
 				world w {

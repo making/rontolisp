@@ -1449,6 +1449,12 @@ exports the component's entry points.** The user's request (2026-11-24): the opp
   refuses an instance method (no host has an instance); two exports
   of one label are two methods, keyed apart in `:names` (`.kb/wit.md`). Only the program's own
   classes are checked and exported (`Source.partial`).
+- Flags and a type of another interface (`use`) cross an export since the directive carries
+  them, with nothing added here (measured 2026-11-26, wasmtime 51): flags are the `Set` of a
+  member enum `JavaWitTypes` already converts; a used type is a member type of the using scope's
+  class under the clause's name, since `describe` answers the scope with its clauses written
+  out (`.kb/wit.md`, "A type of another interface"). Pin: `examples/wit/shapes/Shapes.java`
+  (`WitOracleE2eTest.aComponentCallsWhatAnotherExportsOverCompoundTypes`).
 - **The types are `@WitImport`'s, one mapping for both** (`JavaWitTypes`: `Table` the check,
   `Converters` the generated conversions; the import's `Checker` and `Writer` and the export's
   extend them). Decided: a named type is a member type of the class holding the export -- the
@@ -1493,7 +1499,7 @@ exports the component's entry points.** The user's request (2026-11-24): the opp
   `wit-export`'s check at the WIT line. A sleeping export imports `wasi:cli/exit`:
   `Thread.currentThread()` makes a `Thread`, whose id counter is `synchronized`, and the wasm
   monitor entry reaches `%java-unforeseen`. Flat types only: a compound type in an `async func`
-  is refused at its WIT line by `describe` (`.todo/m82`).
+  is refused at its WIT line by `describe` (`.todo/m90`).
 - **The lowering**: a flat export's `u8`, `u16` or `u32` crosses through a `defun`
   `<function>%wit` converting it; a `u64` past `Long.MAX_VALUE` traps (`.kb/wit.md`). An EAGER class is initialized in the
   top level, which the reactor runs in the first export call, a LAZY one at the top of its

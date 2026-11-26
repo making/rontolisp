@@ -254,8 +254,9 @@ Worker; `wasi:config`, `wasi:blobstore`, `wasi:logging` take the same path.
   the Clojure `example:blob/blob` program). `:canonical t` forces it (the Java front end on
   `--no-wasi`, whose binding is written before the reached set is known). A WASI Preview 1 module and
   `--native` refuse: their host answers no canonical import.
-- Refused on a core module beyond the component's refusals (`flags`): `async func`, stream/future
-  (`refuseAsyncOnCore`), `--reentrant` (absolute-pop staging). A canonical form binding nothing is
+- Refused on a core module where a component carries it: `async func`, stream/future
+  (`refuseAsyncOnCore`), `--reentrant` (absolute-pop staging), and `flags`, for which the glue
+  has no value (`WitGlueLayouts.layout`, in the compiler; `.todo/m92`). A canonical form binding nothing is
   dropped.
 - **May suspend**: every canonical import except what the glue answers synchronously
   (`HostGlueEmitter.answersSynchronously`: a drop, the store's `open`). Hence the load-path guard

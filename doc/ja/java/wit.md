@@ -355,10 +355,11 @@ is s32, which is int in Java, not long
 ### エクスポートの型
 
 型は[上の表](#the-types)のとおりです。ただし、world のエクスポートが受け渡せない型は、
-WIT の行で拒否されます。`flags`、リソース、`stream`、`future`、ほかのインタフェースが定義する型
-（`use`）です。名前の付いた型は、インポートするインタフェースの場合と同じくメンバー型です。
+WIT の行で拒否されます。リソース、`stream`、`future` です。名前の付いた型は、インポートする
+インタフェースの場合と同じくメンバー型です。
 world が定義する型はアノテーションを付けたクラスのメンバー型で、エクスポートするインタフェースが
-定義する型は、そのインタフェースのメンバークラスのメンバー型です。tuple はプログラムのレコードで、
+定義する型は、そのインタフェースのメンバークラスのメンバー型です。world やインタフェースが
+`use` でほかのインタフェースから取り込んだ型も、`use` 句が与えた名前のメンバー型です。tuple はプログラムのレコードで、
 どこに宣言してもかまいません。
 
 ```console
@@ -462,8 +463,8 @@ public static int pause(int ms) throws InterruptedException {
 
 - WASM のモジュールで使える型は、そのモジュールで `rontolisp:wit-import` が使える型と
   同じです。Preview 1 のコアモジュールでは平坦な型（32 ビットまでの整数、浮動小数点数、
-  `bool`、`string`、`list<u8>`、ハンドル）だけで、コンポーネントと `--no-wasi` のモジュールでは
-  `flags` 以外のすべてです。
+  `bool`、`string`、`list<u8>`、ハンドル）だけです。コンポーネントではすべての型、`--no-wasi` の
+  モジュールでは `flags` 以外のすべての型です。
   それ以外の型を持つメンバーは、プログラムが呼ぶ場合に限り、`wit-import` と同じく WIT の行を
   示して拒否されます。
 - `Long.MAX_VALUE` を超える `u64` は、どの WASM の境界も越えず、呼び出しはトラップになります。
@@ -480,8 +481,7 @@ public static int pause(int ms) throws InterruptedException {
   捨てた future と境界が見分けられないため）。`bool`、`list`、`flags`、`option` を要素とする `option`
   （境界がその none を見分けられないため）。ほかのインタフェースのリソース。`WitException` として
   投げるエラーの型にある tuple（型を書く場所がないため。`WitResult` の戻り値なら書けます）。
-- world のエクスポートは、`flags`、リソース、`stream`、`future`、ほかのインタフェースの型を
-  受け渡せません。`async func` のエクスポートで使える型は `bool`、整数、`f64`、`string` だけで、
+- world のエクスポートは、リソース、`stream`、`future` を受け渡せません。`async func` のエクスポートで使える型は `bool`、整数、`f64`、`string` だけで、
   `--no-gc` では拒否されます。同じラベルのエクスポート 2 つ（world の関数とインタフェースの
   関数、または 2 つのインタフェースの関数）は、それぞれのクラスの 2 つのメソッドです。
 - エクスポートが捕まえなかった例外は、JDK が書く行（`Exception in thread "main"

@@ -9,8 +9,9 @@ stand for, so the boundary types are never written by hand and the `.wit` file
 and the compiled component cannot drift apart. The WIT is the single source of
 truth: the world is the program's export list (a hand-written
 `rontolisp:wasm-export` alongside it is an error), and for a world of
-[flat types](#supported-wit-types) the emitted component is byte-identical to
-the one those hand-written directives would have produced. It
+[flat types](#supported-wit-types) that defines no type of its own the emitted
+component is byte-identical to the one those hand-written directives would have
+produced. It
 is a compile-time directive, not an ordinary function: on the **interpreter**
 and **JVM** backends it runs the same contract check and then returns `nil`, so
 the same source runs on every backend. See
@@ -128,6 +129,7 @@ the Lisp value [`rontolisp:wit-import`](rontolisp-wit-import.md) gives it:
 | --- | --- |
 | `record` | a keyword plist, `(:x 1 :y 2)` |
 | `enum` | a keyword, `:green` |
+| `flags` | a list of the keywords of the labels that are set, `(:read :write)` |
 | `variant` | the case's keyword, or `(keyword . payload)` when the case carries one |
 | `tuple` | a list |
 | `list<T>` | a list |
@@ -177,20 +179,48 @@ A function whose answer is a `result` returns the ok value and signals
 `rontolisp:wit-error` for the error arm, as a
 [provider](rontolisp-wit-provide.md) does; any other condition it leaves
 uncaught traps the call. A value the declared type cannot state traps too: a
-`u8` field given 300, a keyword that names no case, a `list<T>` answered with
-anything but a list. The component declares every type its world and its
-exported interfaces define, so `--emit-wit` prints them back and another
-component can import the interface
+`u8` field given 300, a keyword that names no case or no label, a `list<T>`
+answered with anything but a list.
+
+The component declares every type its world and its exported interfaces define,
+an alias of a flat type (`type id = u32`) among them, and exports an interface
+of types alone as those types; `--no-gc --component` does the same for the flat
+types it carries. The component is therefore the world's
+(`wasm-tools component targets world.wit out.wasm` accepts it), `--emit-wit`
+prints the types back, and another component can import the interface
 ([`examples/wit/shapes`](https://github.com/making/rontolisp/tree/develop/examples/wit/shapes)
 composes two).
 
-Not carried, each a compile error at the export's WIT line: `flags`, a resource
-handle, a `stream`, a `future`, a type an interface takes from another with
-`use`, and a compound type in an `async func`. A WASI module (`-o out.wasm`
-alone) and `--no-gc` export the flat types alone and refuse a world with any
-other.
+A type taken from another interface with `use` is declared as the using scope's
+own, under the name the clause gives it, and the component imports nothing for
+it: two value types of one shape are one type in the component model. A type
+the copied one holds comes with it -- an alias as what it names, a record, a
+variant or an enum under its own name:
 
-A `--no-wasi` module exports them too. Its core export takes the canonical ABI's
+```console
+interface geometry {
+  record point { x: s32, y: s32 }
+  record line { a: point, b: point }
+}
+
+interface shapes {
+  use geometry.{line};            // declares line, and point with it
+  length: func(l: line) -> f64;
+}
+```
+
+A world's types are imports of the component, so a `use` in the world names
+such a type itself (`use geometry.{line, point};`). A name the scope already
+gives another type is refused at the clause; rename it there
+(`point as corner`).
+
+Not carried, each a compile error at the export's WIT line: a resource handle,
+a `stream`, a `future`, and a compound type in an `async func`; an
+exported interface that declares a `resource` is refused as a whole. A WASI
+module (`-o out.wasm` alone) and `--no-gc` export the flat types alone and
+refuse a world with any other.
+
+A `--no-wasi` module exports them too, all but `flags`. Its core export takes the canonical ABI's
 core values, and the [`--emit-js-glue`](../../guides/wasm-host-boundary.md#wit-interfaces-beyond-the-flat-set)
 file lowers and lifts them: each export is an entry point under its label in
 camelCase, called with the JavaScript values a host import is handed (an object
@@ -222,8 +252,10 @@ offending export:
   (an exported function takes required parameters only: `&optional` / `&rest` /
   `&key` are rejected)
 - a WIT type the export does not carry: beyond the flat types on a WASI module
-  or under `--no-gc`, and `flags`, a handle, a `stream`, a `future` or a type
-  of another interface anywhere
+  or under `--no-gc`, and a handle, a `stream` or a `future` anywhere
+- an exported interface that declares a `resource`, and a `use` clause whose
+  type holds one the scope has no name for (a world's) or whose name the scope
+  gives another type
 - an `async func` under `--no-gc --component`, whose adapter-free reactor has no
   async machinery
 - an export name that is not a component-model label (lower-kebab-case words), a

@@ -355,10 +355,11 @@ is s32, which is int in Java, not long
 ### The types of an export
 
 The types are those of [the table above](#the-types), but the ones no world's export
-carries, each refused at its WIT line: `flags`, a resource, a `stream`, a `future`, and a
-type another interface defines (`use`). A named type is a member type, as an imported
-interface's is: of the annotated class for a type the world defines, of the interface's
-member class for a type an exported interface defines. A tuple is a record of the
+carries, each refused at its WIT line: a resource, a `stream` and a `future`. A named type
+is a member type, as an imported interface's is: of the annotated class for a type the
+world defines, of the interface's member class for a type an exported interface defines.
+A type the world or the interface takes from another with `use` is a member type too,
+under the name the clause gives it there. A tuple is a record of the
 program's, declared anywhere.
 
 ```console
@@ -460,7 +461,7 @@ public static int pause(int ms) throws InterruptedException {
 
 - A WASM module takes the types `rontolisp:wit-import` takes there: a Preview 1 core module
   the flat set (the integers up to 32 bits, the floats, `bool`, `string`, `list<u8>`,
-  handles), a component and a `--no-wasi` module everything but `flags`. A member of any
+  handles), a component everything, a `--no-wasi` module everything but `flags`. A member of any
   other type is refused at its WIT line where the program calls it, as `wit-import` refuses
   it.
 - A `u64` past `Long.MAX_VALUE` crosses no WASM boundary: the call traps. One exception:
@@ -479,8 +480,8 @@ public static int pause(int ms) throws InterruptedException {
   `option` of a `bool`, a `list`, `flags` or an `option`, whose none the boundary cannot
   tell apart; a resource of another interface; a tuple in an error arm thrown as a
   `WitException`, for which no type is written (a `WitResult` answer carries it).
-- A world's export carries no `flags`, resource, `stream` or `future` and no type of
-  another interface; an `async func` export takes `bool`, the integers, `f64` and `string`
+- A world's export carries no resource, `stream` or `future`; an `async func` export
+  takes `bool`, the integers, `f64` and `string`
   alone, and is refused under `--no-gc`. Two exports of one label (a function of the world
   and an interface's, or two interfaces') are two methods, each of its own class.
 - An exception an export leaves uncaught is reported on standard error by the line a JDK

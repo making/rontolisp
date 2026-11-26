@@ -36,7 +36,7 @@ root`**.
 ## The settled type mapping (`compiler/WitTypeMapper`)
 The ONE vocabulary the binders consult, pinned by `WitTypeMapperTest` (the decision record;
 reversing a cell is a breaking change). `record`=keyword plist, `enum`=keyword, `variant`=tagged
-list, `flags`=keyword list, `option<T>`=value-or-nil, `tuple`=list,
+list, `flags`=keyword list (the labels set), `option<T>`=value-or-nil, `tuple`=list,
 `resource`/`borrow`/`own`=opaque integer handle (`.kb/read-load-streams.md`), `s64`/`u64`
 bignum-safe.
 
@@ -111,10 +111,12 @@ boundary").
 source file's directory and `:world` may be omitted when the file declares exactly one.
 
 **It LOWERS into `wasm-export` -- there is no new export path.** `WitExportDirective.lower()`
-returns one `(rontolisp:wasm-export ...)` per world export, and for an export of flat types **the
-emitted component is byte-identical to the hand-written equivalent** on wasm-GC and `--no-gc`
-`--component` -- the design invariant. No I/O, no codegen. An export of any other type is the
-CANONICAL form of the same directive ("Compound types across an export" below).
+returns one `(rontolisp:wasm-export ...)` per world export, and for a world of flat functions
+that NAMES NO TYPE **the emitted component is byte-identical to the hand-written equivalent** on
+wasm-GC and `--no-gc` `--component` -- the design invariant. No I/O, no codegen. An export of
+any other type is the CANONICAL form of the same directive, and a flat export of a world that
+names a type carries the WIT beside its designators ("Compound types across an export" and
+"A world that names types" below).
 
 Three call sites: `eval/WitExportInliner` on the compile path (**after** `UserMacroExpander`, so
 every `defun` is a literal top-level form, **before** `LibraryDefunPruner`, so the directives are
@@ -125,7 +127,7 @@ directive at the END of the file**.
 
 **The world is the AUTHORITATIVE export list**: a hand-written `rontolisp:wasm-export` beside a
 `wit-export` is a compile error, as is `rontolisp:http-handler` + `wit-export`. A world's `import`
-items and type definitions are IGNORED.
+items are IGNORED.
 
 **`:reactor t`**: the exports are the program's entry points -- no `wasi:cli/run`, the first export
 call runs the top level once; a WASI command module refuses it
@@ -156,7 +158,9 @@ exported `defun` with `&optional`/`&rest`/`&key`; a duplicate; a name that is no
 `label` or is the reserved `run`; an interface the file does not define; an inline `import name:
 func` (rejected, not dropped); a type no export carries, or none on this backend ("Compound
 types across an export"; the flat list is DERIVED, `BoundaryType.witNames`); an `async func`
-under `--no-gc --component`.
+under `--no-gc --component`; an exported interface that declares a `resource` (its functions
+were skipped without a word until 2026-11-26, a component that was not the world's); a `use`
+clause whose type cannot be named in the scope ("A type of another interface").
 **A user-facing message carries no `.todo` pointer** -- a todo file is deleted when the work lands.
 
 ### Compound types across an export — the canonical form
@@ -199,19 +203,27 @@ LOWERED as an import's argument is, by the one generator (`WasmComponentImportCo
   instance cannot name a type). Every type the scope defines is declared, used or not -- a
   component importing the interface names them --, in the tool's order: definition order, a type
   waiting for the ones it mentions (the earliest that can go, goes). `--emit-wit` prints them
-  back, byte-identical to the tool. A scope whose exports are all flat declares none (its bytes
-  are the old ones). An interface with a canonical member is a shim even for its flat members.
-- **Refused at the WIT line** (`requireCanonical`): flags, a resource handle, a stream, a future,
-  a type of another interface (`use`), a compound type in an `async func`; `--no-gc`, which has
-  no value a record could be (no cons). In the compiler, which knows the output's shape: a WASI
-  Preview 1 module (its host, wasmtime, calls a core export with core values) and `--reentrant`
-  (the answer waits on the bump heap for the glue). A `--no-wasi` module exports them through
-  `--emit-js-glue` ([wasm-import.md](wasm-import.md), "A WIT interface beyond the flat set").
-  `describe` (the front ends) answers a compound type's whole shape (`WitTypeMapper.shape`, as
-  an import member's) after these refusals -- all but `--no-gc`'s and a Preview 1 module's,
-  which need the output; a flat type keeps its primitive shape, the primitive its `wit` and its
-  `definition`, so a front end tells a canonical export by a `wit` that is no flat primitive's
-  (`JavaHostBoundary.flat`). The refused types and the hosts not measured: `.todo/m82`.
+  back, byte-identical to the tool ("A world that names types" for which scopes).
+- **Flags** = the list of the keywords of the labels set, both ways and on the import side
+  too (`emitLowerFlags` / `emitLiftFlags`): one i32, label i at bit i, 1 / 2 / 4 bytes in memory
+  for up to 8 / 16 / 32 labels (`WitCanonicalAbi.flagsSize`, the canonical ABI's
+  `elem_size_flags`). A keyword naming no label traps, as one naming no case; a label named
+  twice is set once; a lift answers label order (so a function that conses a label onto the
+  front answers another order in process than through the boundary -- `examples/wit/shapes`'
+  `embolden` appends). The Clojure and Java tiers convert already (a set, a `Set` of a member
+  enum) and cross a component with nothing added. Not a `--no-wasi` core module, either way:
+  its JavaScript glue has no value (`WitGlueLayouts.layout` refuses, `.todo/m92`).
+- **Refused at the WIT line** (`requireCanonical`): a resource handle, a stream, a future, a
+  compound type in an `async func` (`.todo/m90`), an interface declaring a resource
+  (`.todo/m91`); `--no-gc`, which has no value a record could be (no cons). In the compiler,
+  which knows the output's shape: a WASI Preview 1 module (its host, wasmtime, calls a core
+  export with core values) and `--reentrant` (the answer waits on the bump heap for the glue).
+  A `--no-wasi` module exports them through `--emit-js-glue` ([wasm-import.md](wasm-import.md),
+  "A WIT interface beyond the flat set"). `describe` (the front ends) answers a compound type's
+  whole shape (`WitTypeMapper.shape`, as an import member's) after these refusals -- all but
+  `--no-gc`'s and a Preview 1 module's, which need the output; a flat type keeps its primitive
+  shape, the primitive its `wit` and its `definition`, so a front end tells a canonical export
+  by a `wit` that is no flat primitive's (`JavaHostBoundary.flat`).
 - `:envelope t` on the directive: a top-level `result`'s function answers the envelope itself,
   so `lower` writes no `<f>%wit-export`. The Clojure lowering passes it: its wrapper makes the
   envelope from an `ex-info` (one catch, no wit.lisp; [clojure-frontend.md](clojure-frontend.md),
@@ -240,12 +252,82 @@ LOWERED as an import's argument is, by the one generator (`WasmComponentImportCo
   component); a composed Lisp importer; by hand, a Rust importer of `examples/wit/shapes`'
   interface (wit-bindgen 0.62, `wasm-tools component new`, `wasm-tools compose`), every function
   and 600,000 calls under `-W max-memory-size=48MiB` -- its import type matched the shim's
-  exports, type names included. Not measured: jco, a `bindgen` host.
+  exports, type names included. By hand on the integration test's world (`use` clauses, flags,
+  every other type; `--component --no-wasi`): **jco 1.42.0** under node 24.22.3 (`jco
+  transpile`, then each export called; 600,000 calls) and a **wasmtime 51 `bindgen!` host** in
+  Rust generated from the SOURCE WIT (600,000 calls, 36.8 MB peak RSS) -- both answer what
+  `--invoke` answers, a trap a trap, the error arm of a `result` jco's thrown `payload` and
+  Rust's `Err`. jco gives a world's types as TypeScript interfaces and flags as an object of
+  booleans. Traps: after a trap the instance is poisoned (jco: "cannot enter component
+  instance"), so each trap is a run of its own; jco refuses an EH-mode module ("exceptions
+  proposal not enabled"), which a program naming `rontolisp:wit-error` or `handler-case` is --
+  a world for jco answers its `result`s under `:envelope t`; `wasm-tools compose` 1.263.0
+  refuses a dependency whose WORLD types name each other ("type not valid to be used as
+  import"), the tool's own component included (`wac` instead).
 - Pins: `WasmLispCompilerIntegrationTest.aWorldsCompoundTypesCrossItsExportsThroughTheCanonicalAbi`,
   `WitOracleE2eTest.gcMixedFlatAndInterfaceExportsMatchWasmToolsByteForByte` /
   `.aComponentCallsWhatAnotherExportsOverCompoundTypes`,
   `WitExportDirectiveTest.lowersATypeBeyondTheFlatSetIntoTheCanonicalFormOrRefusesItAgainstTheWitLine`,
   `WitExportInlinerTest.aWorldIsRefusedAnOutputThatCannotExportIt`, `examples.yaml`'s `wit/shapes`.
+
+### A world that names types — the component is the world's
+**Invariant: a component of a world that names a type declares the types of every scope the
+world exports from, and types every export from the WIT.** "Names a type" = an exporting scope
+(the world, an exported interface) defines one, an alias of a flat type included, or an export
+is canonical (`WitExportDirective.namesTypes`). Every export form of such a world carries
+`:wit` / `:wit-world` / `:wit-at`; a FLAT one keeps `:params` / `:returns` beside them
+(`Decl.typedBy`): its wrapper is the flat one, its core module byte-identical, and only the
+component wiring differs (`ComponentExportWiring`, shared by both component builders; an
+interface with a typed member, or of types alone, is a shim). Component backends only: a core
+module's forms are the hand-written ones.
+
+- **Why** (measured 2026-11-26, wasm-tools 1.263.0): `wasm-tools component targets` refused the
+  old output of `interface ops { type id = u32; next: func(x: id) -> id; }` on all three
+  component shapes ("missing expected export `id`"), and a component importing the interface
+  names `id`. A world's own types are imports, which a component may leave out, but they are
+  declared too: one rule, and `--emit-wit` prints `c: count`, not `c: u32`.
+- **An interface of types alone** is exported as those types (it was "declares no functions to
+  export"); no export form stands for it, so the builder reads it off the world any typed
+  export carries (`WitExportSignature.exportedInterfaces`, world order). A world exporting
+  nothing but such an interface still "declares no exports".
+- Cost: `ops` + a world-level alias, 989 -> 1,191 B (`--component --no-wasi`), 1,186 -> 1,388
+  (`--component`), 237 -> 439 (`--no-gc --component`). Byte-identical before and after: 22
+  outputs of worlds that name no type or were canonical already (count-vowels on six shapes,
+  `examples/wit` worlds, the integration test's world). Moved, same size: a world whose flat
+  export precedes a canonical one (`examples/clojure/greeter`) declares the world's types
+  before that export's function type.
+- Pins: `WitOracleE2eTest.gcMixedFlatAndInterfaceExportsMatchWasmToolsByteForByte` (`targets`
+  against the source WIT, three shapes), `WitExportDirectiveTest.lowersATypeBeyondTheFlatSet...`.
+
+### A type of another interface — written out, not imported
+**A `use`d value type is declared as the using scope's OWN, under the clause's name**
+(`am.ik.wit.WitUses.inline`, applied to every exporting scope in `WitExportDirective.implemented`
+/ `Implemented.scope`): nothing downstream of the directive sees a `use` of a value type, so
+the marshalling, `WitExportTypes` and `WitEmitter` needed no change.
+
+- **Rejected: the tool's shape.** `wasm-tools component new` makes the other interface an
+  instance IMPORT (types only) and aliases the type out, or aliases it out of the exported
+  instance when the world exports that interface (the probe's shapes: `.todo/m91`, which needs
+  them for a resource). A value type is structural: `targets` accepts the structural copy
+  against the world that says `use` (measured, both cases), a `bindgen!` host generated from
+  the source WIT type-checks it, and the import side has always inlined a used record. The
+  import would break `--component --no-wasi`'s zero-import contract and collide with a
+  `wit-import` of the same interface.
+- What the copied definition mentions: the scope's name for it when it has one (a clause's
+  name wins, wherever the type is reached from; a second name is an alias of the first); an
+  alias with no name here is written as what it names; a record / variant / enum / flags with
+  none comes under its OWN name in an interface (an extra export, which `targets` allows) and
+  is REFUSED in a world, whose types are imports the world of the WIT does not have (measured:
+  "missing import named `coord`") -- the message says to name it in the clause. A name taken
+  by another type is refused at the clause's line, with `as`.
+- **A resource is nominal**: a name whose definition is one, or holds a handle, stays a `use`
+  clause (path rewritten to the full id, since the scope answered is in no package) and the
+  export refuses it as a handle.
+- `--emit-wit` prints the scope with the copies (the tool's reading of the component), not the
+  `use`.
+- Pins: `WitResolverTest.writesAUseClauseOutAsTheDefinitionsItNames`,
+  `WasmLispCompilerIntegrationTest.aWorldsCompoundTypesCrossItsExportsThroughTheCanonicalAbi`,
+  `WitOracleE2eTest.gcMixedFlatAndInterfaceExports...`, `WitExportDirectiveTest.lowersATypeBeyondTheFlatSet...`.
 
 ### The integer boundary — the exact-or-trap rule (`compiler/BoundaryType`)
 **The vocabulary IS the WIT spelling**: `:s8`..`:u64`, plus `:float` (f64 -- no internal f32,
@@ -491,7 +573,8 @@ wasmtime's in-memory keyvalue provider recognizes **only the empty store identif
   raw name (`kv::%open`) and returns `(:ok . V)` / `(:error . E)`; a generated wrapper unwraps it
   through `rontolisp::%wit-result`, so the error arm rides the ORDINARY condition machinery. **The
   codegen never mentions conditions.**
-- `--component` params and results carry **everything except flags**. **Rejected precedent**:
+- `--component` params and results carry **everything** (flags: "Compound types across an
+  export"). **Rejected precedent**:
   lowering rich P1 types through `:s-expr` was REVERTED -- a rontolisp-specific pseudo-protocol is
   not a WIT boundary and it broke P1 byte identity.
 - **Member pruning replaces the tree shaker on this path** (`--component` skips `WasmTreeShaker`):

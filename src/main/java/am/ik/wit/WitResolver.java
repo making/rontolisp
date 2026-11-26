@@ -35,6 +35,9 @@ public final class WitResolver {
 	// document order.
 	private final Map<String, WitItem.InterfaceDef> interfaces = new LinkedHashMap<>();
 
+	// Definition -> the package it is written in (absent for an interface outside any).
+	private final Map<WitItem.InterfaceDef, WitPackageName> packages = new java.util.IdentityHashMap<>();
+
 	// Bare interface name ("store") -> definition; a name defined twice maps to null (an
 	// ambiguous bare reference must be spelled out).
 	private final Map<String, WitItem.@Nullable InterfaceDef> byBareName = new LinkedHashMap<>();
@@ -72,6 +75,9 @@ public final class WitResolver {
 
 	private void index(WitItem.InterfaceDef iface, @Nullable WitPackageName pkg) {
 		this.interfaces.put(qualify(pkg, iface.name()), iface);
+		if (pkg != null) {
+			this.packages.put(iface, pkg);
+		}
 		if (this.byBareName.containsKey(iface.name())) {
 			this.byBareName.put(iface.name(), null);
 		}
@@ -152,6 +158,18 @@ public final class WitResolver {
 	}
 
 	/**
+	 * Returns the reference that names an interface of this document from anywhere: its
+	 * package and its name.
+	 * @param iface an interface obtained from this resolver
+	 * @return the reference, or {@code null} when the interface is in no package of this
+	 * document
+	 */
+	public @Nullable WitRef refOf(WitItem.InterfaceDef iface) {
+		WitPackageName pkg = this.packages.get(iface);
+		return pkg == null ? null : new WitRef(pkg, iface.name());
+	}
+
+	/**
 	 * Resolves a named type reference against an interface: its own type definitions
 	 * first, then the types its {@code use} clauses import (following aliases, and
 	 * transitively through the interfaces those clauses name).
@@ -221,7 +239,7 @@ public final class WitResolver {
 	// tried against the scope's own package first -- two packages may both define an
 	// interface named `types` (wasi:clocks and wasi:http both do), and the bare-name
 	// fallback alone would call that ambiguous.
-	private WitItem.@Nullable InterfaceDef findUsedInterface(WitItem.InterfaceDef scope, WitRef path) {
+	WitItem.@Nullable InterfaceDef findUsedInterface(WitItem.InterfaceDef scope, WitRef path) {
 		if (path.pkg() == null) {
 			String scopeId = canonicalId(scope);
 			if (scopeId != null) {
@@ -256,9 +274,13 @@ public final class WitResolver {
 	public record Owned(WitItem item, WitItem.InterfaceDef owner) {
 	}
 
-	// The name a type-defining item introduces; null for anything that is not a type
-	// definition (a func, a use clause, ...).
-	private static @Nullable String definedTypeName(WitItem item) {
+	/**
+	 * Returns the name a type-defining item introduces.
+	 * @param item an item of an interface or a world
+	 * @return the type's name, or {@code null} for anything that is not a type definition
+	 * (a function, a {@code use} clause, ...)
+	 */
+	public static @Nullable String definedTypeName(WitItem item) {
 		return switch (item) {
 			case WitItem.TypeAlias alias -> alias.name();
 			case WitItem.RecordDef def -> def.name();

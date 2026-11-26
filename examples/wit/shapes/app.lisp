@@ -30,6 +30,7 @@
                                         ((string= member "bounds") #'bounds)
                                         ((string= member "area") #'area)
                                         ((string= member "caption") #'caption)
+                                        ((string= member "embolden") #'embolden)
                                         (t (error "geometry: unknown member ~a"
                                                   member))) args)))
 
@@ -43,6 +44,11 @@
         (handler-case (geo:area :dot)
           (rontolisp:wit-error (e) (rontolisp:wit-error-payload e))))
 (format t "caption  ~s~%"
-        (geo:caption (list :shape :dot :color :green :label "origin")))
+        (geo:caption
+         (list :shape :dot
+               :color :green
+               :style '(:filled :bold)
+               :label "origin")))
 (format t "caption  ~s~%"
         (geo:caption (list :shape (cons :circle 1.0d0) :color :red)))
+(format t "embolden ~s~%" (geo:embolden '(:dashed)))

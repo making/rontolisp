@@ -16,7 +16,7 @@ import am.ik.wit.WitType;
 import org.jspecify.annotations.Nullable;
 
 /**
- * Declares, in a component, the types the canonical exports of a world name
+ * Declares, in a component, the types the exports of a world name
  * ({@code rontolisp:wasm-export ... :wit}). The shape is the one
  * {@code wasm-tools component new} gives a world's exports, read off its output for a
  * probe world (records, a variant, an enum, flags, aliases, an unused type, a world-level
@@ -39,9 +39,14 @@ import org.jspecify.annotations.Nullable;
  * </ul>
  *
  * <p>
- * A type this boundary does not carry (a resource, a type of another interface) is left
- * out, with every type that mentions it; a function naming one was refused when the world
- * was lowered ({@code WitExportDirective}).
+ * A scope reaches this class with its {@code use} clauses written out as its own
+ * definitions ({@code am.ik.wit.WitUses}): a value type is structural, so the component
+ * declares the copy and imports no instance for it -- {@code wasm-tools component new}
+ * imports the other interface's instance and aliases the type out of it, which
+ * {@code wasm-tools component targets} does not ask for. A type this boundary does not
+ * carry (a resource, or what holds its handle) is left out, with every type that mentions
+ * it; a function naming one was refused when the world was lowered
+ * ({@code WitExportDirective}).
  */
 final class WitExportTypes {
 
@@ -129,36 +134,49 @@ final class WitExportTypes {
 	}
 
 	/**
-	 * Declares every type the export's scope defines, in the order wasm-tools declares
-	 * them. A type already declared in the space is left as it is.
+	 * A scope whose types a component declares: an exported interface, or the world.
+	 *
+	 * @param abi the calculator scoped where the type names resolve
+	 * @param name the scope's name: the exported interface's id, or the world's name
+	 */
+	record Scope(WitCanonicalAbi abi, String name) {
+	}
+
+	/**
+	 * Declares every type the scope defines, in the order wasm-tools declares them. A
+	 * type already declared in the space is left as it is.
 	 * @param space the type index space
 	 * @param naming how a named type enters it
-	 * @param signature a canonical export of the scope
+	 * @param scope the scope
 	 */
-	static void declareScope(Space space, Naming naming, WitExportSignature signature) {
-		for (WitItem definition : declared(signature.abi())) {
-			named(space, naming, signature, WitComponentTypeEncoder.definedNameOf(definition));
+	static void declareScope(Space space, Naming naming, Scope scope) {
+		for (WitItem definition : declared(scope.abi())) {
+			named(space, naming, scope, WitComponentTypeEncoder.definedNameOf(definition));
 		}
 	}
 
 	/**
-	 * Declares the function type of a canonical export, with whatever its signature
-	 * mentions that the space does not hold yet.
+	 * Declares the function type of an export typed from its WIT, with whatever its
+	 * signature mentions that the space does not hold yet.
 	 * @param space the type index space
 	 * @param naming how a named type enters it
 	 * @param signature the export
+	 * @param forceAsync whether the type is the async one whatever the WIT says
 	 * @return the function type's index
 	 */
-	static int funcType(Space space, Naming naming, WitExportSignature signature) {
+	static int funcType(Space space, Naming naming, WitExportSignature signature, boolean forceAsync) {
+		Scope scope = signature.scope();
 		List<String> names = new ArrayList<>();
 		List<byte[]> types = new ArrayList<>();
 		for (WitFunc.Param param : signature.func().params()) {
 			names.add(param.name());
-			types.add(valType(space, naming, signature, param.type()));
+			types.add(valType(space, naming, scope, param.type()));
 		}
 		WitType result = signature.func().result();
-		return space.type(ComponentWriter.funcTypeOf(names, types,
-				result == null ? null : valType(space, naming, signature, result)));
+		byte[] resultType = result == null ? null : valType(space, naming, scope, result);
+		return space
+			.type(signature.func().async() || forceAsync ? ComponentWriter.asyncFuncTypeOf(names, types, resultType)
+					: ComponentWriter.funcTypeOf(names, types, resultType));
 	}
 
 	/**
@@ -244,20 +262,20 @@ final class WitExportTypes {
 
 	// The index a named type of the scope is referred to by, declaring it -- after the
 	// types it mentions -- when the space does not hold it.
-	private static int named(Space space, Naming naming, WitExportSignature signature, String name) {
-		String key = signature.scopeName() + "#" + name;
+	private static int named(Space space, Naming naming, Scope scope, String name) {
+		String key = scope.name() + "#" + name;
 		Integer existing = space.named.get(key);
 		if (existing != null) {
 			return existing;
 		}
-		WitResolver.Owned owned = signature.abi().resolveOwned(new WitType.Named(name));
+		WitResolver.Owned owned = scope.abi().resolveOwned(new WitType.Named(name));
 		byte @Nullable [] defined = switch (owned.item()) {
 			case WitItem.RecordDef record -> {
 				List<String> names = new ArrayList<>();
 				List<byte[]> types = new ArrayList<>();
 				for (WitItem.Field field : record.fields()) {
 					names.add(field.name());
-					types.add(valType(space, naming, signature, field.type()));
+					types.add(valType(space, naming, scope, field.type()));
 				}
 				yield ComponentWriter.definedRecordOf(names, types);
 			}
@@ -266,7 +284,7 @@ final class WitExportTypes {
 				List<byte @Nullable []> payloads = new ArrayList<>();
 				for (WitItem.Case c : variant.cases()) {
 					names.add(c.name());
-					payloads.add(c.payload() == null ? null : valType(space, naming, signature, c.payload()));
+					payloads.add(c.payload() == null ? null : valType(space, naming, scope, c.payload()));
 				}
 				yield ComponentWriter.definedVariantOf(names, payloads);
 			}
@@ -278,13 +296,13 @@ final class WitExportTypes {
 				case WitType.Prim prim -> ComponentWriter.definedPrim(WitComponentTypeEncoder.primCode(prim.name()));
 				// another name of a named type: no definition of its own
 				case WitType.Named ignored -> null;
-				default -> defined(space, naming, signature, alias.target());
+				default -> defined(space, naming, scope, alias.target());
 			};
 			default -> throw new UnsupportedOperationException(
 					"the WIT type '" + name + "' cannot be declared as a component export type");
 		};
 		int definition = defined != null ? space.type(defined)
-				: named(space, naming, signature, ((WitType.Named) ((WitItem.TypeAlias) owned.item()).target()).name());
+				: named(space, naming, scope, ((WitType.Named) ((WitItem.TypeAlias) owned.item()).target()).name());
 		int index = switch (naming) {
 			case BARE -> definition;
 			case WORLD_IMPORT -> {
@@ -309,12 +327,12 @@ final class WitExportTypes {
 	// The valtype operand of a type use: a primitive inline, a named type by the index
 	// its scope's declaration gave it, a list / option / result / tuple by the index of
 	// its definition, declared once per shape.
-	private static byte[] valType(Space space, Naming naming, WitExportSignature signature, WitType type) {
+	private static byte[] valType(Space space, Naming naming, Scope scope, WitType type) {
 		return switch (type) {
 			case WitType.Prim prim -> ComponentWriter.valTypePrim(WitComponentTypeEncoder.primCode(prim.name()));
-			case WitType.Named named -> ComponentWriter.valTypeIndex(named(space, naming, signature, named.name()));
+			case WitType.Named named -> ComponentWriter.valTypeIndex(named(space, naming, scope, named.name()));
 			default -> {
-				byte[] defined = defined(space, naming, signature, type);
+				byte[] defined = defined(space, naming, scope, type);
 				String shape = java.util.HexFormat.of().formatHex(defined);
 				Integer existing = space.anonymous.get(shape);
 				if (existing == null) {
@@ -327,19 +345,18 @@ final class WitExportTypes {
 	}
 
 	// The defined type of a list / option / result / tuple, its operands declared first.
-	private static byte[] defined(Space space, Naming naming, WitExportSignature signature, WitType type) {
+	private static byte[] defined(Space space, Naming naming, Scope scope, WitType type) {
 		return switch (type) {
-			case WitType.ListOf list ->
-				ComponentWriter.definedListOf(valType(space, naming, signature, list.element()));
+			case WitType.ListOf list -> ComponentWriter.definedListOf(valType(space, naming, scope, list.element()));
 			case WitType.OptionOf option ->
-				ComponentWriter.definedOptionOf(valType(space, naming, signature, option.element()));
+				ComponentWriter.definedOptionOf(valType(space, naming, scope, option.element()));
 			case WitType.ResultOf res ->
-				ComponentWriter.definedResultOf(res.ok() == null ? null : valType(space, naming, signature, res.ok()),
-						res.err() == null ? null : valType(space, naming, signature, res.err()));
+				ComponentWriter.definedResultOf(res.ok() == null ? null : valType(space, naming, scope, res.ok()),
+						res.err() == null ? null : valType(space, naming, scope, res.err()));
 			case WitType.TupleOf tuple -> {
 				List<byte[]> elements = new ArrayList<>();
 				for (WitType element : tuple.elements()) {
-					elements.add(valType(space, naming, signature, element));
+					elements.add(valType(space, naming, scope, element));
 				}
 				yield ComponentWriter.definedTupleOf(elements);
 			}
@@ -352,9 +369,10 @@ final class WitExportTypes {
 	 * One function of an exported interface, as its shim sees it.
 	 *
 	 * @param name the function's label
-	 * @param signature its WIT function, for a canonical export, or {@code null}
-	 * @param flatType its encoded function type over primitives, for a flat export, or
+	 * @param signature its WIT function, for an export typed from its WIT, or
 	 * {@code null}
+	 * @param flatType its encoded function type over primitives, for an export that is
+	 * not, or {@code null}
 	 */
 	record Member(String name, @Nullable WitExportSignature signature, byte @Nullable [] flatType) {
 	}
@@ -371,13 +389,16 @@ final class WitExportTypes {
 	}
 
 	/**
-	 * Builds the shim of an exported interface whose functions name its types: it imports
-	 * each function and each type one mentions, and exports every type of the interface
-	 * and each function, typed over the exported types.
-	 * @param members the interface's exported functions, in order, one of them canonical
+	 * Builds the shim of an exported interface that declares types: it imports each
+	 * function and each type one mentions, and exports every type of the interface and
+	 * each function, typed over the exported types.
+	 * @param scope the interface
+	 * @param members the interface's exported functions, in order; none for an interface
+	 * of types alone
+	 * @param forceAsync whether every function's type is the async one
 	 * @return the shim
 	 */
-	static Shim shim(List<Member> members) {
+	static Shim shim(Scope scope, List<Member> members, boolean forceAsync) {
 		ComponentWriter nested = new ComponentWriter();
 		BiConsumer<Integer, byte[]> sink = (section, entry) -> nested.rawSection(section,
 				ComponentWriter.vec(List.of(entry)));
@@ -385,23 +406,18 @@ final class WitExportTypes {
 		for (Member member : members) {
 			WitExportSignature signature = member.signature();
 			int type = signature == null ? imports.type(Objects.requireNonNull(member.flatType()))
-					: funcType(imports, Naming.SHIM_IMPORT, signature);
+					: funcType(imports, Naming.SHIM_IMPORT, signature, forceAsync);
 			sink.accept(ComponentWriter.SEC_IMPORT, ComponentWriter.importFunc("import-func-" + member.name(), type));
 		}
 		// The second half names nothing of the first: its types are declared again and
 		// exported, in a fresh view of the same index space.
 		Space exports = new Space(sink, imports.next());
-		for (Member member : members) {
-			if (member.signature() != null) {
-				declareScope(exports, Naming.SHIM_EXPORT, member.signature());
-				break;
-			}
-		}
+		declareScope(exports, Naming.SHIM_EXPORT, scope);
 		for (int i = 0; i < members.size(); i++) {
 			Member member = members.get(i);
 			WitExportSignature signature = member.signature();
 			int type = signature == null ? exports.type(Objects.requireNonNull(member.flatType()))
-					: funcType(exports, Naming.SHIM_EXPORT, signature);
+					: funcType(exports, Naming.SHIM_EXPORT, signature, forceAsync);
 			sink.accept(ComponentWriter.SEC_EXPORT, ComponentWriter.exportFuncAs(member.name(), i, type));
 		}
 		return new Shim(nested.toByteArray(), List.copyOf(imports.imported()));

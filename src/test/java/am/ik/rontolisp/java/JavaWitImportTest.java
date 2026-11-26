@@ -908,13 +908,12 @@ class JavaWitImportTest {
 						+ "Shapes.Totals in Java, a record the class Shapes declares; it declares none of that name");
 		// what no export carries is refused at its WIT line, and so is every compound
 		// type by the scalar backend, which has no value for one
-		write("shapes/shapes.wit", SHAPES_WIT.replace("export remembered: func() -> string;",
-				"flags marks { seen }\n  export remembered: func() -> marks;"));
+		write("shapes/shapes.wit",
+				SHAPES_WIT.replace("export remembered: func() -> string;", "export remembered: func() -> stream<u8>;"));
 		assertThatThrownBy(() -> read(shapes, true)).hasMessageEndingWith(
-				"Shapes.java:9:1: @WitExport: shapes.wit:51: export 'remembered': the WIT type of the result holds the "
-						+ "flags 'marks', which an export does not carry (carried: every primitive type, and a list, "
-						+ "an option, a result, a tuple, a record, a variant or an enum of them, defined where the "
-						+ "export is)");
+				"Shapes.java:9:1: @WitExport: shapes.wit:50: export 'remembered': the WIT type of the result holds a "
+						+ "stream, which an export does not carry (carried: every primitive type, and a list, an "
+						+ "option, a result, a tuple, a record, a variant, an enum or flags of them)");
 		write("shapes/shapes.wit", SHAPES_WIT);
 		assertThatThrownBy(() -> HostBoundaryRuns.cli("--java-source-path", API, shapes.toString(), "-o",
 				this.dir.resolve("shapes-scalar.wasm").toString(), "--component", "--no-gc"))

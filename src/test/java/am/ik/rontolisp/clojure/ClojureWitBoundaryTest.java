@@ -1094,12 +1094,11 @@ class ClojureWitBoundaryTest {
 				  export fetch: async func(url: string) -> string;
 				}
 				""");
-		write("flags.wit", """
-				package local:flags;
+		write("sink.wit", """
+				package local:sink;
 
-				world flags {
-				  flags perms { read, write }
-				  export grant: func(p: perms);
+				world sink {
+				  export drain: func(p: stream<u8>);
 				}
 				""");
 		write("greeter.wit", GREETER_WIT);
@@ -1107,8 +1106,8 @@ class ClojureWitBoundaryTest {
 		assertRefused(head + "(wit/export \"async.wit\")",
 				"fetch is an async func export, which the Clojure tier does not implement yet (async.wit:4)");
 		// what no export carries is refused at the WIT line, before any var is read
-		assertRefused(head + "(wit/export \"flags.wit\")",
-				"flags.wit:5: export 'grant': the WIT type of p holds the flags 'perms', which an export does not carry");
+		assertRefused(head + "(wit/export \"sink.wit\")",
+				"sink.wit:4: export 'drain': the WIT type of p holds a stream, which an export does not carry");
 		assertRefused(head + "(defn f [] 1)\n(wasm/export f {})\n(wit/export \"greeter.wit\")",
 				"rontolisp.wasm/export cannot be combined with rontolisp.wit/export");
 	}
