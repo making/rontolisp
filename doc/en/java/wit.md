@@ -168,7 +168,9 @@ JDK, where the driver leaves the URL to another one.
 | a resource, `own<R>`, `borrow<R>` | the member interface |
 | `result<T, E>` | `WitResult<T, E>`; as a method's answer, also its ok arm, the error arm a `WitException` |
 | an `async func` | a method that waits for the host's answer, as a call does |
-| `stream<T>` the host answers | `am.ik.rontolisp.wit.WitStream<T>` |
+| `stream<T>` the host answers | `am.ik.rontolisp.wit.WitStream<T>`, of values or of resources |
+| `stream<u8>` the host answers | `java.io.InputStream` |
+| `stream<u8>` the program hands the host | `java.util.function.Consumer<java.io.OutputStream>`, handed the writable end |
 | `future<T>` the host answers | `am.ik.rontolisp.wit.WitFuture<T>`, a `future<result<T, E>>` a `WitFuture<T>` (`Void` for no ok value) |
 
 An unsigned integer is held in the Java type of its width, its bits as Java holds them:
@@ -245,9 +247,33 @@ try (WitStream<List<DbValue>> rows = started.rows(); WitFuture<Void> done = star
 ```
 
 In a component the host writes the values, and what a read holds is that read's values,
-whatever the stream holds. Under a JDK and on the interpreter and the JVM the provider
-answers its own: `WitStream.of(iterator)`, `WitFuture.of(value)`,
+whatever the stream holds. A stream of resources answers one resource a read (the
+connections `wasi:sockets`' `listen` accepts). Under a JDK and on the interpreter and the
+JVM the provider answers its own: `WitStream.of(iterator)`, `WitFuture.of(value)`,
 `WitFuture.failed(exception)`, or a class of its own.
+
+A `stream<u8>` the host answers is an `InputStream`, read as the host writes it; `close()`
+gives the readable end back. A `stream<u8>` the program hands the host is a parameter of
+type `Consumer<OutputStream>`: once the host holds the readable end, the binding hands the
+consumer an `OutputStream` over the writable end, which the program may keep and write
+after the call; a write waits until the host has read it all, and `close()` ends the
+stream. A write after the host has dropped its end throws `IOException`.
+
+```console
+// tcp-socket's send: func(data: stream<u8>) -> future<result<_, error-code>>
+WitFuture<Void> send(Consumer<OutputStream> data);
+
+OutputStream[] writer = new OutputStream[1];
+WitFuture<Void> sent = socket.send(out -> writer[0] = out);
+try (OutputStream out = writer[0]) {
+    out.write(request);
+}
+sent.get();
+```
+
+A read waits where it is, as a call does: every thread of the program waits with it. Under
+a JDK and on the interpreter and the JVM the provider hands the consumer an `OutputStream`
+of its own.
 
 ## Exporting a WIT world
 
@@ -359,9 +385,14 @@ public static int pause(int ms) throws InterruptedException {
 - A `u64` past `Long.MAX_VALUE` crosses no WASM boundary.
 - A native executable (`--native`) runs a Preview 1 module whose runner provides no WIT
   interface, so a program calling one does not start there.
-- Refused at the declaration: a `stream` or a `future` the program hands the host, a
-  `stream<u8>`, a stream of resources, a `future` of a `bool`, a `list`, `flags` or an
-  `option` (whose value the boundary cannot tell from a future its writer dropped); an
+- Refused at the declaration: a `future` the program hands the host (the binding could
+  write it only after the call, and a host may read it only within a later call the program
+  waits on: wasmtime's HTTP types read a request's trailers within `client.send`); a
+  stream of values or of resources the program hands the host, which the guest cannot
+  write; a `stream<u8>` the program hands an `async func` (the call waits while the host
+  reads what the program writes only after it) or holds in another type; a `future` of a
+  `bool`, a `list`, `flags` or an `option` (whose value the boundary cannot tell from a
+  future its writer dropped); an
   `option` of a `bool`, a `list`, `flags` or an `option`, whose none the boundary cannot
   tell apart; a resource of another interface; a tuple in an error arm thrown as a
   `WitException`, for which no type is written (a `WitResult` answer carries it).

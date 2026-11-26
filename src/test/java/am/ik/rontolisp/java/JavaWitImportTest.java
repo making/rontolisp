@@ -37,10 +37,10 @@ import static org.junit.jupiter.api.Assumptions.assumeTrue;
  * {@code ServiceLoader} finds -- the program's own under a JDK, on the interpreter and on
  * the JVM, the host's on a WASM target, through a binding the front end writes as Java.
  * Each WASM target here runs against a real host: wasmtime's own {@code wasi:keyvalue},
- * {@code wasi:sockets} and {@code wasi:http} types under {@code --component}, a module
- * preloaded into wasmtime for a core module. And its opposite, {@code @WitExport}: a
- * class implementing a WIT world, a component's entry points where the program has no
- * {@code main}.
+ * {@code wasi:sockets}, {@code wasi:http} and {@code wasi:cli} under {@code --component},
+ * a module preloaded into wasmtime for a core module. And its opposite,
+ * {@code @WitExport}: a class implementing a WIT world, a component's entry points where
+ * the program has no {@code main}.
  */
 class JavaWitImportTest {
 
@@ -133,24 +133,32 @@ class JavaWitImportTest {
 	 * program's), the unsigned integers as Java holds them (a {@code u8} of 200 is the
 	 * byte -56), a result whose error arm is a variant and one whose arm carries nothing,
 	 * each thrown or a {@code WitResult} as the method declares it, a constructor, an own
-	 * handle handed to another. The WIT is trimmed to the members called, each exactly
-	 * the host's.
+	 * handle handed to another; a stream of resources (the connections a socket accepts),
+	 * a {@code stream<u8>} the program writes after the call and one it reads, standard
+	 * input read in a thread before its bytes are there. The WIT is trimmed to the
+	 * members called, each exactly the host's.
 	 */
 	@Test
-	void everyKindOfValueCrossesWasmtimesSocketsAndHttpTypes() throws Exception {
+	void everyKindOfValueCrossesWasmtimesOwnInterfaces() throws Exception {
 		assumeTrue(HostWasmtime.isAvailable(), "no wasmtime " + HostWasmtime.MINIMUM_MAJOR + "+ on PATH");
 		write("sockets.wit", SOCKETS_WIT);
 		write("Sockets.java", SOCKETS);
 		Path sockets = write("SocketsMain.java",
 				"""
+						import java.io.IOException;
+						import java.io.OutputStream;
+						import java.nio.charset.StandardCharsets;
+						import java.util.List;
 						import java.util.ServiceLoader;
 
 						import am.ik.rontolisp.wit.WitException;
+						import am.ik.rontolisp.wit.WitFuture;
 						import am.ik.rontolisp.wit.WitResult;
+						import am.ik.rontolisp.wit.WitStream;
 
 						public class SocketsMain {
 
-						    public static void main(String[] args) {
+						    public static void main(String[] args) throws IOException {
 						        Sockets types = ServiceLoader.load(Sockets.class).findFirst().orElseThrow();
 						        Sockets.TcpSocket socket = types.tcpSocketCreate(Sockets.IpAddressFamily.IPV4);
 						        Sockets.Octets loopback = new Sockets.Octets((byte) 127, (byte) 0, (byte) 0, (byte) 1);
@@ -173,13 +181,40 @@ class JavaWitImportTest {
 						        }
 						        // an async func is a call that waits: a socket bound, never listening
 						        Sockets.TcpSocket caller = types.tcpSocketCreate(Sockets.IpAddressFamily.IPV4);
+						        Sockets.IpSocketAddress address =
+						                ((WitResult.Ok<Sockets.IpSocketAddress, Sockets.ErrorCode>) socket.getLocalAddress()).value();
 						        try {
-						            caller.connect(
-						                    ((WitResult.Ok<Sockets.IpSocketAddress, Sockets.ErrorCode>) socket.getLocalAddress()).value());
+						            caller.connect(address);
 						        }
 						        catch (WitException e) {
 						            System.out.println(e.getMessage());
 						        }
+						        // listening: a stream of the connections, a handle a read; what is sent a
+						        // stream of bytes written after the call, what is received one read
+						        WitStream<Sockets.TcpSocket> accepted = socket.listen();
+						        Sockets.TcpSocket client = types.tcpSocketCreate(Sockets.IpAddressFamily.IPV4);
+						        client.connect(address);
+						        List<Sockets.TcpSocket> peers = accepted.read(5);
+						        System.out.println(peers.size());
+						        OutputStream[] writer = new OutputStream[1];
+						        WitFuture<Void> sent = client.send(out -> writer[0] = out);
+						        try (OutputStream out = writer[0]) {
+						            out.write("hello, ".getBytes(StandardCharsets.UTF_8));
+						            out.write('w');
+						            out.write("orld".getBytes(StandardCharsets.UTF_8));
+						        }
+						        System.out.println(sent.get());
+						        Sockets.Received received = peers.get(0).receive();
+						        System.out.println(new String(received.data().readAllBytes(), StandardCharsets.UTF_8) + " "
+						                + received.data().read() + " " + received.done().get());
+						        received.data().close();
+						        try {
+						            received.data().read();
+						        }
+						        catch (IOException e) {
+						            System.out.println(e.getMessage());
+						        }
+						        accepted.close();
 						    }
 						}
 						""");
@@ -189,6 +224,10 @@ class JavaWitImportTest {
 				-56 7 true
 				tcp-socket-bind of wasi:sockets/types@0.3.0 answered its error arm: InvalidState[]
 				tcp-socket-connect of wasi:sockets/types@0.3.0 answered its error arm: ConnectionRefused[]
+				1
+				null
+				hello, world -1 null
+				stream<u8> of wasi:sockets/types@0.3.0 is closed
 				""");
 		write("http.wit", HTTP_WIT);
 		write("Http.java", HTTP);
@@ -222,17 +261,93 @@ class JavaWitImportTest {
 				Other[value=PATCH]
 				outgoing-request-set-method of wasi:http/types@0.2.0 answered its error arm
 				""");
+		// standard input as an InputStream, read in a thread (which puts the component's
+		// bodies in asyncMode) before the bytes are there: the read waits where it is
+		write("stdin.wit", STDIN_WIT);
+		write("Stdin.java", STDIN);
+		Path cat = write("Cat.java", """
+				import java.io.IOException;
+				import java.io.UncheckedIOException;
+				import java.nio.charset.StandardCharsets;
+				import java.util.ServiceLoader;
+
+				public class Cat {
+
+				    public static void main(String[] args) throws InterruptedException {
+				        Stdin stdin = ServiceLoader.load(Stdin.class).findFirst().orElseThrow();
+				        Thread reader = new Thread(() -> {
+				            Stdin.Read read = stdin.readViaStream();
+				            try {
+				                System.out.println(new String(read.data().readAllBytes(), StandardCharsets.UTF_8));
+				            }
+				            catch (IOException e) {
+				                throw new UncheckedIOException(e);
+				            }
+				            System.out.println(read.done().get());
+				        });
+				        reader.start();
+				        reader.join();
+				    }
+				}
+				""");
+		Path module = this.dir.resolve("cat.wasm");
+		HostBoundaryRuns.cli("--java-source-path", API, cat.toString(), "-o", module.toString(), "--component");
+		HostWasmtime.ExecResult run = HostWasmtime.INSTANCE.execInContainer("bash", "-c",
+				"(sleep 0.5; printf 'hi\\nthere') | wasmtime run " + module);
+		assertThat(run.exitCode()).as("wasmtime: %s", run.stderr()).isZero();
+		assertThat(run.stdout()).isEqualTo("hi\nthere\nnull\n");
 	}
+
+	/** wasmtime's standard input, as WASI 0.3 reads it. */
+	private static final String STDIN_WIT = """
+			package wasi:cli@0.3.0;
+
+			interface types {
+			  enum error-code {
+			    io,
+			    illegal-byte-sequence,
+			    pipe
+			  }
+			}
+
+			interface stdin {
+			  use types.{error-code};
+
+			  read-via-stream: func() -> tuple<stream<u8>, future<result<_, error-code>>>;
+			}
+			""";
+
+	private static final String STDIN = """
+			import java.io.InputStream;
+
+			import am.ik.rontolisp.wit.WitFuture;
+			import am.ik.rontolisp.wit.WitImport;
+
+			@WitImport(value = "wasi:cli/stdin@0.3.0", wit = "stdin.wit")
+			public interface Stdin {
+
+			    Read readViaStream();
+
+			    record Read(InputStream data, WitFuture<Void> done) {
+			    }
+
+			    enum ErrorCode {
+			        IO, ILLEGAL_BYTE_SEQUENCE, PIPE
+			    }
+			}
+			""";
 
 	/**
 	 * What a host answers in pieces: an {@code async func} is a method that waits for its
 	 * answer, a {@code stream<T>} of values a {@code WitStream<T>} read so many at a
-	 * time, a {@code future<result<_, E>>} a {@code WitFuture<Void>} whose error arm
-	 * {@code get()} throws. Under a JDK, on the interpreter and on the JVM the program's
-	 * provider answers them; on a component the directive blocks on the async func and
-	 * reads the stream and the future through aliases it adds to the WIT. The host
-	 * answers no stream a program hands it, and a stream or a future the subset has no
-	 * reader for is refused at the method.
+	 * time, a {@code stream<u8>} an {@code InputStream}, a {@code future<result<_, E>>} a
+	 * {@code WitFuture<Void>} whose error arm {@code get()} throws; a {@code stream<u8>}
+	 * the program hands the host is a {@code Consumer<OutputStream>} handed the writable
+	 * end, which the program may write after the call. Under a JDK, on the interpreter
+	 * and on the JVM the program's provider answers them; on a component the directive
+	 * blocks on the async func and reads and writes the streams and the future through
+	 * aliases it adds to the WIT. What the binding cannot read or write is refused at the
+	 * method.
 	 */
 	@Test
 	void aStreamAndAFutureTheHostAnswersAreReadInPieces() throws Exception {
@@ -240,13 +355,38 @@ class JavaWitImportTest {
 		write("Rows.java", ROWS);
 		write("MemoryRows.java",
 				"""
+						import java.io.ByteArrayInputStream;
+						import java.io.ByteArrayOutputStream;
+						import java.io.InputStream;
+						import java.io.OutputStream;
+						import java.nio.charset.StandardCharsets;
 						import java.util.List;
+						import java.util.function.Consumer;
 
 						import am.ik.rontolisp.wit.WitException;
 						import am.ik.rontolisp.wit.WitFuture;
 						import am.ik.rontolisp.wit.WitStream;
 
 						public class MemoryRows implements Rows {
+
+						    public InputStream dump(String sql) {
+						        return new ByteArrayInputStream("1,one\\n2,two\\n3,three\\n".getBytes(StandardCharsets.UTF_8));
+						    }
+
+						    // the lines written by the time the future is read
+						    public WitFuture<Long> load(Consumer<OutputStream> data) {
+						        ByteArrayOutputStream sink = new ByteArrayOutputStream();
+						        data.accept(sink);
+						        return new WitFuture<>() {
+
+						            public Long get() {
+						                return sink.toString(StandardCharsets.UTF_8).lines().count();
+						            }
+
+						            public void close() {
+						            }
+						        };
+						    }
 
 						    public Rows.Query query(String sql) {
 						        if (sql.isEmpty()) {
@@ -268,16 +408,32 @@ class JavaWitImportTest {
 						""");
 		write("META-INF/services/Rows", "MemoryRows\n");
 		Path main = write("RowsMain.java", """
+				import java.io.InputStream;
+				import java.io.OutputStream;
+				import java.nio.charset.StandardCharsets;
 				import java.util.List;
 				import java.util.ServiceLoader;
 
 				import am.ik.rontolisp.wit.WitException;
+				import am.ik.rontolisp.wit.WitFuture;
 
 				public class RowsMain {
 
-				    public static void main(String[] args) {
+				    public static void main(String[] args) throws Exception {
 				        Rows host = ServiceLoader.load(Rows.class).findFirst().orElseThrow();
 				        System.out.println(host.total());
+				        try (InputStream dump = host.dump("select")) {
+				            System.out.print(new String(dump.readAllBytes(), StandardCharsets.UTF_8));
+				        }
+				        // written after the call
+				        OutputStream[] writer = new OutputStream[1];
+				        WitFuture<Long> loaded = host.load(out -> writer[0] = out);
+				        try (OutputStream out = writer[0]) {
+				            out.write("4,four\\n5,".getBytes(StandardCharsets.UTF_8));
+				            out.write('f');
+				            out.write("ive\\n".getBytes(StandardCharsets.UTF_8));
+				        }
+				        System.out.println(loaded.get());
 				        for (String sql : List.of("select", "broken", "")) {
 				            try {
 				                Rows.Query query = host.query(sql);
@@ -298,6 +454,10 @@ class JavaWitImportTest {
 				""");
 		String expected = """
 				3
+				1,one
+				2,two
+				3,three
+				2
 				[Column[name=id, width=4], Column[name=name, width=16]]
 				[[1, one], [2, two]]
 				[[3, three]]
@@ -314,13 +474,20 @@ class JavaWitImportTest {
 				"--java-source-path", API))
 			.isEqualTo(expected);
 		// a component: the directive blocks on the async funcs and adds an alias for
-		// each type it reads, naming its built-ins in the table
+		// each type it reads or writes, naming its built-ins in the table
 		assertThat(read(main, true).get(0)).isEqualTo("(RONTOLISP:WIT-IMPORT \"rows.wit\" :INTERFACE "
 				+ "\"test:rows/rows@0.1.0\" :NAMES ((\"query\" \"Rows$Wit.query\") (\"total\" \"Rows$Wit.total\") "
-				+ "(\"java-stream-0-read\" \"Rows$Wit.java-stream-0-read\") (\"java-future-1-read\" "
-				+ "\"Rows$Wit.java-future-1-read\") (\"java-future-1-drop-readable\" "
-				+ "\"Rows$Wit.java-future-1-drop-readable\")) :OCTETS T :BLOCKING T :ALIASES ((\"java-stream-0\" "
-				+ "\"stream<list<string>>\") (\"java-future-1\" \"future<result<_, error>>\")))");
+				+ "(\"dump\" \"Rows$Wit.dump\") (\"load\" \"Rows$Wit.load\") (\"java-stream-0-read\" "
+				+ "\"Rows$Wit.java-stream-0-read\") (\"java-future-1-read\" \"Rows$Wit.java-future-1-read\") "
+				+ "(\"java-future-1-drop-readable\" \"Rows$Wit.java-future-1-drop-readable\") (\"java-stream-2-new\" "
+				+ "\"Rows$Wit.java-stream-2-new\") (\"java-stream-2-read\" \"Rows$Wit.java-stream-2-read\") "
+				+ "(\"java-stream-2-write\" \"Rows$Wit.java-stream-2-write\") (\"java-stream-2-drop-readable\" "
+				+ "\"Rows$Wit.java-stream-2-drop-readable\") (\"java-stream-2-drop-writable\" "
+				+ "\"Rows$Wit.java-stream-2-drop-writable\") (\"java-future-3-read\" \"Rows$Wit.java-future-3-read\") "
+				+ "(\"java-future-3-drop-readable\" \"Rows$Wit.java-future-3-drop-readable\")) :OCTETS T :BLOCKING T "
+				+ ":ALIASES ((\"java-stream-0\" \"stream<list<string>>\") (\"java-future-1\" "
+				+ "\"future<result<_, error>>\") (\"java-stream-2\" \"stream<u8>\") (\"java-future-3\" "
+				+ "\"future<result<u64, error>>\")))");
 		HostBoundaryRuns.cli("--java-source-path", API, main.toString(), "-o", this.dir.resolve("rows.wasm").toString(),
 				"--component");
 		write("refused/rows.wit", ROWS_WIT);
@@ -332,17 +499,40 @@ class JavaWitImportTest {
 				    }
 				}
 				""");
-		write("refused/Rows.java", ROWS.replace("long total();", "void feed(WitStream<List<String>> rows);"));
-		assertThatThrownBy(() -> read(refused, false)).hasMessageContaining(
-				"feed (feed of test:rows/rows@0.1.0, rows.wit:13): its parameter rows carries stream<list<string>>, "
-						+ "which the Java subset carries only where the host answers one");
-		write("refused/Rows.java", ROWS.replace("long total();", "WitFuture<Boolean> ready();"));
-		assertThatThrownBy(() -> read(refused, false)).hasMessageContaining(
+		Map<String, String> refusals = new LinkedHashMap<>();
+		refusals.put("void feed(WitStream<List<String>> rows);",
+				"feed (feed of test:rows/rows@0.1.0, rows.wit:13): its parameter rows is stream<list<string>>, a "
+						+ "stream the program hands the host, of values the program cannot write: the guest only "
+						+ "reads a stream of other than bytes");
+		refusals.put("WitFuture<Boolean> ready();",
 				"ready (ready of test:rows/rows@0.1.0, rows.wit:14): its result is future<bool>, a future of a type one "
 						+ "of whose values the boundary cannot tell from a future its writer dropped");
+		refusals.put("void settle(WitFuture<Integer> done);",
+				"settle (settle of test:rows/rows@0.1.0, rows.wit:15): its parameter done is future<u32>, a future "
+						+ "the program hands the host, which the binding could write only once the call has returned, "
+						+ "where a host may read it only within a later call the program waits on (wasmtime's HTTP "
+						+ "types read the one a request takes within client.send)");
+		refusals.put("long upload(Consumer<OutputStream> data);",
+				"upload (upload of test:rows/rows@0.1.0, rows.wit:16): its parameter data is stream<u8>, a stream "
+						+ "the program hands an async func, which the call waits on while the host reads what the "
+						+ "program can write only after it");
+		refusals.put("void batch(List<Consumer<OutputStream>> parts);",
+				"batch (batch of test:rows/rows@0.1.0, rows.wit:17): its parameter parts is list<stream<u8>>, "
+						+ "carrying stream<u8>, which the binding hands the host only as a parameter of its own");
+		refusals.put("WitFuture<Long> load(InputStream data);",
+				"load (load of test:rows/rows@0.1.0, rows.wit:21): its parameter data is stream<u8>, which the "
+						+ "program writes: Consumer<OutputStream> in Java, handed the writable end, not InputStream");
+		for (Map.Entry<String, String> refusal : refusals.entrySet()) {
+			write("refused/Rows.java", ROWS.replace("WitFuture<Long> load(Consumer<OutputStream> data);", "")
+				.replace("long total();", refusal.getKey()));
+			assertThatThrownBy(() -> read(refused, false)).hasMessageContaining(refusal.getValue());
+		}
 	}
 
-	/** An interface answering rows in pieces, and two members a program cannot have. */
+	/**
+	 * An interface answering rows in pieces, taking bytes, and members a program cannot
+	 * have.
+	 */
 	private static final String ROWS_WIT = """
 			package test:rows@0.1.0;
 
@@ -358,14 +548,22 @@ class JavaWitImportTest {
 
 			  feed: func(rows: stream<list<string>>);
 			  ready: func() -> future<bool>;
+			  settle: func(done: future<u32>);
+			  upload: async func(data: stream<u8>) -> u64;
+			  batch: func(parts: list<stream<u8>>);
 			  query: async func(sql: string) -> result<tuple<list<column>, stream<list<string>>, future<result<_, error>>>, error>;
 			  total: async func() -> u64;
+			  dump: func(sql: string) -> stream<u8>;
+			  load: func(data: stream<u8>) -> future<result<u64, error>>;
 			}
 			""";
 
 	/** The {@code @WitImport} interface of {@link #ROWS_WIT}. */
 	private static final String ROWS = """
+			import java.io.InputStream;
+			import java.io.OutputStream;
 			import java.util.List;
+			import java.util.function.Consumer;
 
 			import am.ik.rontolisp.wit.WitFuture;
 			import am.ik.rontolisp.wit.WitImport;
@@ -377,6 +575,10 @@ class JavaWitImportTest {
 			    Query query(String sql);
 
 			    long total();
+
+			    InputStream dump(String sql);
+
+			    WitFuture<Long> load(Consumer<OutputStream> data);
 
 			    record Query(List<Column> columns, WitStream<List<String>> rows, WitFuture<Void> done) {
 			    }
@@ -1254,15 +1456,23 @@ class JavaWitImportTest {
 			    get-receive-buffer-size: func() -> result<u64, error-code>;
 			    set-receive-buffer-size: func(value: u64) -> result<_, error-code>;
 			    connect: async func(remote-address: ip-socket-address) -> result<_, error-code>;
+			    listen: func() -> result<stream<tcp-socket>, error-code>;
+			    send: func(data: stream<u8>) -> future<result<_, error-code>>;
+			    receive: func() -> tuple<stream<u8>, future<result<_, error-code>>>;
 			  }
 			}
 			""";
 
 	private static final String SOCKETS = """
+			import java.io.InputStream;
+			import java.io.OutputStream;
 			import java.util.Optional;
+			import java.util.function.Consumer;
 
+			import am.ik.rontolisp.wit.WitFuture;
 			import am.ik.rontolisp.wit.WitImport;
 			import am.ik.rontolisp.wit.WitResult;
+			import am.ik.rontolisp.wit.WitStream;
 
 			@WitImport(value = "wasi:sockets/types@0.3.0", wit = "sockets.wit")
 			public interface Sockets {
@@ -1280,6 +1490,12 @@ class JavaWitImportTest {
 			        long getReceiveBufferSize();
 			        void setReceiveBufferSize(long value);
 			        void connect(IpSocketAddress remoteAddress);
+			        WitStream<TcpSocket> listen();
+			        WitFuture<Void> send(Consumer<OutputStream> data);
+			        Received receive();
+			    }
+
+			    record Received(InputStream data, WitFuture<Void> done) {
 			    }
 
 			    enum IpAddressFamily {

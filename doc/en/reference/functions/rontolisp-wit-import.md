@@ -137,7 +137,9 @@ host that has never heard of the program. The output is identical all three ways
   call to return and answers its value, as a `func` is bound, instead of a
   future: a component lowers it synchronously, a Preview 1 module imports it
   without `:async t`, and the interpreter and the JVM call the provider
-  directly. The Java front end's bindings ask for it.
+  directly. A read of a stream of bytes or of resource handles then waits where it
+  is in an asynchronous program too, where it otherwise answers a future still
+  pending. The Java front end's bindings ask for it.
 - `:aliases` — `(("name" "type") ...)`: type aliases the directive adds to the
   interface, each as if the WIT declared `type name = type;` there. A stream or a
   future is read through the built-ins of an alias of its type

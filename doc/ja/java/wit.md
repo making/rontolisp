@@ -168,7 +168,9 @@ PostgreSQL への接続を開き、プールし、`sslmode=require` なら TLS �
 | リソース、`own<R>`、`borrow<R>` | メンバーインタフェース |
 | `result<T, E>` | `WitResult<T, E>`。メソッドの戻り値では ok の値にもでき、そのときエラーは `WitException` |
 | `async func` | ホストの応答を待つメソッド（ほかの呼び出しと同じ） |
-| ホストが返す `stream<T>` | `am.ik.rontolisp.wit.WitStream<T>` |
+| ホストが返す `stream<T>` | `am.ik.rontolisp.wit.WitStream<T>`（値の stream もリソースの stream も） |
+| ホストが返す `stream<u8>` | `java.io.InputStream` |
+| プログラムがホストに渡す `stream<u8>` | `java.util.function.Consumer<java.io.OutputStream>`（書き込み側の端を受け取る） |
 | ホストが返す `future<T>` | `am.ik.rontolisp.wit.WitFuture<T>`。`future<result<T, E>>` は `WitFuture<T>`（ok の値がなければ `Void`） |
 
 符号なし整数は同じ幅の Java の型に、そのビットのまま入ります。`u8` の 200 は `byte` の -56
@@ -244,9 +246,32 @@ try (WitStream<List<DbValue>> rows = started.rows(); WitFuture<Void> done = star
 ```
 
 コンポーネントでは値はホストが書き、1 回の読み取りが持つのはその読み取りの値だけです（stream
-全体がどれだけあっても）。JDK、インタプリタ、JVM ではプロバイダが自分のものを返します:
-`WitStream.of(iterator)`、`WitFuture.of(value)`、`WitFuture.failed(exception)`、または自分の
-クラスです。
+全体がどれだけあっても）。リソースの stream は 1 回の読み取りで 1 つのリソースを返します
+（`wasi:sockets` の `listen` が受け付ける接続）。JDK、インタプリタ、JVM ではプロバイダが自分の
+ものを返します: `WitStream.of(iterator)`、`WitFuture.of(value)`、`WitFuture.failed(exception)`、
+または自分のクラスです。
+
+ホストが返す `stream<u8>` は `InputStream` で、ホストが書くのに合わせて読めます。`close()` は
+読み取り側の端を返します。プログラムがホストに渡す `stream<u8>` は `Consumer<OutputStream>` 型の
+引数です。ホストが読み取り側の端を受け取ると、バインディングは書き込み側の端の `OutputStream` を
+その consumer に渡します。プログラムはそれを持っておき、呼び出しの後で書けます。書き込みはホストが
+すべて読むまで待ち、`close()` で stream が終わります。ホストが端を捨てた後に書くと `IOException`
+を投げます。
+
+```console
+// tcp-socket の send: func(data: stream<u8>) -> future<result<_, error-code>>
+WitFuture<Void> send(Consumer<OutputStream> data);
+
+OutputStream[] writer = new OutputStream[1];
+WitFuture<Void> sent = socket.send(out -> writer[0] = out);
+try (OutputStream out = writer[0]) {
+    out.write(request);
+}
+sent.get();
+```
+
+読み取りは呼び出しと同じくその場で待ち、プログラムのすべてのスレッドが一緒に待ちます。JDK、
+インタプリタ、JVM では、プロバイダが自分の `OutputStream` を consumer に渡します。
 
 ## WIT world をエクスポートする
 
@@ -360,9 +385,13 @@ public static int pause(int ms) throws InterruptedException {
 - `Long.MAX_VALUE` を超える `u64` は、どの WASM の境界も越えません。
 - ネイティブ実行ファイル（`--native`）は Preview 1 のモジュールを動かしますが、そのランナーは
   WIT インタフェースを提供しません。そのため、WIT インタフェースを呼ぶプログラムはそこでは起動しません。
-- 宣言の位置で拒否されるもの: プログラムがホストに渡す `stream` と `future`、`stream<u8>`、
-  リソースの stream、`bool`・`list`・`flags`・`option` の `future`（その値を、書き手が捨てた
-  future と境界が見分けられないため）。`bool`、`list`、`flags`、`option` を要素とする `option`
+- 宣言の位置で拒否されるもの: プログラムがホストに渡す `future`（バインディングが書けるのは
+  呼び出しの後で、ホストはそれを、プログラムが待つ後の呼び出しの中でしか読まないことがあるため。
+  wasmtime の HTTP の型は、リクエストの trailers を `client.send` の中で読みます）。プログラムが
+  ホストに渡す値の stream とリソースの stream（ゲストは書けないため）。`async func` に渡す
+  `stream<u8>`（呼び出しが待つ間に、ホストはプログラムが呼び出しの後でしか書けないものを読むため）と、
+  ほかの型の中にある `stream<u8>`。`bool`・`list`・`flags`・`option` の `future`（その値を、書き手が
+  捨てた future と境界が見分けられないため）。`bool`、`list`、`flags`、`option` を要素とする `option`
   （境界がその none を見分けられないため）。ほかのインタフェースのリソース。`WitException` として
   投げるエラーの型にある tuple（型を書く場所がないため。`WitResult` の戻り値なら書けます）。
 - world のエクスポートで使える型は、`bool`、整数、`f64`、`string` です。`async func` の

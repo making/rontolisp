@@ -97,7 +97,12 @@ boundary").
   `async func`-typed imports"), Preview 1 without `:async t`, the interpreter and the JVM a
   plain provider call. Measured: Spin 4.3.0 and wasmtime 51 run a synchronous lowering of an
   async func, the task waiting; its wrapper pops what was lowered, where an async-lowered
-  call's start keeps its staging. What a front end with no futures binds (the Java subset).
+  call's start keeps its staging. And a read waits where it is in asyncMode too: the
+  directive marks each `-read` entry of the component form (`(:async "a" "read" "n"
+  :blocking)`), and a byte or handle read then parks on its own waitable-set as outside
+  asyncMode, where it would answer a pending future (measured 2026-11-26, wasmtime 51: a
+  stdin read before its bytes arrive answered `#<FUTURE>`, then trapped on the next read).
+  What a front end with no futures binds (the Java subset).
 - Trap: a value type's type index is an s33 (`ComponentWriter.definedFuture` wrote it unsigned
   until 2026-11-26, so a future whose payload type sat past index 63 failed validation).
 

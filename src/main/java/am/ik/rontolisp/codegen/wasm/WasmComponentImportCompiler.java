@@ -7,6 +7,7 @@ import java.util.Objects;
 
 import am.ik.rontolisp.LispCons;
 import am.ik.rontolisp.LispNames;
+import am.ik.rontolisp.LispNil;
 import am.ik.rontolisp.LispString;
 import am.ik.rontolisp.LispSymbol;
 import am.ik.rontolisp.LispVal;
@@ -177,9 +178,12 @@ final class WasmComponentImportCompiler {
 	 * @param octets whether a {@code list<u8>} a future's payload carries lifts as a
 	 * packed {@code (unsigned-byte 8)} vector ({@code :octets t}); a byte stream's chunk
 	 * is one either way
+	 * @param blocking whether a read waits where it is in asyncMode too (a
+	 * {@code :blocking t} directive's, the entry's trailing {@code :blocking}), as a read
+	 * of values or of a future always does, rather than answering a pending future
 	 */
 	record Async(String lispName, String module, String field, String alias, AsyncOp op, WitCanonicalAbi abi,
-			WitType type, boolean octets) {
+			WitType type, boolean octets, boolean blocking) {
 
 		/**
 		 * Whether a read's lift calls {@code _bytes_from_mem}: a future's payload, or a
@@ -623,7 +627,10 @@ final class WasmComponentImportCompiler {
 				if (":ASYNC".equals(keyword.name())) {
 					if (!(rest.car() instanceof LispString alias) || !(rest.cdr() instanceof LispCons opCons)
 							|| !(opCons.car() instanceof LispString op) || !(opCons.cdr() instanceof LispCons nameCons)
-							|| !(nameCons.car() instanceof LispString asyncName)) {
+							|| !(nameCons.car() instanceof LispString asyncName)
+							|| !(nameCons.cdr() instanceof LispNil
+									|| nameCons.cdr() instanceof LispCons last && last.car() instanceof LispSymbol flag
+											&& ":BLOCKING".equals(flag.name()) && last.cdr() instanceof LispNil)) {
 						throw new UnsupportedOperationException(
 								"Malformed internal component-import member: " + items.get(i).print());
 					}
@@ -635,7 +642,7 @@ final class WasmComponentImportCompiler {
 					AsyncOp asyncOp = AsyncOp.of(op.value());
 					asyncs.add(new Async(asyncName.value(), ifaceId.value(),
 							"[async-" + asyncOp.suffix + "]" + alias.value(), alias.value(), asyncOp, target.abi(),
-							target.type(), octets));
+							target.type(), octets, nameCons.cdr() instanceof LispCons));
 					continue;
 				}
 				if (!":DROP".equals(keyword.name()) || !(rest.car() instanceof LispString resource)
@@ -1759,7 +1766,7 @@ final class WasmComponentImportCompiler {
 						emitValueStreamRead(async);
 					}
 					else if (async.stream()) {
-						emitStreamRead(async.handleElement());
+						emitStreamRead(async.handleElement(), async.blocking());
 					}
 					else {
 						emitFutureRead(async);
@@ -1814,8 +1821,9 @@ final class WasmComponentImportCompiler {
 		// is
 		// dropped (EOF). The completion value is (count << 4) | status; a read
 		// completes with at least one byte unless the writer is gone, so count 0 =
-		// EOF. Outside asyncMode a BLOCKED read parks the whole task on the
-		// waitable-set; in asyncMode it returns a PENDING future instead -- registered
+		// EOF. Outside asyncMode, and for a :blocking directive's read, a BLOCKED read
+		// parks the whole task on the waitable-set; in asyncMode it returns a PENDING
+		// future instead -- registered
 		// with the scheduler (kind 1) and settled by the EVENT_STREAM_READ dispatch in
 		// _sched_loop -- so other tasks' frames keep running while the chunk is in
 		// flight. The chunk buffer must outlive this call, so it never comes from the
@@ -1830,12 +1838,12 @@ final class WasmComponentImportCompiler {
 		// and another stream.read of the handle traps -- so every completion path
 		// latches the handle (streamEndedGlobal), and a read of a latched handle
 		// answers nil without touching it.
-		private void emitStreamRead(boolean handleElem) {
+		private void emitStreamRead(boolean handleElem, boolean blocking) {
 			if (this.streamEndedGlobal >= 0) {
 				emitEndedReadReturnsNil();
 			}
 			WasmFutureRuntimeBuilder.Sched wiring = this.sched;
-			if (wiring == null) {
+			if (wiring == null || blocking) {
 				emitStagingPrologue();
 				int buf = allocRetArea(ASYNC_READ_CHUNK);
 				int n = allocI32();

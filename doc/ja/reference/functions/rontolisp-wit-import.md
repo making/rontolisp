@@ -138,7 +138,9 @@ rontolisp counter.lisp -o Counter.class && java Counter
 - `:blocking` — `t` にすると、すべての `async func` を、future ではなく呼び出しが
   返るのを待って値を返す関数として、`func` と同じように束縛します。コンポーネントは
   同期的に lower し、Preview 1 のモジュールは `:async t` なしでインポートし、
-  インタプリタと JVM はプロバイダを直接呼びます。Java のフロントエンドの
+  インタプリタと JVM はプロバイダを直接呼びます。バイトの stream とリソース
+  ハンドルの stream の読み取りも、非同期のプログラムの中でその場で待ちます(指定しない
+  場合、そこではまだ決着していない future を返します)。Java のフロントエンドの
   バインディングがこれを指定します。
 - `:aliases` — `(("name" "type") ...)`: ディレクティブがインターフェースに加える
   型エイリアスです。それぞれ、WIT がそこで `type name = type;` を宣言したものとして
