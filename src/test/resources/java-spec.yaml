@@ -30309,11 +30309,15 @@ standalone:
   # test and the order declared: tests and what runs around them declared by interfaces,
   # the TestInfo and its tags, a repeated test and its RepetitionInfo, a failure
   # threshold, the orderers by name and by @Order, and one instance for all the tests.
+  # `q/AssertjTest.java` holds what AssertJ checks by reflection (the recursive
+  # comparison, a property or a field by its name), `asInstanceOf`, the offsets, a map's
+  # `containsExactly`, how a value is shown, and the assertions of a path, a file, a
+  # class, a date and a time, a duration, a future and a comparable of the program's.
   - name: a-file-of-tests-is-run-and-reported-as-junit-and-assertj-do
     file: p/SampleTest.java
     tests: [p.SampleTest, p.SecondTest, p.ThirdTest, p.FourthTest, p.FifthTest, q.OtherTest, q.DirectoryTest,
             q.ClosedTest, q.AbortedTest, q.AfterAnAbortTest, q.LifecycleTest, q.SharedInstanceTest,
-            q.RepeatedOnlyTest, q.UnmadeTest]
+            q.RepeatedOnlyTest, q.UnmadeTest, q.AssertjTest]
     status: 1
     files:
       q/OtherTest.java: |
@@ -30739,6 +30743,298 @@ standalone:
 
             @Test
             void a() {
+            }
+
+        }
+      q/AssertjTest.java: |
+        package q;
+
+        import java.io.File;
+        import java.nio.file.Files;
+        import java.nio.file.Path;
+        import java.time.Duration;
+        import java.time.Instant;
+        import java.time.LocalDate;
+        import java.time.LocalDateTime;
+        import java.time.LocalTime;
+        import java.util.ArrayList;
+        import java.util.HashSet;
+        import java.util.LinkedHashMap;
+        import java.util.LinkedHashSet;
+        import java.util.List;
+        import java.util.Map;
+        import java.util.Optional;
+        import java.util.concurrent.CompletableFuture;
+
+        import org.assertj.core.api.InstanceOfAssertFactories;
+        import org.assertj.core.api.ThrowableAssert.ThrowingCallable;
+        import org.junit.jupiter.api.MethodOrderer;
+        import org.junit.jupiter.api.Test;
+        import org.junit.jupiter.api.TestMethodOrder;
+        import org.junit.jupiter.api.io.TempDir;
+
+        import static org.assertj.core.api.Assertions.*;
+
+        @TestMethodOrder(MethodOrderer.MethodName.class)
+        class AssertjTest {
+
+            record Point(int x, int y) {
+            }
+
+            record Box(String name, Object content) {
+            }
+
+            static class Person {
+
+                String name;
+
+                private int age;
+
+                Person friend;
+
+                List<String> tags = new ArrayList<>();
+
+                Person(String name, int age) {
+                    this.name = name;
+                    this.age = age;
+                }
+
+                public int getAge() {
+                    return age + 100;
+                }
+
+                public boolean isAdult() {
+                    return age >= 18;
+                }
+
+                @Override
+                public boolean equals(Object other) {
+                    return true;
+                }
+
+                @Override
+                public int hashCode() {
+                    return 1;
+                }
+
+                @Override
+                public String toString() {
+                    return "Person " + name;
+                }
+
+            }
+
+            record Version(int major) implements Comparable<Version> {
+
+                public int compareTo(Version other) {
+                    return Integer.compare(major, other.major);
+                }
+
+            }
+
+            enum Size {
+
+                S, M, L
+
+            }
+
+            @interface Mark {
+
+            }
+
+            // the temporary directory, which a failure names, said as DIR
+            static String place;
+
+            // The configuration a recursive comparison has unless told otherwise, said once.
+            static final String DEFAULTS = "- no equals methods were used in the comparison EXCEPT for java JDK types since"
+                    + " introspecting JDK types is forbidden in java 17+ (use withEqualsForType to register a specific way to"
+                    + " compare a JDK type if you need it)\n- these types were compared with the following comparators:\n"
+                    + "  - java.lang.Double -> DoubleComparator[precision=1.0E-15]\n"
+                    + "  - java.lang.Float -> FloatComparator[precision=1.0E-6]\n"
+                    + "  - java.nio.file.Path -> lexicographic comparator (Path natural order)\n"
+                    + "- actual and expected objects and their fields were compared field by field recursively even if they"
+                    + " were not of the same type, this allows for example to compare a Person to a PersonDto (call"
+                    + " strictTypeChecking(true) to change that behavior).\n"
+                    + "- the introspection strategy used was: DefaultRecursiveComparisonIntrospectionStrategy\n";
+
+            static void shown(ThrowingCallable check) {
+                try {
+                    check.call();
+                    System.out.println("passed");
+                }
+                catch (Throwable thrown) {
+                    String message = String.valueOf(thrown.getMessage()).replace(DEFAULTS, "- (the defaults)\n");
+                    System.out.println(
+                            thrown.getClass().getName() + ":" + (place == null ? message : message.replace(place, "DIR")));
+                }
+            }
+
+            @Test
+            void aRecursiveComparison() {
+                shown(() -> assertThat(new Point(1, 2)).usingRecursiveComparison().isEqualTo(new Point(1, 3)));
+                Person ann = new Person("ann", 1);
+                Person bob = new Person("bob", 2);
+                ann.friend = new Person("cy", 3);
+                bob.friend = new Person("cy", 4);
+                bob.tags.add("x");
+                shown(() -> assertThat(ann).usingRecursiveComparison().isEqualTo(bob));
+                shown(() -> assertThat(ann).as("people").usingRecursiveComparison().ignoringFields("name", "friend.age")
+                    .isEqualTo(bob));
+                shown(() -> assertThat(new Point(1, 2)).usingRecursiveComparison().comparingOnlyFields("y")
+                    .ignoringExpectedNullFields().withStrictTypeChecking().ignoringCollectionOrder().isNotEqualTo(new Point(3, 2)));
+                Map<String, Object> one = new LinkedHashMap<>();
+                one.put("k", 1);
+                one.put("j", List.of(1L, 2.5));
+                one.put("o", new byte[] { 1, 2 });
+                Map<String, Object> other = new LinkedHashMap<>();
+                other.put("j", List.of(1L, 2.5));
+                other.put("k", 2L);
+                other.put("o", new byte[] { 1, 3 });
+                shown(() -> assertThat(one).usingRecursiveComparison().isEqualTo(other));
+                shown(() -> assertThat(new HashSet<>(List.of(1, 2))).usingRecursiveComparison()
+                    .isEqualTo(new HashSet<>(List.of(1, 3))));
+                shown(() -> assertThat(new ArrayList<>(List.of(1, 2))).usingRecursiveComparison()
+                    .isEqualTo(new ArrayList<>(List.of(1, 2, 3))));
+                shown(() -> assertThat(new ArrayList<>(List.of(3, 1, 2))).usingRecursiveComparison().ignoringCollectionOrder()
+                    .isEqualTo(new ArrayList<>(List.of(1, 2, 3))));
+                shown(() -> assertThat(new Box("b", Optional.of(new Point(1, 2)))).usingRecursiveComparison()
+                    .isEqualTo(new Box("b", Optional.of(new Point(1, 3)))));
+                shown(() -> assertThat(new Box("b", 1.0)).usingRecursiveComparison().isEqualTo(new Box("b", 1)));
+                shown(() -> assertThat(new Box("b", Size.S)).usingRecursiveComparison().isEqualTo(new Box("b", Size.M)));
+                shown(() -> assertThat(new Box("b", new Point(1, 2))).usingRecursiveComparison().isEqualTo(new Box("b", "text")));
+                shown(() -> assertThat(new Box("b", new Point(1, 2))).usingRecursiveComparison()
+                    .isEqualTo(new Box("b", Map.of("x", 1))));
+                Person self = new Person("me", 5);
+                self.friend = self;
+                Person same = new Person("me", 5);
+                same.friend = same;
+                shown(() -> assertThat(self).usingRecursiveComparison().isEqualTo(same));
+                Map<String, Object> attributes = new LinkedHashMap<>();
+                attributes.put("list", new ArrayList<>(java.util.Arrays.asList("x", null, 2)));
+                attributes.put("set", new LinkedHashSet<>(List.of("b", "a")));
+                attributes.put("octets", new byte[] { 0, -1, 127 });
+                attributes.put("char", 'q');
+                Map<String, Object> copy = new LinkedHashMap<>();
+                copy.put("char", 'q');
+                copy.put("octets", new byte[] { 0, -1, 127 });
+                copy.put("set", new LinkedHashSet<>(List.of("b", "a")));
+                copy.put("list", new ArrayList<>(java.util.Arrays.asList("x", null, 2)));
+                shown(() -> assertThat(copy).usingRecursiveComparison().isEqualTo(attributes));
+                shown(() -> assertThat(attributes.get("set")).isInstanceOf(LinkedHashSet.class)
+                    .asInstanceOf(InstanceOfAssertFactories.ITERABLE)
+                    .containsExactly("a", "b"));
+            }
+
+            @Test
+            void bPropertiesAndFields() {
+                Person ann = new Person("ann", 20);
+                ann.friend = new Person("bob", 3);
+                List<Person> people = List.of(ann, ann.friend);
+                shown(() -> assertThat(ann).hasFieldOrPropertyWithValue("name", "ann").hasFieldOrPropertyWithValue("age", 120)
+                    .hasFieldOrPropertyWithValue("adult", true).hasFieldOrPropertyWithValue("friend.name", "bob"));
+                shown(() -> assertThat(ann).hasFieldOrPropertyWithValue("age", 20));
+                shown(() -> assertThat(ann).hasFieldOrProperty("nope"));
+                shown(() -> assertThat(ann).extracting("friend.age").isEqualTo(1));
+                shown(() -> assertThat(ann).extracting("name", "age").containsExactly("ann", 1));
+                shown(() -> assertThat(ann).extracting("nope"));
+                shown(() -> assertThat(people).extracting("name", "age").containsExactly(tuple("ann", 120), tuple("bob", 1)));
+                shown(() -> assertThat(people).filteredOn("adult", true).extracting("name").containsExactly("bob"));
+                System.out.println(tuple("a", 1, null, 'c', 2L) + " " + tuple("a", 1).equals(tuple("a", 1)));
+            }
+
+            @Test
+            void cWhatAValueIsAssertedAs() {
+                shown(() -> assertThat((Object) "abc").asInstanceOf(STRING).startsWith("b"));
+                shown(() -> assertThat((Object) 5).asInstanceOf(InstanceOfAssertFactories.ITERABLE));
+                shown(() -> assertThat((Object) Map.of("a", 1)).asInstanceOf(InstanceOfAssertFactories.map(String.class,
+                        Integer.class)).containsEntry("a", 2));
+                System.out.println(InstanceOfAssertFactories.list(String.class) + " | " + MAP);
+                shown(() -> assertThat(1.0).isCloseTo(1.2, within(0.1)));
+                shown(() -> assertThat(1.0).isCloseTo(1.1, within(0.1)));
+                shown(() -> assertThat(1.0).isCloseTo(1.1, byLessThan(0.1)));
+                shown(() -> assertThat(1.0f).isNotCloseTo(1.05f, offset(0.1f)));
+                shown(() -> assertThat(10).isCloseTo(12, within(1)));
+                shown(() -> assertThat(5L).isNotCloseTo(3L, byLessThan(3L)));
+                shown(() -> within(-1.0));
+                System.out.println(within(0.1) + " " + byLessThan(2L));
+                Map<String, Integer> map = new LinkedHashMap<>();
+                map.put("b", 2);
+                map.put("a", 1);
+                shown(() -> assertThat(map).containsExactly(entry("a", 1), entry("b", 2)));
+                shown(() -> assertThat(map).containsExactly(entry("b", 2)));
+                shown(() -> assertThat(map).containsExactly(entry("b", 2), entry("c", 1)));
+                shown(() -> assertThat(List.of("x".repeat(36), "x".repeat(37))).isEqualTo(List.of("y")));
+                shown(() -> assertThat(List.of(new StringBuilder("s"), Map.Entry.class)).isNull());
+                shown(() -> assertThat(new Version(2)).isGreaterThan(new Version(3)));
+                shown(() -> assertThat(Size.S).isBetween(Size.M, Size.L));
+            }
+
+            @Test
+            void dPathsAndFiles(@TempDir Path dir) throws Exception {
+                place = dir.toString();
+                Path file = Files.writeString(dir.resolve("a.txt"), "one\ntwo\nthree\nfour");
+                Path empty = Files.writeString(dir.resolve("e"), "");
+                shown(() -> assertThat(file).exists().isRegularFile().hasFileName("a.txt").hasExtension("txt").hasSize(18)
+                    .hasContent("one\ntwo\nthree\nfour\n"));
+                shown(() -> assertThat(dir.resolve("absent")).exists());
+                shown(() -> assertThat(file).isDirectory());
+                shown(() -> assertThat(Path.of("x/y.md")).isAbsolute());
+                shown(() -> assertThat(file).hasContent("zero\none\nthree\nX"));
+                shown(() -> assertThat(file).hasContent("ONE\nTWO\nthree\nfour"));
+                shown(() -> assertThat(empty).hasExtension("txt"));
+                shown(() -> assertThat(file).hasBinaryContent("one".getBytes()));
+                shown(() -> assertThat(file).content().startsWith("two"));
+                shown(() -> assertThat(empty).isNotEmptyFile());
+                File asFile = file.toFile();
+                shown(() -> assertThat(asFile).exists().isFile().hasName("a.txt").hasParent(dir.toFile()).hasExtension("txt"));
+                shown(() -> assertThat(asFile).hasName("b.txt"));
+                shown(() -> assertThat(asFile).hasNoExtension());
+                shown(() -> assertThat(asFile).hasContent("one\ntwo"));
+                shown(() -> assertThat(dir.resolve("absent").toFile()).isFile());
+                shown(() -> assertThat(empty.toFile()).isNotEmpty());
+            }
+
+            @Test
+            void eClassesDatesAndFutures() {
+                shown(() -> assertThat(Version.class).isRecord().isFinal().isNotInterface().hasSuperclass(Record.class));
+                shown(() -> assertThat(Person.class).isFinal());
+                shown(() -> assertThat(Person.class).isInterface());
+                shown(() -> assertThat(Mark.class).isNotAnnotation());
+                shown(() -> assertThat(Person.class).isAssignableFrom(Version.class));
+                shown(() -> assertThat(Object.class).hasSuperclass(Person.class));
+                shown(() -> assertThat(int.class).isNotPrimitive());
+                LocalDate date = LocalDate.of(2026, 9, 3);
+                shown(() -> assertThat(date).isBefore("2026-01-01"));
+                shown(() -> assertThat(date).isStrictlyBetween(date, LocalDate.of(2027, 1, 1)));
+                shown(() -> assertThat(date).hasDayOfMonth(5));
+                shown(() -> assertThat(date).isEqualTo("2026-09-04"));
+                LocalDateTime time = LocalDateTime.of(2026, 9, 3, 10, 15, 30);
+                shown(() -> assertThat(time).isAfter("2027-01-01T00:00:00"));
+                shown(() -> assertThat(time).isEqualTo(time.plusSeconds(1)));
+                shown(() -> assertThat(time).hasDayOfMonth(5));
+                shown(() -> assertThat(LocalTime.of(10, 15)).hasNano(1));
+                shown(() -> assertThat(Instant.EPOCH).isBetween("1970-01-01T00:00:01Z", "1970-01-01T00:00:02Z"));
+                Duration duration = Duration.ofMillis(90500);
+                shown(() -> assertThat(duration).isNegative());
+                shown(() -> assertThat(duration).hasMinutes(1).hasMillis(5));
+                shown(() -> assertThat(Duration.ofDays(2)).hasHours(1));
+                shown(() -> assertThat(duration).isCloseTo(Duration.ofSeconds(100), Duration.ofSeconds(5)));
+                CompletableFuture<String> done = CompletableFuture.completedFuture("v");
+                CompletableFuture<String> pending = new CompletableFuture<>();
+                CompletableFuture<String> cancelled = new CompletableFuture<>();
+                cancelled.cancel(true);
+                shown(() -> assertThat(done).isDone().isCompleted().isNotCancelled().succeedsWithin(Duration.ofSeconds(1))
+                    .isEqualTo("v"));
+                shown(() -> assertThat(pending).isDone());
+                shown(() -> assertThat(done).isCompletedWithValue("w"));
+                shown(() -> assertThat(cancelled).isNotCancelled());
+                shown(() -> assertThat(done).isCompletedWithValueMatching(String::isEmpty, "empty"));
+            }
+
+            @Test
+            void fARecursiveFailure() {
+                assertThat(new Box("b", List.of(new Point(1, 2)))).usingRecursiveComparison()
+                    .isEqualTo(new Box("c", List.of(new Point(1, 3))));
             }
 
         }
@@ -31495,10 +31791,624 @@ standalone:
       Tests run: 1, Failures: 0, Errors: 1, Skipped: 0 <<< FAILURE! -- in q.UnmadeTest
       q.UnmadeTest <<< ERROR!
       java.lang.IllegalStateException: not made
+      Running q.AssertjTest
+      java.lang.AssertionError:
+      Expecting actual:
+        Point[x=1, y=2]
+      to be equal to:
+        Point[x=1, y=3]
+      when recursively comparing field by field, but found the following difference:
+
+      field/property 'y' differ:
+      - actual value  : 2
+      - expected value: 3
+      Compared objects have java types and were thus compared with equals method
+
+      The recursive comparison was performed with this configuration:
+      - (the defaults)
+
+      java.lang.AssertionError:
+      Expecting actual:
+        Person ann
+      to be equal to:
+        Person bob
+      when recursively comparing field by field, but found the following 4 differences:
+
+      field/property 'age' differ:
+      - actual value  : 101
+      - expected value: 102
+      Compared objects have java types and were thus compared with equals method
+
+      field/property 'friend.age' differ:
+      - actual value  : 103
+      - expected value: 104
+      Compared objects have java types and were thus compared with equals method
+
+      field/property 'name' differ:
+      - actual value  : "ann"
+      - expected value: "bob"
+      Compared objects have java types and were thus compared with equals method
+
+      field/property 'tags' differ:
+      - actual value  : []
+      - expected value: ["x"]
+      actual and expected values are collections of different size, actual size=0 when expected size=1
+
+      The recursive comparison was performed with this configuration:
+      - (the defaults)
+
+      java.lang.AssertionError:[people] 
+      Expecting actual:
+        Person ann
+      to be equal to:
+        Person bob
+      when recursively comparing field by field, but found the following 2 differences:
+
+      field/property 'age' differ:
+      - actual value  : 101
+      - expected value: 102
+      Compared objects have java types and were thus compared with equals method
+
+      field/property 'tags' differ:
+      - actual value  : []
+      - expected value: ["x"]
+      actual and expected values are collections of different size, actual size=0 when expected size=1
+
+      The recursive comparison was performed with this configuration:
+      - the following fields were ignored in the comparison: name, friend.age
+      - (the defaults)
+
+      java.lang.AssertionError:
+      Expecting actual:
+        Point[x=1, y=2]
+      not to be equal to:
+        Point[x=3, y=2]
+      when recursively comparing field by field
+      The recursive comparison was performed with this configuration:
+      - all expected null fields were ignored in the comparison
+      - the comparison was performed on the following fields: y
+      - no equals methods were used in the comparison EXCEPT for java JDK types since introspecting JDK types is forbidden in java 17+ (use withEqualsForType to register a specific way to compare a JDK type if you need it)
+      - collection order was ignored in all fields in the comparison
+      - these types were compared with the following comparators:
+        - java.lang.Double -> DoubleComparator[precision=1.0E-15]
+        - java.lang.Float -> FloatComparator[precision=1.0E-6]
+        - java.nio.file.Path -> lexicographic comparator (Path natural order)
+      - actual and expected objects and their fields were considered different when of incompatible types (i.e. expected type does not extend actual's type) even if all their fields match, for example a Person instance will never match a PersonDto (call strictTypeChecking(false) to change that behavior).
+      - the introspection strategy used was: DefaultRecursiveComparisonIntrospectionStrategy
+
+      java.lang.AssertionError:
+      Expecting actual:
+        {"j"=[1L, 2.5], "k"=1, "o"=[1, 2]}
+      to be equal to:
+        {"j"=[1L, 2.5], "k"=2L, "o"=[1, 3]}
+      when recursively comparing field by field, but found the following 2 differences:
+
+      field/property 'k' differ:
+      - actual value  : 1
+      - expected value: 2L
+      Compared objects have java types and were thus compared with equals method
+
+      field/property 'o[1]' differ:
+      - actual value  : 2
+      - expected value: 3
+      Compared objects have java types and were thus compared with equals method
+
+      The recursive comparison was performed with this configuration:
+      - (the defaults)
+
+      java.lang.AssertionError:
+      Expecting actual:
+        [1, 2]
+      to be equal to:
+        [1, 3]
+      when recursively comparing field by field, but found the following difference:
+
+      Top level actual and expected objects differ:
+      - actual value  : [1, 2]
+      - expected value: [1, 3]
+      The following expected elements were not matched in the actual HashSet:
+        [3]
+
+      The recursive comparison was performed with this configuration:
+      - (the defaults)
+
+      java.lang.AssertionError:
+      Expecting actual:
+        [1, 2]
+      to be equal to:
+        [1, 2, 3]
+      when recursively comparing field by field, but found the following difference:
+
+      Top level actual and expected objects differ:
+      - actual value  : [1, 2]
+      - expected value: [1, 2, 3]
+      actual and expected values are collections of different size, actual size=2 when expected size=3
+
+      The recursive comparison was performed with this configuration:
+      - (the defaults)
+
+      passed
+      java.lang.AssertionError:
+      Expecting actual:
+        Box[name=b, content=Optional[Point[x=1, y=2]]]
+      to be equal to:
+        Box[name=b, content=Optional[Point[x=1, y=3]]]
+      when recursively comparing field by field, but found the following difference:
+
+      field/property 'content.value.y' differ:
+      - actual value  : 2
+      - expected value: 3
+      Compared objects have java types and were thus compared with equals method
+
+      The recursive comparison was performed with this configuration:
+      - (the defaults)
+
+      WARNING: Comparator was not suited to compare 'content' field values:
+      - actual field value  : 1.0
+      - expected field value: 1
+      - comparator used     : DoubleComparator[precision=1.0E-15]
+      java.lang.AssertionError:
+      Expecting actual:
+        Box[name=b, content=1.0]
+      to be equal to:
+        Box[name=b, content=1]
+      when recursively comparing field by field, but found the following difference:
+
+      field/property 'content' differ:
+      - actual value  : 1.0
+      - expected value: 1
+
+      The recursive comparison was performed with this configuration:
+      - (the defaults)
+
+      java.lang.AssertionError:
+      Expecting actual:
+        Box[name=b, content=S]
+      to be equal to:
+        Box[name=b, content=M]
+      when recursively comparing field by field, but found the following difference:
+
+      field/property 'content' differ:
+      - actual value  : S
+      - expected value: M
+
+      The recursive comparison was performed with this configuration:
+      - (the defaults)
+
+      java.lang.AssertionError:
+      Expecting actual:
+        Box[name=b, content=Point[x=1, y=2]]
+      to be equal to:
+        Box[name=b, content=text]
+      when recursively comparing field by field, but found the following difference:
+
+      field/property 'content' differ:
+      - actual value  : Point[x=1, y=2]
+      - expected value: "text"
+      Compared objects have java types and were thus compared with equals method
+
+      The recursive comparison was performed with this configuration:
+      - (the defaults)
+
+      java.lang.AssertionError:
+      Expecting actual:
+        Box[name=b, content=Point[x=1, y=2]]
+      to be equal to:
+        Box[name=b, content={x=1}]
+      when recursively comparing field by field, but found the following difference:
+
+      field/property 'content' differ:
+      - actual value  : Point[x=1, y=2]
+      - expected value: {"x"=1}
+      expected field is a map but actual field is not (q.AssertjTest.Point)
+
+      The recursive comparison was performed with this configuration:
+      - (the defaults)
+
+      passed
+      passed
+      org.opentest4j.AssertionFailedError:
+      Expecting actual:
+        ["b", "a"]
+      to contain exactly (and in same order):
+        ["a", "b"]
+      but there were differences at these indexes:
+        - element at index 0: expected "a" but was "b"
+        - element at index 1: expected "b" but was "a"
+
+      passed
+      java.lang.AssertionError:
+      Expecting
+        Person ann
+      to have a property or a field named "age" with value
+        20
+      but value was:
+        120
+      (static and synthetic fields are ignored)
+      java.lang.AssertionError:
+      Expecting
+        Person ann
+      to have a property or a field named "nope"
+      (static and synthetic fields are ignored)
+      org.opentest4j.AssertionFailedError:[Extracted: friend.age] 
+      expected: 1
+       but was: 103
+      org.opentest4j.AssertionFailedError:[Extracted: name, age] 
+      Expecting actual:
+        ["ann", 120]
+      to contain exactly (and in same order):
+        ["ann", 1]
+      but some elements were not found:
+        [1]
+      and others were not expected:
+        [120]
+
+      org.assertj.core.util.introspection.IntrospectionError:
+      Can't find any field or property with name 'nope'.
+      Error when introspecting properties was :
+      - No getter for property 'nope' in q.AssertjTest$Person 
+      Error when introspecting fields was :
+      - Unable to obtain the value of the field <'nope'> from <Person ann>
+      org.opentest4j.AssertionFailedError:[Extracted: name, age] 
+      Expecting actual:
+        [("ann", 120), ("bob", 103)]
+      to contain exactly (and in same order):
+        [("ann", 120), ("bob", 1)]
+      but some elements were not found:
+        [("bob", 1)]
+      and others were not expected:
+        [("bob", 103)]
+
+      org.opentest4j.AssertionFailedError:[Extracted: name] 
+      Expecting actual:
+        ["ann"]
+      to contain exactly (and in same order):
+        ["bob"]
+      but some elements were not found:
+        ["bob"]
+      and others were not expected:
+        ["ann"]
+
+      ("a", 1, null, 'c', 2L) true
+      java.lang.AssertionError:
+      Expecting actual:
+        "abc"
+      to start with:
+        "b"
+
+      java.lang.AssertionError:
+      Expecting actual:
+        5
+      to be an instance of:
+        java.lang.Iterable
+      but was instance of:
+        java.lang.Integer
+      java.lang.AssertionError:
+      Expecting map:
+        {"a"=1}
+      to contain entries:
+        ["a"=2]
+      but the following map entries had different values:
+        ["a"=1 (expected: 2)]
+      InstanceOfAssertFactory for java.util.List<java.lang.String> | InstanceOfAssertFactory for java.util.Map<java.lang.Object, java.lang.Object>
+      java.lang.AssertionError:
+      Expecting actual:
+        1.0
+      to be close to:
+        1.2
+      by less than 0.1 but difference was 0.2.
+      (a difference of exactly 0.1 being considered valid)
+      passed
+      java.lang.AssertionError:
+      Expecting actual:
+        1.0
+      to be close to:
+        1.1
+      by less than 0.1 but difference was 0.1.
+      (a difference of exactly 0.1 being considered invalid)
+      java.lang.AssertionError:
+      Expecting actual:
+        1.0f
+      not to be close to:
+        1.05f
+      by less than 0.1f but difference was 0.05f.
+      (a difference of exactly <0.1f> being considered invalid)
+      java.lang.AssertionError:
+      Expecting actual:
+        10
+      to be close to:
+        12
+      by less than 1 but difference was 2.
+      (a difference of exactly 1 being considered valid)
+      java.lang.AssertionError:
+      Expecting actual:
+        5L
+      not to be close to:
+        3L
+      by less than 3L but difference was 2L.
+      (a difference of exactly <3L> being considered valid)
+      java.lang.IllegalArgumentException:An offset value should be greater than or equal to zero
+      Offset[value=0.1] strict Offset[value=2]
+      java.lang.AssertionError:
+      Actual and expected have the same elements but not in the same order, at index 0 actual element was:
+        "b"=2
+      whereas expected element was:
+        "a"=1
+
+      java.lang.AssertionError:
+      Actual and expected should have same size but actual size is:
+        2
+      while expected size is:
+        1
+      Actual was:
+        {"a"=1, "b"=2}
+      Expected was:
+        ["b"=2]
+      java.lang.AssertionError:
+      Expecting actual:
+        {"a"=1, "b"=2}
+      to contain exactly (and in same order):
+        ["b"=2, "c"=1]
+      but some elements were not found:
+        ["c"=1]
+      and others were not expected:
+        ["a"=1]
+
+      org.opentest4j.AssertionFailedError:
+      expected: 
+        ["y"]
+       but was: 
+        ["xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx",
+            "xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx"]
+      org.opentest4j.AssertionFailedError:
+      expected: null
+       but was: ["s", java.util.Map.Entry]
+      java.lang.AssertionError:
+      Expecting actual:
+        Version[major=2]
+      to be greater than:
+        Version[major=3]
+
+      java.lang.AssertionError:
+      Expecting actual:
+        S
+      to be between:
+        [M, L]
+
+      passed
+      java.lang.AssertionError:
+      Expecting path:
+        DIR/absent
+      to exist (symbolic links were followed).
+      java.lang.AssertionError:
+      Expecting path:
+        DIR/a.txt
+      to be a directory.
+      java.lang.AssertionError:
+      Expecting actual:
+        x/y.md
+      to be an absolute path.
+      java.lang.AssertionError:
+      Path:
+        DIR/a.txt
+      read with charset UTF-8 does not have the expected content:
+
+      Missing content at line 1:
+        ["zero"]
+
+      Extra content at line 3:
+        ["two"]
+
+      Changed content at line 4:
+      expecting:
+        ["X"]
+      but was:
+        ["four"]
+
+      java.lang.AssertionError:
+      Path:
+        DIR/a.txt
+      read with charset UTF-8 does not have the expected content:
+
+      Changed content at line 1:
+      expecting:
+        ["ONE",
+         "TWO"]
+      but was:
+        ["one",
+         "two"]
+
+      java.lang.AssertionError:
+      Expecting
+        DIR/e
+      to have extension:
+        "txt"
+      but had no extension.
+      java.lang.AssertionError:
+      Path:
+        DIR/a.txt
+      does not have expected binary content at offset 3, expecting:
+        "EOF"
+      but was:
+        "0xA"
+      java.lang.AssertionError:
+      Expecting actual:
+        "one
+      two
+      three
+      four"
+      to start with:
+        "two"
+
+      java.lang.AssertionError:
+      Expecting path DIR/e not to be empty
+      passed
+      java.lang.AssertionError:
+      Expecting
+        DIR/a.txt
+      to have name:
+        "b.txt"
+      but had:
+        "a.txt"
+      java.lang.AssertionError:
+      Expected actual file:
+        DIR/a.txt
+       not to have an extension, but extension was: "txt"
+      java.lang.AssertionError:
+      File:
+        DIR/a.txt
+      read with charset UTF-8 does not have the expected content:
+
+      Extra content at line 3:
+        ["three",
+         "four"]
+
+      java.lang.AssertionError:
+      Expecting actual:
+       DIR/absent
+      to be a file
+      java.lang.AssertionError:
+      Expecting file DIR/e not to be empty
+      passed
+      java.lang.AssertionError:
+      Expecting actual:
+        q.AssertjTest.Person
+      to be a "final" class but was "package-private static".
+      java.lang.AssertionError:
+      Expecting
+        q.AssertjTest.Person
+      to be an interface
+      java.lang.AssertionError:
+      Expecting
+        q.AssertjTest.Mark
+      to  not be an annotation
+      java.lang.AssertionError:
+      Expecting
+        q.AssertjTest.Person
+      to be assignable from:
+        [q.AssertjTest.Version]
+      but was not assignable from:
+        [q.AssertjTest.Version]
+      java.lang.AssertionError:
+      Expecting
+        java.lang.Object
+      to have superclass:
+        q.AssertjTest.Person
+      but had none.
+      java.lang.AssertionError:
+      Expecting int not to be a primitive type
+      java.lang.AssertionError:
+      Expecting actual:
+        2026-09-03 (java.time.LocalDate)
+      to be strictly before:
+        2026-01-01 (java.time.LocalDate)
+
+      java.lang.AssertionError:
+      Expecting actual:
+        2026-09-03 (java.time.LocalDate)
+      to be between:
+        ]2026-09-03 (java.time.LocalDate), 2027-01-01 (java.time.LocalDate)[
+
+      java.lang.AssertionError:
+      Expecting actual:
+        2026-09-03 (java.time.LocalDate)
+      to be on "day" 5
+      org.opentest4j.AssertionFailedError:
+      expected: 2026-09-04 (java.time.LocalDate)
+       but was: 2026-09-03 (java.time.LocalDate)
+      java.lang.AssertionError:
+      Expecting actual:
+        2026-09-03T10:15:30 (java.time.LocalDateTime)
+      to be strictly after:
+        2027-01-01T00:00 (java.time.LocalDateTime)
+      when comparing values using 'ChronoLocalDateTime.timeLineOrder()'
+      org.opentest4j.AssertionFailedError:
+      expected: 2026-09-03T10:15:31 (java.time.LocalDateTime)
+       but was: 2026-09-03T10:15:30 (java.time.LocalDateTime)
+      when comparing values using 'ChronoLocalDateTime.timeLineOrder()'
+      java.lang.AssertionError:
+      Expecting actual:
+        2026-09-03T10:15:30 (java.time.LocalDateTime)
+      to be on "day of month" 5
+      java.lang.AssertionError:
+      Expecting actual:
+        10:15
+      to be on "nano" 1
+      java.lang.AssertionError:
+      Expecting actual:
+        1970-01-01T00:00:00Z
+      to be between:
+        [1970-01-01T00:00:01Z, 1970-01-01T00:00:02Z]
+
+      java.lang.AssertionError:
+      Expecting actual:
+        1M30.5S
+      to be less than:
+        0S 
+      org.opentest4j.AssertionFailedError:
+      Expecting Duration:
+        1M30.5S
+      to have 5L millis but had 90500L
+      org.opentest4j.AssertionFailedError:
+      Expecting Duration:
+        48H
+      to have 1L hour but had 48L
+      java.lang.AssertionError:
+      Expecting actual:
+        PT1M30.5S
+      to be close to:
+        PT1M40S
+      within PT5S but difference was PT9.5S
+      passed
+      java.lang.AssertionError:
+      Expecting
+        <CompletableFuture[Incomplete]>
+      to be done.
+      Be aware that the state of the future in this message might not reflect the one at the time when the assertion was performed as it is evaluated later on
+      org.opentest4j.AssertionFailedError:
+      expected: "w"
+       but was: "v"
+      java.lang.AssertionError:
+      Expecting
+        <CompletableFuture[Cancelled]>
+      not to be cancelled.
+      Be aware that the state of the future in this message might not reflect the one at the time when the assertion was performed as it is evaluated later on
+      java.lang.AssertionError:
+      Expecting actual:
+        "v"
+      to match 'empty' predicate.
+      Tests run: 6, Failures: 1, Errors: 0, Skipped: 0 <<< FAILURE! -- in q.AssertjTest
+      q.AssertjTest.fARecursiveFailure <<< FAILURE!
+
+      Expecting actual:
+        Box[name=b, content=[Point[x=1, y=2]]]
+      to be equal to:
+        Box[name=c, content=[Point[x=1, y=3]]]
+      when recursively comparing field by field, but found the following 2 differences:
+
+      field/property 'content[0].y' differ:
+      - actual value  : 2
+      - expected value: 3
+      Compared objects have java types and were thus compared with equals method
+
+      field/property 'name' differ:
+      - actual value  : "b"
+      - expected value: "c"
+      Compared objects have java types and were thus compared with equals method
+
+      The recursive comparison was performed with this configuration:
+      - no equals methods were used in the comparison EXCEPT for java JDK types since introspecting JDK types is forbidden in java 17+ (use withEqualsForType to register a specific way to compare a JDK type if you need it)
+      - these types were compared with the following comparators:
+        - java.lang.Double -> DoubleComparator[precision=1.0E-15]
+        - java.lang.Float -> FloatComparator[precision=1.0E-6]
+        - java.nio.file.Path -> lexicographic comparator (Path natural order)
+      - actual and expected objects and their fields were compared field by field recursively even if they were not of the same type, this allows for example to compare a Person to a PersonDto (call strictTypeChecking(true) to change that behavior).
+      - the introspection strategy used was: DefaultRecursiveComparisonIntrospectionStrategy
+
 
       Results:
 
-      Tests run: 78, Failures: 13, Errors: 6, Skipped: 10
+      Tests run: 84, Failures: 14, Errors: 6, Skipped: 10
 refused:
   scaffold: |
     class Refused {

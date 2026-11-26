@@ -66,4 +66,9 @@ public class OptionalAssert<VALUE> extends AbstractAssert<OptionalAssert<VALUE>,
         isPresent();
         return new ObjectAssert<>(actual.get());
     }
+
+    @Override
+    public RecursiveComparisonAssert<?> usingRecursiveComparison() {
+        return super.usingRecursiveComparison();
+    }
 }

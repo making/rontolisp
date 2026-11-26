@@ -9729,6 +9729,9 @@ final class JavaLowering implements JavaEmitter.Context {
 			if (reached.contains("components0")) {
 				generated.add(classComponentsFunction(making));
 			}
+			if (reached.contains("fieldNames0")) {
+				generated.add(classFieldNamesFunction(making));
+			}
 			if (reached.contains("annotations0")) {
 				generated.add(classAnnotationsFunction(making));
 			}
@@ -10013,7 +10016,7 @@ final class JavaLowering implements JavaEmitter.Context {
 			"getDeclaredAnnotation", "getDeclaredConstructor", "getDeclaredMethod", "getMethod", "getDeclaredField",
 			"getField", "getInterfaces", "getMethods", "getDeclaredFields", "getFields", "getDeclaredConstructors",
 			"getConstructors", "getConstructor", "getModifiers", "newInstance", "generic0", "annotations0",
-			"components0", "parameters0", "annotated0", "variableAnnotations0");
+			"components0", "parameters0", "annotated0", "variableAnnotations0", "fieldNames0");
 
 	/**
 	 * The function {@code Class.getModifiers()} asks: for each class object made of a
@@ -10292,6 +10295,9 @@ final class JavaLowering implements JavaEmitter.Context {
 			case 46:
 				asks("variableAnnotations0");
 				return list(CLASS_VARIABLE_ANNOTATIONS, call.argument(0), call.argument(1), call.argument(2));
+			case 47:
+				asks("fieldNames0");
+				return list(CLASS_FIELD_NAMES, call.argument(0));
 			case 3:
 				break;
 			default:
@@ -10513,6 +10519,8 @@ final class JavaLowering implements JavaEmitter.Context {
 	private static final LispSymbol CLASS_ANNOTATIONS = new LispSymbol("%class-annotations");
 
 	private static final LispSymbol CLASS_COMPONENTS = new LispSymbol("%class-components");
+
+	private static final LispSymbol CLASS_FIELD_NAMES = new LispSymbol("%class-field-names");
 
 	private static final LispSymbol CLASS_PARAMETERS = new LispSymbol("%class-parameters");
 
@@ -11420,6 +11428,31 @@ final class JavaLowering implements JavaEmitter.Context {
 		}
 		arms.add(list(T, library(TYPES, "unknownComponents", List.of(RECEIVER))));
 		return list(cl("defun"), CLASS_COMPONENTS, list(RECEIVER), list(arms));
+	}
+
+	/**
+	 * The function the field names of a class ask ({@code Introspected.fieldNames0}, a
+	 * recursive comparison's walk): for each class object made of a class whose members
+	 * the program keeps ({@link #reflected}), a vector of the names of the instance fields
+	 * it declares, in the order declared; {@code NIL} for any other class. Names alone: no member of the class is made, so no
+	 * member table ({@link #memberTables}) is, which listing the fields would make.
+	 */
+	private LispVal classFieldNamesFunction(Making making) {
+		List<LispVal> arms = new ArrayList<>(List.of(cl("cond")));
+		for (Map.Entry<JavaType, LispVal> object : List.copyOf(making.made().entrySet())) {
+			if (!(object.getKey() instanceof ClassType named) || !reflected(named.declaration())) {
+				continue;
+			}
+			List<LispVal> names = new ArrayList<>(List.of(cl("vector")));
+			for (Field field : reflectedFields(named.declaration())) {
+				if (!field.isStatic) {
+					names.add(string(field.name));
+				}
+			}
+			arms.add(list(call("eq", RECEIVER, object.getValue()), list(names)));
+		}
+		arms.add(list(T, NIL));
+		return list(cl("defun"), CLASS_FIELD_NAMES, list(RECEIVER), list(arms));
 	}
 
 	/**

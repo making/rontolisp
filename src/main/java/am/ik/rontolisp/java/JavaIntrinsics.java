@@ -2542,6 +2542,9 @@ final class JavaIntrinsics {
 				(lowering, call) -> lowering.classReflection(call, 45));
 		natives.put("java.lang.reflect.Types.variableAnnotations0(Class,Object,int)",
 				(lowering, call) -> lowering.classReflection(call, 46));
+		// the names of a class's instance fields alone, which no member table makes
+		natives.put("rontolisp.internal.Introspected.fieldNames0(Class)",
+				(lowering, call) -> lowering.classReflection(call, 47));
 		arrays(natives);
 		String thread = THREAD + ".";
 		natives.put("java.lang.Runtime.halt0(int)", runtime("exit"));

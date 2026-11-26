@@ -9,9 +9,16 @@ import java.util.List;
 import java.util.Map;
 
 // How a failed assertion shows a value, and the comparisons of elements its checks are
-// made of: a text between quotes, a long and a float with their letters, the elements
-// of an array, a collection and a map each shown the same way.
+// made of, as AssertJ 3.27 shows them under a JDK: a text (any CharSequence) between
+// quotes, a long and a float with their letters, a class by its canonical name, a path
+// as it reads, a file by its absolute path, a duration without its "PT", the local and
+// zoned dates and times followed by their class; the elements of an array, a collection
+// and a map each shown the same way, a map's in the order of its keys, those of a
+// collection or an array of objects on lines of their own past 80 characters.
 public final class Shown {
+
+    // The longest a collection is shown on one line.
+    private static final int ONE_LINE = 80;
 
     private Shown() {
     }
@@ -20,7 +27,7 @@ public final class Shown {
         if (value == null) {
             return "null";
         }
-        if (value instanceof String text) {
+        if (value instanceof CharSequence text) {
             return "\"" + text + "\"";
         }
         if (value instanceof Character) {
@@ -33,12 +40,13 @@ public final class Shown {
             return value + "f";
         }
         if (value instanceof Class<?> type) {
-            return type.getName();
+            String name = type.getCanonicalName();
+            return name == null ? type.getName() : name;
         }
         if (value instanceof Map<?, ?> map) {
             StringBuilder text = new StringBuilder("{");
             boolean first = true;
-            for (Map.Entry<?, ?> entry : map.entrySet()) {
+            for (Map.Entry<?, ?> entry : sorted(map)) {
                 text.append(first ? "" : ", ").append(of(entry.getKey())).append('=').append(of(entry.getValue()));
                 first = false;
             }
@@ -47,11 +55,47 @@ public final class Shown {
         if (value instanceof Map.Entry<?, ?> entry) {
             return of(entry.getKey()) + "=" + of(entry.getValue());
         }
+        if (value instanceof java.nio.file.Path) {
+            return value.toString();
+        }
         if (value instanceof Iterable<?> elements) {
-            return ofAll(listOf(elements));
+            return wrapped(listOf(elements));
         }
         List<Object> elements = elementsOf(value);
-        return elements != null ? ofAll(elements) : String.valueOf(value);
+        if (elements == null) {
+            return known(value);
+        }
+        return value instanceof Object[] ? wrapped(elements) : ofAll(elements);
+    }
+
+    // A value of a class of the JDK's that a failure shows otherwise than as its text.
+    private static String known(Object value) {
+        switch (value.getClass().getName()) {
+            case "java.io.File":
+                return ((java.io.File) value).getAbsolutePath();
+            case "java.time.Duration":
+                return value.toString().substring(2);
+            case "java.time.LocalDate", "java.time.LocalDateTime", "java.time.OffsetDateTime",
+                    "java.time.ZonedDateTime":
+                return value + " (" + value.getClass().getName() + ")";
+            default:
+                return String.valueOf(value);
+        }
+    }
+
+    // A map's entries in the order of their keys where the keys have one, else in the
+    // order the map gives them (AssertJ 3.27 under a JDK: keys of two kinds or a null
+    // key keep the map's order).
+    @SuppressWarnings({ "unchecked", "rawtypes" })
+    private static List<Map.Entry<?, ?>> sorted(Map<?, ?> map) {
+        List<Map.Entry<?, ?>> entries = new ArrayList<>(map.entrySet());
+        try {
+            entries.sort((one, other) -> ((Comparable) one.getKey()).compareTo(other.getKey()));
+        }
+        catch (RuntimeException unordered) {
+            return new ArrayList<>(map.entrySet());
+        }
+        return entries;
     }
 
     public static String ofAll(List<?> elements) {
@@ -64,15 +108,35 @@ public final class Shown {
         return text.append(']').toString();
     }
 
-    // A value on the lines under a heading: each of its lines two spaces in.
-    public static String under(Object value) {
-        return "  " + of(value).replace("\n", "\n  ");
+    // Elements on one line, or on lines of their own where one would be too long.
+    private static String wrapped(List<?> elements) {
+        String line = ofAll(elements);
+        if (line.length() <= ONE_LINE || elements.size() < 2) {
+            return line;
+        }
+        StringBuilder text = new StringBuilder("[");
+        boolean first = true;
+        for (Object element : elements) {
+            text.append(first ? "" : ",\n    ").append(of(element));
+            first = false;
+        }
+        return text.append(']').toString();
     }
 
-    // A value after a heading on its line, or under it where it has several lines.
-    public static String after(Object value) {
-        String text = of(value);
-        return text.indexOf('\n') < 0 ? text : "\n  " + text.replace("\n", "\n  ");
+    // A value on the line under a heading, two spaces in.
+    public static String under(Object value) {
+        return "  " + of(value);
+    }
+
+    // An expected value and the actual one, each after its heading on its line, or both
+    // under them where either has several lines.
+    public static String expected(Object expected, Object actual) {
+        String one = of(expected);
+        String other = of(actual);
+        if (one.indexOf('\n') < 0 && other.indexOf('\n') < 0) {
+            return "\nexpected: " + one + "\n but was: " + other;
+        }
+        return "\nexpected: \n  " + one.replace("\n", "\n  ") + "\n but was: \n  " + other.replace("\n", "\n  ");
     }
 
     public static List<Object> listOf(Iterable<?> elements) {

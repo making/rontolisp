@@ -4,16 +4,27 @@
 // subset. Notice: THIRD-PARTY-NOTICES.txt, "AssertJ".
 package org.assertj.core.api;
 
+import java.io.File;
 import java.io.IOException;
+import java.nio.file.Path;
+import java.time.Duration;
+import java.time.Instant;
+import java.time.LocalDate;
+import java.time.LocalDateTime;
+import java.time.LocalTime;
 import java.util.List;
 import java.util.Map;
 import java.util.Optional;
+import java.util.concurrent.CompletableFuture;
+import java.util.concurrent.Future;
 
 import org.assertj.core.api.ThrowableAssert.ThrowingCallable;
 import org.assertj.core.data.MapEntry;
+import org.assertj.core.data.Offset;
+import org.assertj.core.groups.Tuple;
 
 // Where an assertion starts: the kind of the value picks the checks it takes.
-public class Assertions {
+public class Assertions implements InstanceOfAssertFactories {
 
     protected Assertions() {
     }
@@ -110,6 +121,50 @@ public class Assertions {
         return new ObjectArrayAssert<>(actual);
     }
 
+    public static ClassAssert assertThat(Class<?> actual) {
+        return new ClassAssert(actual);
+    }
+
+    public static AbstractPathAssert<?> assertThat(Path actual) {
+        return new PathAssert(actual);
+    }
+
+    public static AbstractFileAssert<?> assertThat(File actual) {
+        return new FileAssert(actual);
+    }
+
+    public static <RESULT> FutureAssert<RESULT> assertThat(Future<RESULT> actual) {
+        return new FutureAssert<>(actual);
+    }
+
+    public static <RESULT> CompletableFutureAssert<RESULT> assertThat(CompletableFuture<RESULT> actual) {
+        return new CompletableFutureAssert<>(actual);
+    }
+
+    public static AbstractLocalDateAssert<?> assertThat(LocalDate actual) {
+        return new LocalDateAssert(actual);
+    }
+
+    public static AbstractLocalDateTimeAssert<?> assertThat(LocalDateTime actual) {
+        return new LocalDateTimeAssert(actual);
+    }
+
+    public static AbstractLocalTimeAssert<?> assertThat(LocalTime actual) {
+        return new LocalTimeAssert(actual);
+    }
+
+    public static AbstractInstantAssert<?> assertThat(Instant actual) {
+        return new InstantAssert(actual);
+    }
+
+    public static AbstractDurationAssert<?> assertThat(Duration actual) {
+        return new DurationAssert(actual);
+    }
+
+    public static <T extends Comparable<? super T>> AbstractComparableAssert<?, T> assertThat(T actual) {
+        return new GenericComparableAssert<>(actual);
+    }
+
     public static <T extends Throwable> AbstractThrowableAssert<?, T> assertThat(T actual) {
         return new ThrowableAssert<>(actual);
     }
@@ -176,5 +231,59 @@ public class Assertions {
 
     public static <K, V> MapEntry<K, V> entry(K key, V value) {
         return MapEntry.entry(key, value);
+    }
+
+    public static Tuple tuple(Object... values) {
+        return Tuple.tuple(values);
+    }
+
+    // ---- how close a number has to be
+
+    public static Offset<Double> offset(Double value) {
+        return Offset.offset(value);
+    }
+
+    public static Offset<Float> offset(Float value) {
+        return Offset.offset(value);
+    }
+
+    public static Offset<Double> within(Double value) {
+        return Offset.offset(value);
+    }
+
+    public static Offset<Double> withPrecision(Double value) {
+        return Offset.offset(value);
+    }
+
+    public static Offset<Float> within(Float value) {
+        return Offset.offset(value);
+    }
+
+    public static Offset<Float> withPrecision(Float value) {
+        return Offset.offset(value);
+    }
+
+    public static Offset<Integer> within(Integer value) {
+        return Offset.offset(value);
+    }
+
+    public static Offset<Long> within(Long value) {
+        return Offset.offset(value);
+    }
+
+    public static Offset<Double> byLessThan(Double value) {
+        return Offset.strictOffset(value);
+    }
+
+    public static Offset<Float> byLessThan(Float value) {
+        return Offset.strictOffset(value);
+    }
+
+    public static Offset<Integer> byLessThan(Integer value) {
+        return Offset.strictOffset(value);
+    }
+
+    public static Offset<Long> byLessThan(Long value) {
+        return Offset.strictOffset(value);
     }
 }

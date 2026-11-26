@@ -4,6 +4,10 @@
 // subset. Notice: THIRD-PARTY-NOTICES.txt, "AssertJ".
 package org.assertj.core.api;
 
+import java.math.BigDecimal;
+
+import org.assertj.core.data.Offset;
+
 // The checks of a double: against a number written as it is.
 public abstract class AbstractDoubleAssert<SELF extends AbstractDoubleAssert<SELF>> extends AbstractComparableAssert<SELF, Double> {
 
@@ -69,5 +73,43 @@ public abstract class AbstractDoubleAssert<SELF extends AbstractDoubleAssert<SEL
 
     public SELF isNotNaN() {
         return isNotEqualTo(Double.NaN);
+    }
+
+    public SELF isCloseTo(double expected, Offset<Double> offset) {
+        return isCloseTo((Double) expected, offset);
+    }
+
+    public SELF isCloseTo(Double expected, Offset<Double> offset) {
+        return closeTo(expected, offset, true);
+    }
+
+    public SELF isNotCloseTo(double expected, Offset<Double> offset) {
+        return isNotCloseTo((Double) expected, offset);
+    }
+
+    public SELF isNotCloseTo(Double expected, Offset<Double> offset) {
+        return closeTo(expected, offset, false);
+    }
+
+    public SELF isEqualTo(double expected, Offset<Double> offset) {
+        return isCloseTo((Double) expected, offset);
+    }
+
+    public SELF isEqualTo(Double expected, Offset<Double> offset) {
+        return isCloseTo(expected, offset);
+    }
+
+    private SELF closeTo(Double expected, Offset<Double> offset, boolean wanted) {
+        given(offset);
+        isNotNull();
+        // a difference of finite numbers is measured in decimal, as their texts read
+        double one = actual;
+        double other = expected;
+        double difference = one == other ? 0.0
+                : Double.isFinite(one) && Double.isFinite(other)
+                        ? BigDecimal.valueOf(one).subtract(BigDecimal.valueOf(other)).abs().doubleValue()
+                        : Math.abs(one - other);
+        return closeTo(expected, offset, difference, offset.strict ? difference < offset.value : difference <= offset.value,
+                wanted);
     }
 }

@@ -10,6 +10,8 @@ import java.util.function.Consumer;
 import java.util.function.Function;
 import java.util.function.Predicate;
 
+import org.assertj.core.groups.Tuple;
+import rontolisp.internal.Introspected;
 import rontolisp.internal.Shown;
 
 // The checks of the elements of a collection, in the order it gives them.
@@ -337,6 +339,26 @@ public abstract class AbstractIterableAssert<SELF extends AbstractIterableAssert
         return new ListAssert<>(extracted);
     }
 
+    public ListAssert<Object> extracting(String propertyOrField) {
+        List<Object> extracted = new ArrayList<>();
+        for (Object element : elements()) {
+            extracted.add(Introspected.value(element, propertyOrField));
+        }
+        return extracted(new ListAssert<>(extracted), propertyOrField);
+    }
+
+    public ListAssert<Tuple> extracting(String... propertiesOrFields) {
+        List<Tuple> extracted = new ArrayList<>();
+        for (Object element : elements()) {
+            Object[] values = new Object[propertiesOrFields.length];
+            for (int i = 0; i < values.length; i++) {
+                values[i] = Introspected.value(element, propertiesOrFields[i]);
+            }
+            extracted.add(new Tuple(values));
+        }
+        return extracted(new ListAssert<>(extracted), String.join(", ", propertiesOrFields));
+    }
+
     public <V> ListAssert<V> map(Function<? super ELEMENT, V> mapper) {
         return extracting(mapper);
     }
@@ -350,6 +372,15 @@ public abstract class AbstractIterableAssert<SELF extends AbstractIterableAssert
             }
         }
         return new ListAssert<>(kept);
+    }
+
+    public ListAssert<ELEMENT> filteredOn(String propertyOrFieldName, Object expectedValue) {
+        return filteredOn(element -> Shown.same(Introspected.value(element, propertyOrFieldName), expectedValue));
+    }
+
+    @Override
+    public RecursiveComparisonAssert<?> usingRecursiveComparison() {
+        return super.usingRecursiveComparison();
     }
 
     @SuppressWarnings("unchecked")
