@@ -80,28 +80,33 @@
               nil))))
 
 (rontolisp:async-defun rontolisp::%stdin-read-char-f ()
-  ;; One UTF-8 sequence assembled byte-wise, the way sockets.lisp's
-  ;; %sock-read-char-f does it: an invalid lead byte stands alone and decodes to
-  ;; whatever the string layer's decoder yields for it.
+  ;; One character decoded octet by octet, the way sockets.lisp's
+  ;; %sock-read-char-f does it: an octet that cannot continue the lead's sequence
+  ;; is put back (the cursor steps back over it), to start the next character,
+  ;; and what was taken is one U+FFFD.
   (let ((b0 (rontolisp:await (rontolisp::%stdin-read-byte-f))))
-    (if (null b0)
-        nil
-        (if (< b0 128)
-            (code-char b0)
-            (let ((n (if (< b0 192) 0 (if (< b0 224) 1 (if (< b0 240) 2 3))))
-                  (acc (rontolisp::%str-from-byte b0)))
-              (while (> n 0)
-                (let ((bn (rontolisp:await (rontolisp::%stdin-read-byte-f))))
-                  (if (null bn)
-                      (setq n 0)
-                      (progn
-                        (setq acc
-                         ;; byte-level append: acc holds a PARTIAL UTF-8
-                         ;; sequence, which the wrapped concatenate's
-                         ;; character conversion would trap on
-                         (%string-concat acc (rontolisp::%str-from-byte bn)))
-                        (setq n (- n 1))))))
-              (char acc 0))))))
+    (cond ((null b0) nil)
+          ((< b0 128) (code-char b0))
+          ((or (< b0 194) (> b0 244)) (code-char 65533))
+          (t (let ((n (if (< b0 224) 1 (if (< b0 240) 2 3)))
+                   (cp (- b0 (if (< b0 224) 192 (if (< b0 240) 224 240))))
+                   (lo (if (= b0 224) 160 (if (= b0 240) 144 128)))
+                   (hi (if (= b0 244) 143 191)))
+               (while (> n 0)
+                 (let ((b (rontolisp:await (rontolisp::%stdin-read-byte-f))))
+                   (if (and b (>= b lo) (<= b hi))
+                       (progn
+                         (setq cp (+ (* cp 64) (- b 128)))
+                         (setq n (- n 1))
+                         (setq lo 128)
+                         (setq hi 191))
+                       (progn
+                         (if b
+                             (setq rontolisp::*stdin-cursor*
+                                   (- rontolisp::*stdin-cursor* 1)))
+                         (setq n -1)))))
+               (code-char
+                (if (and (= n 0) (or (< cp 55296) (> cp 57343))) cp 65533)))))))
 
 (rontolisp:async-defun rontolisp::%stdin-read-line-f ()
   ;; The line and read-line's missing-newline-p: t when the end of input, not a

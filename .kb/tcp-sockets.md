@@ -373,10 +373,24 @@ so fetch+tcp and serve+tcp compose in one component.
 - **`write-string`/`write-char`/`read-char` on a socket are real on all four backends**, treating
   socket I/O as BYTES -- never through a `Reader`/decoder that would buffer ahead and swallow bytes a
   following `read-byte`/`read-line` owes the caller. Cross-backend pin: one program answering
-  `(65 195 135 66 504 90 121)`. **Deviation (measured 2026-11-26)**: `read-char` takes the
-  octets its lead's high bits count whatever they are -- `ff 7a 0a` reads U+FFFD then EOF on the
-  interpreter/JVM, code 2073250 on the WASM targets (the loose character walk); SBCL and a file
-  stream read U+FFFD, `z`, newline.
+  `(65 195 135 66 504 90 121)`. **A malformed sequence is `read-line`'s, a character at a time**:
+  each octet after the lead is looked at before it is taken (Table 3-7's ranges, an encoded
+  surrogate whole), and one that cannot continue stays unread for the next character
+  (`RontoSocketInput.readCodePoint` for the interpreter and the JVM's `_sockReadChar`: a look at
+  the buffer, after a fill when it is spent; in sockets.lisp, runner-sockets.lisp and stdin.lisp
+  the octet is read and the cursor stepped back over it, always the current chunk's since a
+  fill leaves it at index 0 -- a separate async peek function cost the component 1.7-3 KB).
+  Measured 2026-11-26, peer sends `ff7a0a` / `c3410a` / `41e9420a`: SBCL `:replacement` and
+  the four now `65533 122 10` / `65533 65 10` / `65 65533 66`, and `eda080 f09f9880 e080bf
+  f4908080` as the JDK's decoder. Before: the octets the lead's high bits counted were taken
+  whatever they were (interpreter/JVM `65533 :EOF :EOF`, WASM `2073250`, the loose character
+  walk; `--native` trapped on a lone lead at the end). Sizes, B: component with `read-char`
+  193,081 -> 193,758, with `read-line` alone +332, async stdin +833; JVM `Prog.class` -271;
+  `--native` executable with `read-char` +8,464; a program without them identical on every
+  output. Pin: `TcpOutputBufferFixture` (the last cut short by an octet the peer sends only
+  after the program's flushed `!`, so across a fill) and
+  `componentAsyncStdinBareReadCharSignalsTheEndOfFileClass` (`c3 41 e9`). `peek-char` on a
+  socket is no stream on any backend (an error, a trap on the component).
 - **A bare `(read-char sock)` / `(read-byte sock)` at peer close signals `end-of-file`** (CL's default
   `eof-error-p` t) on both entries a bare shape reaches -- the promoted `%read-{char,byte}-future`
   and the sync `%io-read-{char,byte}`. The nil convention stays BELOW in `%sock-read-{char,byte}-f`,
@@ -493,8 +507,7 @@ backends.** cl-postgres reads every text value and every message's framing one `
   18,869 -> 13 / 10, 4,000,000 -> 137 / 99. Lines with a `\r` at every chunk edge, an empty line,
   an invalid and a split multi-byte sequence and a missing final newline answer the same values
   before and after. A component with `read-line` is 5.6 KB (2.8%) larger (199,742 -> 205,361); one
-  without it differs only in the numbering of its function ids. `%sock-read-char-f` assembles a
-  character the old way (at most four octets); `%stdin-read-line-f` is untouched.
+  without it differs only in the numbering of its function ids. `%stdin-read-line-f` is untouched.
 - Pins: `TcpReadSomeFixture` (a byte of three, then `listen` and a read with no wait answering the
   two the buffer holds and the host no longer does) on every socket backend; the byte-wise
   read-char/read-line pins above; `ClPostgresE2eTest`.

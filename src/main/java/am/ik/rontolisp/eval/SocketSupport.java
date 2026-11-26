@@ -738,36 +738,16 @@ final class SocketSupport {
 	}
 
 	/**
-	 * Reads ONE character -- a Unicode code point -- from a socket, assembling its UTF-8
-	 * sequence byte-wise off the socket's input. Never through a {@code Reader}: one
-	 * would buffer ahead of the socket's input and swallow bytes a following
-	 * {@code read-byte} / {@code read-line} owes the caller. An invalid lead byte stands
-	 * alone and decodes to whatever the UTF-8 decoder yields for it (U+FFFD), which is
-	 * what the component's byte-wise {@code %sock-read-char-f} answers as well.
+	 * Reads ONE character -- a Unicode code point -- from a socket, decoded octet by
+	 * octet off the socket's input ({@code RontoSocketInput.readCodePoint}). Never
+	 * through a {@code Reader}: one would buffer ahead of the socket's input and swallow
+	 * bytes a following {@code read-byte} / {@code read-line} owes the caller.
 	 * @param socket the connected socket
 	 * @return the code point, or -1 when the peer closed before any byte arrived
 	 */
 	static int readChar(Socket socket) {
 		try {
-			InputStream in = in(socket);
-			int b0 = in.read();
-			if (b0 < 0) {
-				return -1;
-			}
-			if (b0 < 128) {
-				return b0;
-			}
-			int continuations = (b0 < 192) ? 0 : (b0 < 224) ? 1 : (b0 < 240) ? 2 : 3;
-			ByteArrayOutputStream sequence = new ByteArrayOutputStream();
-			sequence.write(b0);
-			for (int i = 0; i < continuations; i++) {
-				int bn = in.read();
-				if (bn < 0) {
-					break;
-				}
-				sequence.write(bn);
-			}
-			return new String(sequence.toByteArray(), StandardCharsets.UTF_8).codePointAt(0);
+			return in(socket).readCodePoint();
 		}
 		catch (IOException ex) {
 			throw new LispEvalException("read-char: " + ex.getMessage());
