@@ -951,8 +951,8 @@ public final class WitExportDirective {
 			throw error(witPath, locations, item,
 					"export '" + exportName + "': the WIT type of " + what + " is not one --no-gc can carry ("
 							+ supportedWitTypes() + "): the scalar backend has no value for it (" + describe(type)
-							+ "); compile the world on the default backend's --component, where the canonical ABI "
-							+ "marshals it");
+							+ "); compile the world on the default backend, a --component or a --no-wasi module, "
+							+ "where the canonical ABI marshals it");
 		}
 		String refused = refusedCanonical(type, resolver, scope, new java.util.HashSet<>());
 		if (refused != null) {

@@ -144,6 +144,7 @@ carries the integers up to 32 bits, the floats, `bool`, `string`, `list<u8>` and
 member reaching beyond them is refused where the program calls it; a component's import carries
 every row but flags and an argument list of anything but `u8`. A component's export carries
 every row but flags and handles, and a world whose types reach one of them, a stream, a future
-or a type of another interface (`use`) is refused at the WIT line; a WASM core module's and
-`--no-gc`'s exports carry the integers, `f64`, `bool` and `string`
+or a type of another interface (`use`) is refused at the WIT line, and a `--no-wasi` module's
+export carries the same through its `--emit-js-glue` glue; a WASI module's and `--no-gc`'s
+exports carry the integers, `f64`, `bool` and `string`
 ([`rontolisp:wit-export`](../../reference/functions/rontolisp-wit-export.md#compound-types)).

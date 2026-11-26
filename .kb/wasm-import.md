@@ -267,6 +267,23 @@ Worker; `wasi:config`, `wasi:blobstore`, `wasi:logging` take the same path.
   table per `<iface id>#<name>`. A `u64` at or past 2^63 lifts as a float (`boxI64`, as on a
   component). Pinned by
   `WasmHostGlueE2eTest.anInterfaceTheFlatSetDoesNotCarryCrossesThroughTheCanonicalAbi`.
+- **The export direction** (`HostGlueEmitter.WitExport`, `WitGlueLayouts.of(WitExportSignature)`):
+  a canonical `wit-export` on `--no-wasi` is the component's core export (`coreParams` /
+  `coreResults`), and the glue's `exported(params, spilled, result, retptr)` lowers the caller's
+  values (`lowerFlats`, a case's payload `widen`ed into the variant's joined flats; past 16
+  flats one tuple through `alloc`/`store`) and lifts the answer (`liftFlat` / `load`) inside
+  `call`'s mark/reset. **A `result`'s error arm is thrown AFTER `call` returns** (`settled`):
+  thrown from `decode` it would skip the reset and leave the staging on the heap. Name: the
+  label camelCased, flat beside the flat exports (no per-interface object as jco nests; a core
+  module's `checkNames` already refuses two interfaces' one label). WASI Preview 1 keeps the
+  refusal. Every glue without a canonical export is byte-identical (the canonical block is
+  written for one alone: `lifted` only with a canonical import). Sizes (2026-11-26, default
+  `--optimize`, raw / gzip): `examples/wit/shapes/shapes.lisp` 64,504 / 24,365 B, glue 21,024 /
+  6,006; a one-function `flip` 1,336 / 827 B (`--component` 1,857), glue 16,953 / 5,034 -- the
+  ABI block is written whole, not per kind used. Pinned by the `mirror` leg of
+  `WasmHostGlueE2eTest.anInterfaceTheFlatSetDoesNotCarryCrossesThroughTheCanonicalAbi` (every
+  kind but a handle, spilled parameters, the arena back at its mark) and
+  `WitExportInlinerTest.aWorldIsRefusedAnOutputThatCannotExportIt`.
 - **`wasi:keyvalue` over Workers KV** (`HostGlueEmitter.KEYVALUE`, `0.2.0-draft2`'s `store` and
   `batch`, each member only where the WIT signature matches): `defaultHost(stores)`; `worker()` maps
   `""` to binding `KEYVALUE`, other identifiers to their own name, `options.keyvalue` overrides.

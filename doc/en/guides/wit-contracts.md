@@ -202,9 +202,11 @@ streams, a type of another interface), is in the
 [`examples/wit/shapes`](https://github.com/making/rontolisp/tree/develop/examples/wit/shapes)
 is this world with a second component calling it.
 
-A core module (`-o out.wasm` alone, `--no-wasi`) and `--no-gc` export the flat
-types alone: a function of core values has no type to state a record by, and
-the scalar backend no value to hold one.
+A WASI module (`-o out.wasm` alone) and `--no-gc` export the flat types alone:
+its host calls a function of core values, which have no type to state a record
+by, and the scalar backend has no value to hold one. A `--no-wasi` module
+exports them through its [`--emit-js-glue`](wasm-host-boundary.md#wit-interfaces-beyond-the-flat-set)
+file, which lowers and lifts the canonical ABI in JavaScript.
 
 Current limitations:
 
