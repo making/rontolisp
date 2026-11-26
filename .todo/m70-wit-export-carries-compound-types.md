@@ -23,7 +23,10 @@ ABI in the export path first, then each front end's mapping.
 - **Front ends**: Lisp `wit-export` (the value a Lisp function answers for a record, a variant,
   a `result` -- follow `wit-import`'s settled mapping, `.kb/wit.md`), Clojure, Java `@WitExport`
   (records, sealed interfaces, enums, `List`, `Optional`, `byte[]` as `@WitImport` maps them; a
-  `result` as m69's `Result` type, so m69 lands first).
+  `result` as `am.ik.rontolisp.wit.WitResult`, which m69 added for `@WitImport`). A provider
+  to try a component against without CI: a Rust crate on wit-bindgen 0.62 (in `~/.cargo`,
+  builds `--offline` for `wasm32-unknown-unknown`), `wasm-tools component new`, then
+  `wasm-tools compose app.wasm -d provider.wasm` (m69 ran its result program so).
 - **Hosts**: wasmtime's WAVE invoke and a `bindgen` host (`WitOracleE2eTest`), jco
   (`.kb/wasi-component.md` on jco's export-lift reading).
 

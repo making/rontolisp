@@ -166,7 +166,7 @@ PostgreSQL への接続を開き、プールし、`sslmode=require` なら TLS �
 | `enum` | メンバーの enum |
 | `flags` | メンバーの enum の `Set` |
 | リソース、`own<R>`、`borrow<R>` | メンバーインタフェース |
-| `result<T, E>` | メソッドの戻り値。エラーの場合は `WitException` |
+| `result<T, E>` | `WitResult<T, E>`。メソッドの戻り値では ok の値にもでき、そのときエラーは `WitException` |
 | `async func` | ホストの応答を待つメソッド（ほかの呼び出しと同じ） |
 | ホストが返す `stream<T>` | `am.ik.rontolisp.wit.WitStream<T>` |
 | ホストが返す `future<T>` | `am.ik.rontolisp.wit.WitFuture<T>`。`future<result<T, E>>` は `WitFuture<T>`（ok の値がなければ `Void`） |
@@ -174,9 +174,33 @@ PostgreSQL への接続を開き、プールし、`sslmode=require` なら TLS �
 符号なし整数は同じ幅の Java の型に、そのビットのまま入ります。`u8` の 200 は `byte` の -56
 です（`Byte.toUnsignedInt` で 200 に戻ります）。
 
-`result<T, E>` はメソッドの戻り値です。ok の値がメソッドの値で（値がなければ `void`）、
-エラーは `am.ik.rontolisp.wit.WitException` として投げられます。その `error()` はエラーを
+`result<T, E>` は、WIT のどこにあっても `am.ik.rontolisp.wit.WitResult<T, E>` です。引数、
+リストの要素、option の値、record のフィールド、variant のペイロード、戻り値のいずれでも同じです。
+これは 2 つの record、`WitResult.Ok(T value)` と `WitResult.Err(E error)` を permits に持つ
+sealed インタフェースです。値を持たない側は `Void` で、その値は `null` です。したがって
+`result<_, E>` は `WitResult<Void, E>` です。側にある tuple は、ほかの場所と同じくプログラムの
+record です。
+
+```console
+// check-all: func(names: list<string>) -> list<result<u32, problem>>;
+List<WitResult<Integer, Problem>> checkAll(List<String> names);
+
+// record report { name: string, verdict: result<u32, problem> }
+record Report(String name, WitResult<Integer, Problem> verdict) {
+}
+```
+
+```console
+switch (report.verdict()) {
+    case WitResult.Ok<Integer, Problem>(Integer length) -> System.out.println(length);
+    case WitResult.Err<Integer, Problem>(Problem problem) -> System.out.println(problem);
+}
+```
+
+メソッドの戻り値は、代わりに ok の値の型で宣言することもできます（値がなければ `void`）。
+そのときエラーは `am.ik.rontolisp.wit.WitException` として投げられます。その `error()` はエラーを
 対応する Java の型で持ちます（ケースの record、enum 定数、文字列。値がなければ `null`）。
+バインディングは宣言に従うので、上の `open` は `Bucket` を返し、エラーでは例外を投げます。
 ホストのバインディングが付けるメッセージは `<function> of <interface> answered its error arm: `
 にエラーの `toString()` を続けたものです（`null` なら前半だけ）。捕捉されなかったエラーも
 ログにその内容が残ります。プログラムのプロバイダは、自分のエラーをこの例外で投げます。
@@ -320,9 +344,9 @@ is s32, which is int in Java, not long
   WIT インタフェースを提供しません。そのため、WIT インタフェースを呼ぶプログラムはそこでは起動しません。
 - 宣言の位置で拒否されるもの: プログラムがホストに渡す `stream` と `future`、`stream<u8>`、
   リソースの stream、`bool`・`list`・`flags`・`option` の `future`（その値を、書き手が捨てた
-  future と境界が見分けられないため）。メソッドの戻り値と future の値以外の `result`。
-  `bool`、`list`、`flags`、`option` を要素とする `option`（境界がその none を見分けられない
-  ため）。ほかのインタフェースのリソース。エラーの型にある tuple。
+  future と境界が見分けられないため）。`bool`、`list`、`flags`、`option` を要素とする `option`
+  （境界がその none を見分けられないため）。ほかのインタフェースのリソース。`WitException` として
+  投げるエラーの型にある tuple（型を書く場所がないため。`WitResult` の戻り値なら書けます）。
 - world のエクスポートで使える型は、`rontolisp:wit-export` で使える型です。`async func` の
   エクスポートは拒否されます。同じラベルのエクスポート 2 つ（world の関数とインタフェースの
   関数、または 2 つのインタフェースの関数）は、それぞれのクラスの 2 つのメソッドです。
