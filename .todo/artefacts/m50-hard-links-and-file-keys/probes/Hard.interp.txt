@@ -1,0 +1,56 @@
+plain: b.txt link=false same=true
+read a: through b
+nlink: 2
+again: java.nio.file.FileAlreadyExistsException: b.txt -> a.txt
+onto itself: java.nio.file.FileAlreadyExistsException: a.txt -> a.txt
+missing target: java.nio.file.NoSuchFileException: c.txt -> missing.txt
+missing both: java.nio.file.NoSuchFileException: missing.txt -> missing.txt
+under ro: java.nio.file.AccessDeniedException: ro/x.txt -> a.txt
+dir: java.nio.file.FileSystemException: e -> d: Operation not permitted
+onto dir: java.nio.file.FileAlreadyExistsException: d -> a.txt
+symlink: f link=true same=true
+dangling: java.nio.file.NoSuchFileException: g
+missing dir: java.nio.file.NoSuchFileException: nodir/x.txt -> a.txt
+under file: java.nio.file.FileSystemException: a.txt/x -> a.txt: Not a directory
+target under file: java.nio.file.FileSystemException: h.txt -> a.txt/x: Not a directory
+locked: lk.txt link=false same=true
+into d: d/a.txt link=false same=true
+abs: <probes>/run-Hard-interp/abs.txt link=false same=true
+dotdot: d/../i.txt link=false same=true
+empty link: java.nio.file.FileAlreadyExistsException:  -> a.txt
+empty target: java.nio.file.FileSystemException: j.txt -> : Operation not permitted
+slash target: k.txt link=false same=true
+slash link: l.txt link=false same=true
+onto symlink: java.nio.file.FileAlreadyExistsException: sl -> a.txt
+onto dangling: java.nio.file.FileAlreadyExistsException: dang -> a.txt
+tmp: java.nio.file.FileSystemException: /dev/shm/hard-probe.txt -> a.txt: Invalid cross-device link
+null link: java.lang.NullPointerException
+null target: java.lang.NullPointerException
+same equal missing: true
+same a missing: java.nio.file.NoSuchFileException: missing.txt
+same missing a: java.nio.file.NoSuchFileException: missing.txt
+same missing other: java.nio.file.NoSuchFileException: missing.txt
+same a b: true
+same a ./a: true
+same sl a: true
+same f a: true
+same a d: false
+same d d/.: true
+same locked: true
+same dang: java.nio.file.NoSuchFileException: dang
+same a dang: java.nio.file.NoSuchFileException: dang
+same under file: java.nio.file.FileSystemException: a.txt/x: Not a directory
+key class: java.nio.file.Files$Key
+key a b equal: true true
+key a sl equal: true
+key a sl nofollow equal: false
+key a d equal: false
+key equals null: false string: false
+key a same as read again: false
+key shape: (Nv=N,ino=N)
+key text: true
+key hash: true
+attr key: true
+map key: true
+unix map key: true
+after delete a: true nlink 7

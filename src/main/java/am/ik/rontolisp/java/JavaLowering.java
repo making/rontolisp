@@ -682,6 +682,13 @@ final class JavaLowering implements JavaEmitter.Context {
 		 */
 		final Map<String, Integer> jdkNumbers = new HashMap<>();
 
+		/**
+		 * The arms of {@code %jdk-tests}, {@code %jdk-methods} and {@code %jdk-fields}
+		 * the buffers so far made: a later buffer's functions answer the numbers of its
+		 * own uses and of these.
+		 */
+		final JdkArmSet jdkArms = new JdkArmSet();
+
 		Session(Set<String> declared, Set<String> initialized, Set<String> made, Set<String> lambdas,
 				boolean monitors) {
 			this.declared = declared;
@@ -9661,7 +9668,8 @@ final class JavaLowering implements JavaEmitter.Context {
 		do {
 			before = made.size();
 			generated = new ArrayList<>();
-			this.jdkArms.clear(this.session != null ? this.session.jdkNumbers : this.jdkNumbers);
+			this.jdkArms.clear(this.session != null ? this.session.jdkNumbers : this.jdkNumbers,
+					this.session != null ? this.session.jdkArms : null);
 
 			boolean methods = reached.contains("getDeclaredMethod") || reached.contains("getMethod");
 			boolean fields = reached.contains("getDeclaredField") || reached.contains("getField");
@@ -9695,6 +9703,9 @@ final class JavaLowering implements JavaEmitter.Context {
 			}
 		}
 		while (made.size() != before);
+		if (this.session != null) {
+			this.jdkArms.keep(this.session.jdkArms);
+		}
 		if (reached.contains("packageAnnotations0")) {
 			forms.add(packageAnnotationsFunction());
 		}
@@ -12588,15 +12599,28 @@ final class JavaLowering implements JavaEmitter.Context {
 
 		boolean used;
 
-		void clear(Map<String, Integer> kept) {
+		/**
+		 * Starts the arms over: those of the session's earlier buffers, where there is
+		 * one (a {@code Method} a variable holds is called by its number in a later
+		 * buffer).
+		 */
+		void clear(Map<String, Integer> kept, @Nullable JdkArmSet earlier) {
 			this.numbers = kept;
 			this.tests.clear();
 			this.calls.clear();
 			this.uses.clear();
+			if (earlier != null) {
+				earlier.copyTo(this.tests, this.calls, this.uses);
+			}
 			this.testOf.clear();
 			this.useOf.clear();
 			this.numbered.clear();
 			this.used = false;
+		}
+
+		/** Hands the arms to the session, for its later buffers. */
+		void keep(JdkArmSet session) {
+			session.copyFrom(this.tests, this.calls, this.uses);
 		}
 
 		/**
@@ -12609,6 +12633,17 @@ final class JavaLowering implements JavaEmitter.Context {
 				known = this.numbers.getOrDefault(count, 0);
 				this.numbers.put(count, known + 1);
 				this.numbers.put(key, known);
+			}
+			// the arm an earlier buffer made of this number, which this buffer's forms
+			// replace
+			for (java.util.Iterator<JdkArm> each = arms.values().iterator(); each.hasNext();) {
+				JdkArm arm = each.next();
+				if (!java.util.Arrays.toString(forms).equals(java.util.Arrays.toString(arm.forms()))) {
+					arm.numbers().remove(known);
+					if (arm.numbers().isEmpty()) {
+						each.remove();
+					}
+				}
 			}
 			List<Integer> numbers = arms
 				.computeIfAbsent(java.util.Arrays.toString(forms), (text) -> new JdkArm(forms, new ArrayList<>()))
@@ -12623,7 +12658,42 @@ final class JavaLowering implements JavaEmitter.Context {
 	}
 
 	/** The forms of an arm and the numbers that are its. */
-	private record JdkArm(LispVal[] forms, List<Integer> numbers) {
+	record JdkArm(LispVal[] forms, List<Integer> numbers) {
+	}
+
+	/** The arms of the three functions, as a session keeps them. */
+	static final class JdkArmSet {
+
+		private final Map<String, JdkArm> tests = new LinkedHashMap<>();
+
+		private final Map<String, JdkArm> calls = new LinkedHashMap<>();
+
+		private final Map<String, JdkArm> uses = new LinkedHashMap<>();
+
+		void copyTo(Map<String, JdkArm> tests, Map<String, JdkArm> calls, Map<String, JdkArm> uses) {
+			copy(this.tests, tests);
+			copy(this.calls, calls);
+			copy(this.uses, uses);
+		}
+
+		void copyFrom(Map<String, JdkArm> tests, Map<String, JdkArm> calls, Map<String, JdkArm> uses) {
+			this.tests.clear();
+			this.calls.clear();
+			this.uses.clear();
+			copy(tests, this.tests);
+			copy(calls, this.calls);
+			copy(uses, this.uses);
+		}
+
+		void copyFrom(JdkArmSet other) {
+			copyFrom(other.tests, other.calls, other.uses);
+		}
+
+		private static void copy(Map<String, JdkArm> from, Map<String, JdkArm> to) {
+			to.clear();
+			from.forEach((key, arm) -> to.put(key, new JdkArm(arm.forms(), new ArrayList<>(arm.numbers()))));
+		}
+
 	}
 
 	/** The numbers of {@link #jdkArms} where no session keeps them. */

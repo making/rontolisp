@@ -135,8 +135,8 @@ public final class WasmComponentBuilder {
 	private static final String IFACE_TERM_STDERR = "wasi:cli/terminal-stderr@0.3.0";
 
 	/**
-	 * The twenty-three {@code wasi_snapshot_preview1} functions the adapter implements,
-	 * in its own export order. A core module imports a subset of them (after
+	 * The twenty-four {@code wasi_snapshot_preview1} functions the adapter implements, in
+	 * its own export order. A core module imports a subset of them (after
 	 * {@code --optimize}, only what it reaches), and that subset drives everything below.
 	 * The serve component's preview1 bridge ({@code adapter-http-server-p1.wat}) must
 	 * export every one of them too, stubbed where the service world has no counterpart:
@@ -146,7 +146,7 @@ public final class WasmComponentBuilder {
 			"random_get", "clock_time_get", "environ_sizes_get", "environ_get", "fd_prestat_get", "fd_prestat_dir_name",
 			"fd_filestat_get", "path_filestat_get", "path_readlink", "path_create_directory", "path_unlink_file",
 			"path_remove_directory", "path_rename", "file_position_get", "file_position_set", "fd_fdstat_get",
-			"path_filestat_set_times", "path_symlink");
+			"path_filestat_set_times", "path_symlink", "path_link");
 
 	/**
 	 * The adapter's NARROW implementations of the two fd-polymorphic entry points,
@@ -171,9 +171,15 @@ public final class WasmComponentBuilder {
 	 * @param files whether the program can present a file fd (it imports
 	 * {@code path_open})
 	 * @param standardError whether the program can present fd 2
+	 * @param keys whether the program asks a stat's device and inode, which
+	 * {@code path_filestat_get} fills from {@code metadata-hash-at} (one host call more
+	 * per stat); {@code path_filestat_get_keyless} leaves them 0
 	 * @return the adapter export to retain under {@code preview1}
 	 */
-	private static String narrowImpl(String preview1, boolean files, boolean standardError) {
+	private static String narrowImpl(String preview1, boolean files, boolean standardError, boolean keys) {
+		if ("path_filestat_get".equals(preview1)) {
+			return keys ? preview1 : "path_filestat_get_keyless";
+		}
 		if (files) {
 			// The fd-polymorphic implementations are the only ones that can serve a file
 			// fd, so nothing narrows.
@@ -204,11 +210,14 @@ public final class WasmComponentBuilder {
 	 * writes fd 2 ({@code WasmUncaughtReportCompiler#emittedFor}, the producer the
 	 * compiler INJECTS rather than one a source scan can find), or is compiled in
 	 * {@code --dynamic} mode, where any symbol is reachable at run time
+	 * @param asksFileKeys whether the program asks a stat's device and inode
+	 * ({@code %file-stat}), which only a {@code metadata-hash-at} beside each stat gives
+	 * under WASI 0.3; {@code file-write-date} alone does not
 	 */
-	record Narrowing(boolean shake, boolean reachesStandardError) {
+	record Narrowing(boolean shake, boolean reachesStandardError, boolean asksFileKeys) {
 
 		/** Keep the whole fixed surface: no {@code --optimize}. */
-		static final Narrowing NONE = new Narrowing(false, true);
+		static final Narrowing NONE = new Narrowing(false, true, true);
 
 	}
 
@@ -250,6 +259,8 @@ public final class WasmComponentBuilder {
 		funcs.put("term-stderr", new BlockFunc(IFACE_TERM_STDERR, "get-terminal-stderr"));
 		funcs.put("set-times-at", new BlockFunc(IFACE_FS_TYPES, "[method]descriptor.set-times-at"));
 		funcs.put("symlink-at", new BlockFunc(IFACE_FS_TYPES, "[method]descriptor.symlink-at"));
+		funcs.put("link-at", new BlockFunc(IFACE_FS_TYPES, "[method]descriptor.link-at"));
+		funcs.put("metadata-hash-at", new BlockFunc(IFACE_FS_TYPES, "[method]descriptor.metadata-hash-at"));
 		return funcs;
 	}
 
@@ -449,6 +460,15 @@ public final class WasmComponentBuilder {
 		// result<_, error-code>, lowered SYNCHRONOUSLY like unlink-file (behind
 		// %make-link).
 		w.put("symlink-at", lowerRealloc("symlink-at", (f, r) -> ComponentWriter.canonLowerMemoryReallocUtf8(f, 0, r)));
+		// descriptor.link-at: async func(old-path-flags, old-path: string,
+		// new-descriptor: borrow<descriptor>, new-path: string) -> result<_, error-code>,
+		// lowered SYNCHRONOUSLY like rename-at (behind %make-hard-link); and
+		// descriptor.metadata-hash-at: async func(path-flags, path: string) -> result<
+		// metadata-hash-value, error-code>, like stat-at (behind %file-stat's device and
+		// inode).
+		w.put("link-at", lowerRealloc("link-at", (f, r) -> ComponentWriter.canonLowerMemoryReallocUtf8(f, 0, r)));
+		w.put("metadata-hash-at",
+				lowerRealloc("metadata-hash-at", (f, r) -> ComponentWriter.canonLowerMemoryReallocUtf8(f, 0, r)));
 		return w;
 	}
 
@@ -1603,7 +1623,8 @@ public final class WasmComponentBuilder {
 			final java.util.LinkedHashMap<String, String> keep = new java.util.LinkedHashMap<>();
 			for (String preview1 : PREVIEW1_FUNCS) {
 				if (corePreview1.contains(preview1)) {
-					keep.put(narrowImpl(preview1, files, narrowing.reachesStandardError()), preview1);
+					keep.put(narrowImpl(preview1, files, narrowing.reachesStandardError(), narrowing.asksFileKeys()),
+							preview1);
 				}
 			}
 			adapter = WasmTreeShaker.shake(WasmExports.retain(ADAPTER_MODULE, keep));

@@ -1873,15 +1873,17 @@
 ;; long[] of its kind (1 a regular file, 2 a directory, 3 a link -- where not
 ;; following --, 4 anything else), its size, the times it was last written, last read
 ;; and made, in nanoseconds since 1970, the time of making the time of last writing where
-;; the host does not say (a WASI host), and its permission bits, -1 where the host has
-;; none (a WASI host); or #(0 why), why 1 nothing is there, 2 the host refused, 3 too
-;; many links, 4 another reason.
+;; the host does not say (a WASI host), its permission bits, -1 where the host has
+;; none (a WASI host), and its device and inode, both 0 where the host does not say; or
+;; #(0 why), why 1 nothing is there, 2 the host refused, 3 too many links, 4 another
+;; reason.
 (defun rontolisp::%java-file-stat (path follow)
   (let ((stat (%file-stat path follow)))
     (if (consp stat)
-        (let ((modified (third stat)))
+        (let ((modified (third stat)) (rest (nthcdr 6 stat)))
           (vector (first stat) (second stat) modified (fourth stat)
-                  (or (fifth stat) modified) (or (sixth stat) -1)))
+                  (or (fifth stat) modified) (or (sixth stat) -1)
+                  (or (first rest) 0) (or (second rest) 0)))
         (vector 0 stat))))
 
 ;; Whether the host keeps permission bits: a WASI host keeps none, and what is asked of
@@ -2047,6 +2049,11 @@
 ;; Makes a symbolic link at PATH holding TARGET: whether it was made.
 (defun rontolisp::%java-file-link (target path)
   (if (%make-link target path) t nil))
+
+;; Makes a hard link at PATH to what TARGET names: 0, or why not as WASI preview 1
+;; numbers it.
+(defun rontolisp::%java-file-hard-link (target path)
+  (%make-hard-link target path))
 
 ;; The working directory, nil where the host names none.
 (defun rontolisp::%java-file-working-directory ()

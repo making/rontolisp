@@ -3310,8 +3310,22 @@ public final class LispEvaluator {
 					return this.sourceLoader.makeLink(target.value(), path.value()) ? LispTrue.INSTANCE
 							: LispNil.INSTANCE;
 				}));
+		// %make-hard-link: makes a hard link to what a target names, 0, or the WASI
+		// preview 1 errno of why not.
+		this.globalEnv.defineFunction(LispNames.MAKE_HARD_LINK_INTERNAL,
+				new LispFunction(LispNames.MAKE_HARD_LINK_INTERNAL, args -> {
+					if (args.size() != 2) {
+						throw LispEvalException.ofClass(ClosRegistry.PROGRAM_ERROR_CLASS_NAME,
+								LispNames.MAKE_HARD_LINK_INTERNAL + " expects 2 arguments, got " + args.size());
+					}
+					if (!(args.get(0) instanceof LispString target) || !(args.get(1) instanceof LispString path)) {
+						throw new LispEvalException(LispNames.MAKE_HARD_LINK_INTERNAL + " expects two strings");
+					}
+					return new LispInteger(this.sourceLoader.makeHardLink(target.value(), path.value()));
+				}));
 		// %file-stat: the same SourceLoader mediation, what the host's stat (or lstat)
-		// says of a path -- (type size modified accessed made mode), or the fixnum of why
+		// says of a path -- (type size modified accessed made mode dev ino), or the
+		// fixnum of why
 		// it cannot say. The Java subset's files ask it (rontolisp.internal.Disk).
 		this.globalEnv.defineFunction(LispNames.FILE_STAT_INTERNAL,
 				new LispFunction(LispNames.FILE_STAT_INTERNAL, args -> {
@@ -3328,10 +3342,14 @@ public final class LispEvaluator {
 					}
 					Long made = stat.made();
 					Integer mode = stat.mode();
+					Long device = stat.device();
+					Long inode = stat.inode();
 					return valueList(List.of(new LispInteger(stat.type()), new LispInteger(stat.size()),
 							new LispInteger(stat.modified()), new LispInteger(stat.accessed()),
 							made == null ? LispNil.INSTANCE : new LispInteger(made),
-							mode == null ? LispNil.INSTANCE : new LispInteger(mode)));
+							mode == null ? LispNil.INSTANCE : new LispInteger(mode),
+							device == null ? LispNil.INSTANCE : new LispInteger(device),
+							inode == null ? LispNil.INSTANCE : new LispInteger(inode)));
 				}));
 		// %file-set-times: gives a path its times of last access and last writing, each
 		// in nanoseconds or nil to leave it; 0, or %file-stat's fixnum of why not.

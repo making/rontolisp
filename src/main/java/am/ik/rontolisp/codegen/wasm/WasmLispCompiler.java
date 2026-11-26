@@ -2562,6 +2562,13 @@ public final class WasmLispCompiler implements LispCompiler {
 	// --no-wasi module, which has no files.
 	static final int FUNC_MAKE_LINK = FUNC_FILE_SET_TIMES + 1;
 
+	// _make_hard_link ((ref null eq) target, path) -> (ref null eq): a hard link made at
+	// the path to what the target names, the fixnum 0 or the errno of why not
+	// (WasmIoRuntimeBuilder.buildMakeHardLinkBody, over the injected path_link). Reuses
+	// the two-argument callable signature; same position and shaking rule as _file_stat.
+	// The fixnum 44 (nothing there) on a --no-wasi module, which has no files.
+	static final int FUNC_MAKE_HARD_LINK = FUNC_MAKE_LINK + 1;
+
 	// The bulk primitives (WasmBulkRuntimeBuilder): _str_split, _str_join and _sort_keys,
 	// the wasm halves of %string-split, %string-join and %sort-by-keys, and _str_cat,
 	// what a chain of %string-concat compiles to (WasmStringConcatCompiler), and
@@ -2570,7 +2577,7 @@ public final class WasmLispCompiler implements LispCompiler {
 	// offsets. Each reuses a TYPE_CALLABLE_BASE signature, so no type is added; appended
 	// after the last fixed helper so no index above shifts, and shaken from a module
 	// with no site of them.
-	static final int FUNC_BULK_BASE = FUNC_MAKE_LINK + 1;
+	static final int FUNC_BULK_BASE = FUNC_MAKE_HARD_LINK + 1;
 
 	/**
 	 * The fixed function index of an fdlibm function.
@@ -4289,6 +4296,9 @@ public final class WasmLispCompiler implements LispCompiler {
 		// %make-link one more: path_symlink, the adapter's over wasi:filesystem's
 		// symlink-at under --component.
 		boolean hostMakeLink = !this.noWasi && programUsesSymbol(program, LispNames.MAKE_LINK_INTERNAL);
+		// %make-hard-link one more: path_link, the adapter's over wasi:filesystem's
+		// link-at under --component.
+		boolean hostHardLink = !this.noWasi && programUsesSymbol(program, LispNames.MAKE_HARD_LINK_INTERNAL);
 		// %host-getcwd reads fd 3's preopen name over the two fixed prestat imports; a
 		// --no-wasi module has no preopens (they are trap stubs there), so it answers
 		// nil.
@@ -6715,8 +6725,14 @@ public final class WasmLispCompiler implements LispCompiler {
 		boolean symlinkType = hostMakeLink && !hostWriteDate;
 		int symlinkTypeIndex = !hostMakeLink ? -1 : hostWriteDate ? pathStatTypeIndex : fixedTypeCount()
 				+ exportPlans.size() + importSlots.size() + (preview1FilePosition ? 1 : 0) + (hostSetTimes ? 1 : 0);
+		// path_link(old_fd, old_flags, old_path, old_len, new_fd, new_path, new_len) ->
+		// errno, (i32 x 7) -> i32, follows: only a program naming %make-hard-link has it.
+		int hardLinkTypeIndex = hostHardLink
+				? fixedTypeCount() + exportPlans.size() + importSlots.size() + (preview1FilePosition ? 1 : 0)
+						+ (hostWriteDate ? 1 : 0) + (hostSetTimes ? 1 : 0) + (symlinkType ? 1 : 0)
+				: -1;
 		int abiTypeBase = fixedTypeCount() + exportPlans.size() + importSlots.size() + (preview1FilePosition ? 1 : 0)
-				+ (hostWriteDate ? 1 : 0) + (hostSetTimes ? 1 : 0) + (symlinkType ? 1 : 0);
+				+ (hostWriteDate ? 1 : 0) + (hostSetTimes ? 1 : 0) + (symlinkType ? 1 : 0) + (hostHardLink ? 1 : 0);
 		// _funcref's (i32) -> (ref null eq) signature, appended after every entry
 		// above (the component string-ABI block or the arena pair, the :bytes
 		// helper, the park helper and the shared host-hook signature), so no
@@ -6843,6 +6859,11 @@ public final class WasmLispCompiler implements LispCompiler {
 		if (hostMakeLink) {
 			hostImports.add(new am.ik.wasm.WasmImportInjector.HostImport(WASI_PREVIEW1_MODULE, "path_symlink",
 					symlinkTypeIndex));
+		}
+		final int hardLinkOrdinal = hostHardLink ? hostImports.size() : -1;
+		if (hostHardLink) {
+			hostImports.add(
+					new am.ik.wasm.WasmImportInjector.HostImport(WASI_PREVIEW1_MODULE, "path_link", hardLinkTypeIndex));
 		}
 		// fd_fdstat_get(fd, buf) -> errno is (i32, i32) -> i32, _intern's shape
 		// (TYPE_INTERN), so it appends no type.
@@ -8416,6 +8437,13 @@ public final class WasmLispCompiler implements LispCompiler {
 					types.addFunc(new Type[] { Type.I32, Type.I32, Type.I32, Type.I32, Type.I32 },
 							new Type[] { Type.I32 });
 				}
+				// path_link(old_fd, old_flags, old_path, old_len, new_fd, new_path,
+				// new_len) -> errno, at hardLinkTypeIndex: only a WASI program naming
+				// %make-hard-link.
+				if (hostHardLink) {
+					types.addFunc(new Type[] { Type.I32, Type.I32, Type.I32, Type.I32, Type.I32, Type.I32, Type.I32 },
+							new Type[] { Type.I32 });
+				}
 				// Component string-ABI signatures, from abiTypeBase:
 				// cabi_realloc, one cabi_post_* per flat-result signature, then one
 				// retptr shim per :string/:s-expr-returning export (the wrapper's
@@ -8969,6 +8997,9 @@ public final class WasmLispCompiler implements LispCompiler {
 															// (FUNC_FILE_SET_TIMES)
 				fnDef.addFunction(TYPE_CALLABLE_BASE + 1); // _make_link (target, path)
 															// -> value (FUNC_MAKE_LINK)
+				fnDef.addFunction(TYPE_CALLABLE_BASE + 1); // _make_hard_link (target,
+															// path) -> value
+															// (FUNC_MAKE_HARD_LINK)
 				// the bulk primitives (FUNC_BULK_BASE ..)
 				for (int i = 0; i < WasmBulkRuntimeBuilder.FUNC_COUNT; i++) {
 					fnDef.addFunction(WasmBulkRuntimeBuilder.litInitPart(i) >= 0 ? litInitType
@@ -10164,6 +10195,13 @@ public final class WasmLispCompiler implements LispCompiler {
 				// on a --no-wasi module; shaken from a program not naming it.
 				code.addFunction(symlinkOrdinal < 0 ? WasmEmitHelper.buildNilBody() : WasmIoRuntimeBuilder
 					.buildMakeLinkBody(WasmImportCompiler.PLACEHOLDER_FUNC_BASE + symlinkOrdinal, stringTable));
+				// the hard link's maker (FUNC_MAKE_HARD_LINK): over the injected
+				// path_link,
+				// or the fixnum 44 on a --no-wasi module; shaken from a program not
+				// naming
+				// it.
+				code.addFunction(hardLinkOrdinal < 0 ? WasmIoRuntimeBuilder.buildErrnoBody(44) : WasmIoRuntimeBuilder
+					.buildMakeHardLinkBody(WasmImportCompiler.PLACEHOLDER_FUNC_BASE + hardLinkOrdinal));
 				// the bulk primitives (FUNC_BULK_BASE ..): shaken with their sites.
 				WasmBulkRuntimeBuilder.Flags bulkFlags = new WasmBulkRuntimeBuilder.Flags(this.usesIdentityHashTables,
 						this.charvecPossible, !this.optimize.prefersSizeOverSpeed(), this.pairsJoined);
@@ -10522,7 +10560,8 @@ public final class WasmLispCompiler implements LispCompiler {
 					this.optimize.eliminatesDeadCode(),
 					this.dynamic || uncaughtReportPad || programUsesSymbol(program, LispNames.ERROR_OUTPUT_VAR)
 							|| programUsesSymbol(program, LispNames.WARN)
-							|| programUsesSymbol(program, LispNames.WARN_INTERNAL));
+							|| programUsesSymbol(program, LispNames.WARN_INTERNAL),
+					this.dynamic || programUsesSymbol(program, LispNames.FILE_STAT_INTERNAL));
 			this.componentWit = WitEmitter.emit(
 					this.reactor ? WitEmitter.VARIANT_BASE_REACTOR : WitEmitter.VARIANT_BASE, componentExportDecls,
 					WasmComponentBuilder.importedBy(coreModule,

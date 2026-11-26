@@ -163,6 +163,14 @@ class PlaygroundReplTest {
 		assertThatThrownBy(() -> repl.eval("xs[1]")).hasMessageContaining(
 				"Exception java.lang.ArrayIndexOutOfBoundsException: Index 1 out of bounds for length 1");
 		assertThat(repl.eval("String.valueOf(xs[0])")).isEqualTo("$3 ==> \"6\"");
+		// A Method an earlier buffer found calls by the number it was given, after a
+		// later
+		// buffer's own reflection made its functions again
+		PlaygroundRepl found = new PlaygroundRepl(NO_FILES).pick(SourceLanguage.JAVA);
+		found.eval("var m = String.class.getDeclaredMethod(\"length\")");
+		assertThat(found.eval("System.out.println(Boolean.class.getDeclaredMethod(\"hashCode\").invoke(true))"))
+			.isEqualTo("1231\n");
+		assertThat(found.eval("System.out.println(m.invoke(\"abcd\"))")).isEqualTo("4\n");
 		assertThat(new PlaygroundRepl(NO_FILES).pick(SourceLanguage.JAVA).run("void main() { IO.println(1 + 2); }"))
 			.isEqualTo("3\n");
 		// The uploads are the source tree of a program the page reads from no file: a

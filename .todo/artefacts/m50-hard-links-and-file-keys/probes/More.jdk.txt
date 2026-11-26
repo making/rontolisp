@@ -1,0 +1,20 @@
+attrs under file: java.nio.file.NoSuchFileException: a.txt/x
+same under file: java.nio.file.FileSystemException: a.txt/x: Not a directory
+same loop: java.nio.file.FileSystemException: loop: Too many levels of symbolic links or unable to access attributes of symbolic link
+same loop first: java.nio.file.FileSystemException: loop: Too many levels of symbolic links or unable to access attributes of symbolic link
+same loop under: java.nio.file.FileSystemException: loop/x: Too many levels of symbolic links or unable to access attributes of symbolic link
+same locked dir: java.nio.file.AccessDeniedException: lockd/x
+link loop: java.nio.file.FileSystemException: z -> loop/x: Too many levels of symbolic links or unable to access attributes of symbolic link
+link loop itself: z
+link into loop: java.nio.file.FileSystemException: loop/z -> a.txt: Too many levels of symbolic links or unable to access attributes of symbolic link
+link locked dir: java.nio.file.AccessDeniedException: lockd/z -> a.txt
+link from locked dir: java.nio.file.AccessDeniedException: z2 -> lockd/x
+mismatch locked: -1
+mismatch locked same: -1
+mismatch a missing: java.nio.file.NoSuchFileException: missing
+mismatch missing a: java.nio.file.NoSuchFileException: missing
+mismatch locked a: java.nio.file.AccessDeniedException: locked.txt
+mismatch dir: -1
+long name: java.nio.file.FileSystemException: nnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnn -> a.txt: File name too long
+key of locked: true
+copy locked onto its link: java.nio.file.AccessDeniedException: locked.txt

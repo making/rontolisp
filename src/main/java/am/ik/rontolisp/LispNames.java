@@ -5455,16 +5455,29 @@ public final class LispNames {
 	public static final String MAKE_LINK_INTERNAL = "%MAKE-LINK";
 
 	/**
+	 * The {@code %make-hard-link} internal primitive: takes a target and a namestring and
+	 * makes a hard link of that name to what the target names, a symbolic link in its
+	 * last component not followed ({@code link}); answers 0, or why not as WASI preview 1
+	 * numbers it ({@code errno}: 2 refused, 20 something is there, 32 too many links, 37
+	 * a name too long, 44 nothing is there, 54 something above is no directory, 63 not
+	 * permitted -- a directory --, 75 another device; another number for anything else).
+	 * Never signalling.
+	 */
+	public static final String MAKE_HARD_LINK_INTERNAL = "%MAKE-HARD-LINK";
+
+	/**
 	 * The {@code %file-stat} internal primitive: takes a namestring and whether to follow
 	 * a symbolic link in its last component, and answers what the host's {@code stat}
 	 * (following) or {@code lstat} says of it -- the list {@code (type size modified
-	 * accessed made mode)}: the type 1 a regular file, 2 a directory, 3 a symbolic link
-	 * (only where not following), 4 anything else; the size in bytes; the times in
-	 * nanoseconds since 1970, the time the file was made {@code nil} where the host does
-	 * not say (both WASI backends); the permission bits (07777), {@code nil} where the
-	 * host has none (both WASI backends). Where it cannot say, the fixnum of why: 1
-	 * nothing is there (or something above is no directory), 2 the host refused, 3 too
-	 * many links, 4 another reason. Never signalling, no file opened.
+	 * accessed made mode dev ino)}: the type 1 a regular file, 2 a directory, 3 a
+	 * symbolic link (only where not following), 4 anything else; the size in bytes; the
+	 * times in nanoseconds since 1970, the time the file was made {@code nil} where the
+	 * host does not say (both WASI backends); the permission bits (07777), {@code nil}
+	 * where the host has none (both WASI backends); the device and the inode, which tell
+	 * two names of one file apart from two files (a WASI host's own numbers, both 0 where
+	 * it has none; {@code nil} where the host does not say). Where it cannot say, the
+	 * fixnum of why: 1 nothing is there (or something above is no directory), 2 the host
+	 * refused, 3 too many links, 4 another reason. Never signalling, no file opened.
 	 */
 	public static final String FILE_STAT_INTERNAL = "%FILE-STAT";
 

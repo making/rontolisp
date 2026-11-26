@@ -29,6 +29,7 @@
 ;;   path_readlink    -> errno 76: %read-link reads it as "no link", so truename
 ;;                       resolves nothing (a served program opens no file anyway)
 ;;   path_symlink     -> errno 76: %make-link answers nil
+;;   path_link        -> errno 76: %make-hard-link answers why not
 ;;   fd_fdstat_get    -> errno 58 (ENOTSUP): the service world imports no
 ;;                       wasi:cli/terminal-*, so %terminal-p answers nil -- a served
 ;;                       handler's output reaches the host's log, never a terminal
@@ -242,6 +243,12 @@
     (param $nlen i32) (result i32)
     (i32.const 76))
 
+  ;; path_link(old_fd, old_flags, old_path, old_len, new_fd, new_path, new_len) ->
+  ;; errno 76: no filesystem in the service world.
+  (func $path_link (param $ofd i32) (param $oflags i32) (param $opath i32) (param $olen i32)
+    (param $nfd i32) (param $npath i32) (param $nlen i32) (result i32)
+    (i32.const 76))
+
   ;; path_rename(old_fd, old_path, old_len, new_fd, new_path, new_len) -> errno 76:
   ;; no filesystem in the service world. Same nil contract as path_unlink_file.
   (func $path_rename (param $ofd i32) (param $opath i32) (param $olen i32)
@@ -299,6 +306,7 @@
   (export "path_filestat_set_times" (func $path_filestat_set_times))
   (export "path_readlink" (func $path_readlink))
   (export "path_symlink" (func $path_symlink))
+  (export "path_link" (func $path_link))
   (export "fd_fdstat_get" (func $fd_fdstat_get))
   (export "path_create_directory" (func $path_create_directory))
   (export "path_unlink_file" (func $path_unlink_file))

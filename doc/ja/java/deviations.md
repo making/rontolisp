@@ -691,13 +691,16 @@ ISO の暦を使います。`-u-ca-` キーワードが示す暦（`japanese`）
 読まず、作りません。そうしたリンクの先は存在しないものとして扱います（`exists` は false、属性は
 `AccessDeniedException`）。そうしたリンクの `readSymbolicLink`、絶対パスを指す
 `createSymbolicLink`、そうしたリンクを `NOFOLLOW_LINKS` 付きで `copy` することは
-`AccessDeniedException` になります。
+`AccessDeniedException` になります。`.wasm` はプリオープンの外のパスへのハードリンクも、そこでの
+ハードリンクも作りません。`createLink` は `Operation not permitted` の `FileSystemException` になります。
 
 **ファイルの種類、サイズ、時刻は、どのターゲットでもホストの `stat` が返すものです。`.wasm` では
 その一部しか得られません。** WASI の `stat` にはファイルの作成時刻がないため、`.wasm` の
 `creationTime` は最終更新時刻です。作成時刻を記録しないファイルシステムで JDK が返す値と同じです。
 `.wasm` は 1970 年より前の時刻を書き込めません。そうした時刻は `1970-01-01T00:00:00Z` として書き込み、
-Preview 1 では読み出しもその値になります。`fileKey()` はどのターゲットでも null です。
+Preview 1 では読み出しもその値になります。`fileKey()` はホストのデバイスと i ノードで、1 つのファイルの
+2 つの名前では等しくなります。`isSameFile` が比べるのもこれです。`.wasm` では WASI ホストが返す数値で、
+ファイルを区別できますが i ノードそのものではありません（wasmtime ではファイルの同一性から計算したハッシュ）。
 テキストで名前を指定できる属性は、`basic` ビューと、インタープリターと JVM では `posix`、`unix`、
 `owner` ビューのものです。Unix ホストの JDK には `dos` と `user` もあります。この 2 つはここでは
 `UnsupportedOperationException`（`View 'dos' not available`）になり、
@@ -726,7 +729,7 @@ initial attribute`）。ファイルとコピーのビットはホストの既�
 `Path` はすべて、このサブセット独自の 1 つのクラスです（`getClass()` が返すもの）。ただ 1 つの
 `FileSystem` も同様です。角かっこの中が空のグロブ（`[]`、`[!]`）は、このサブセット独自の文言で
 拒否します。次のメンバーはなく、名前を示して拒否します。`Path.register`。
-`Files.createLink`。`FileSystem.getUserPrincipalLookupService`、`dos` ビューと `user` ビュー
+`FileSystem.getUserPrincipalLookupService`、`dos` ビューと `user` ビュー
 （`DosFileAttributes`、`UserDefinedFileAttributeView` など）。
 `FileDescriptor` とチャネル。
 ファイルに対する `FileSystems.newFileSystem` はプロバイダーを見つけられません
