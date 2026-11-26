@@ -191,7 +191,8 @@ console.log(new TextDecoder().decode(new Uint8Array(calc.memory.buffer, at, leng
   an object, an array of another type, a lambda, a box, a `StringBuilder`, `try`, a class
   whose initialization can throw, a static `String` assigned during a call, and the library
   members it cannot compile: `toUpperCase` and a `float` in a `+`. A program with a `main` is
-  a command, which `--no-gc` does not make, and `--component` is refused.
+  a command, which `--no-gc` does not make. With `--component` the exports are a
+  `@WitExport` world's ([Exporting a WIT world](wit.md#exporting-a-wit-world)).
 
 ## A program of several files
 

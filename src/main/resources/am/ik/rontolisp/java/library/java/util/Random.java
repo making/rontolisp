@@ -3,6 +3,7 @@
 // (.kb/java-frontend-provenance.md). Lowered with every program that names it.
 package java.util;
 
+import java.io.Serializable;
 import java.util.stream.DoubleStream;
 import java.util.stream.IntStream;
 import java.util.stream.LongStream;
@@ -12,7 +13,7 @@ import rontolisp.internal.LongFlow;
 
 // The generator the API specification states: a linear congruential formula over 48
 // bits, and each method the combination of its draws the specification gives.
-public class Random {
+public class Random implements Serializable {
 
     private long state;
 

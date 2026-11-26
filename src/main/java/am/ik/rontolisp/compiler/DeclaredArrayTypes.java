@@ -177,6 +177,35 @@ public final class DeclaredArrayTypes {
 	}
 
 	/**
+	 * {@link #declared} of a function body's head, and of the head of the sole
+	 * {@code %fn-block}/{@code block} the body's last form wraps around the rest, the
+	 * shape a {@code defun}'s body is lowered to
+	 * ({@link DeclaredIntegerTypes#functionBody}'s twin). The caller removes special
+	 * variable names.
+	 * @param bodyExprs the function body forms as lowered
+	 * @param registry the registry holding {@code deftype} expansions, or null
+	 * @return declared variable name to its pin (empty when none declare one)
+	 */
+	public static Map<String, Pin> functionBody(List<LispVal> bodyExprs, @Nullable ClosRegistry registry) {
+		Map<String, Pin> pins = new LinkedHashMap<>(declared(bodyExprs, registry));
+		for (int i = 0; i < bodyExprs.size(); i++) {
+			LispVal form = bodyExprs.get(i);
+			if (form instanceof LispString || am.ik.rontolisp.SpecialDeclarations.isDeclaration(form)) {
+				continue;
+			}
+			if (i == bodyExprs.size() - 1 && form instanceof LispCons wrapper && wrapper.isProperList()
+					&& wrapper.car() instanceof LispSymbol head && (LispNames.FN_BLOCK_INTERNAL.equals(head.name())
+							|| LispNames.BLOCK.equals(plainName(head.name())))
+					&& wrapper.toList().size() >= 3) {
+				List<LispVal> wrapped = wrapper.toList();
+				declared(wrapped.subList(2, wrapped.size()), registry).forEach(pins::putIfAbsent);
+			}
+			break;
+		}
+		return pins;
+	}
+
+	/**
 	 * The array representation a type specifier proves, and whether it admits {@code nil}
 	 * beside it, or null when it proves none (including every non-array specifier). A
 	 * symbol specifier follows registered {@code deftype} aliases; an {@code (and ...)}

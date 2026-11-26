@@ -147,6 +147,7 @@ final class JvmLambdaCompiler {
 		Map<String, Integer> savedRawDoubleLocals = new HashMap<>(ctx.rawDoubleLocals);
 		Set<String> savedDeclaredDoubles = ctx.declaredDoubles;
 		Map<String, Object> savedDeclaredIntegers = ctx.declaredIntegers;
+		Map<String, JvmIntFusionCompiler.DeclaredArray> savedDeclaredArrays = ctx.declaredArrays;
 		Map<String, JvmIntFusionCompiler.LocalIntLambda> savedLocalIntLambdas = new HashMap<>(ctx.localIntLambdas);
 		int savedNextLocal = ctx.nextLocal;
 		// The parameters are bound HERE, in the caller's frame, so this is a binder and
@@ -224,6 +225,7 @@ final class JvmLambdaCompiler {
 		ctx.declaredDoubles = bodyDeclaredDoubles;
 		ctx.declaredIntegers = JvmIntFusionCompiler.bodyDeclaredIntegers(savedDeclaredIntegers, paramNames, bodyExprs,
 				ctx);
+		ctx.declaredArrays = JvmIntFusionCompiler.bodyDeclaredArrays(savedDeclaredArrays, paramNames, bodyExprs, ctx);
 		// The body runs in place and its last form's value is the call's, so when the
 		// call is the method's tail that form is too (JvmSelfTailCall, JvmTailBounce),
 		// and every body form is on the exit chain when the call is. A parameter named
@@ -248,6 +250,7 @@ final class JvmLambdaCompiler {
 		ctx.rawDoubleLocals = savedRawDoubleLocals;
 		ctx.declaredDoubles = savedDeclaredDoubles;
 		ctx.declaredIntegers = savedDeclaredIntegers;
+		ctx.declaredArrays = savedDeclaredArrays;
 		ctx.localIntLambdas = savedLocalIntLambdas;
 		ctx.nextLocal = savedNextLocal;
 	}

@@ -3,6 +3,7 @@
 // (.kb/java-frontend-provenance.md). Lowered with every program that names it.
 package java.util;
 
+import java.io.Serializable;
 import java.util.function.BiConsumer;
 import java.util.function.BiFunction;
 import java.util.function.Function;
@@ -18,21 +19,21 @@ public interface Map<K, V> {
         V setValue(V value);
 
         static <K extends Comparable<? super K>, V> Comparator<Map.Entry<K, V>> comparingByKey() {
-            return (Map.Entry<K, V> a, Map.Entry<K, V> b) -> a.getKey().compareTo(b.getKey());
+            return (Comparator<Map.Entry<K, V>> & Serializable) (Map.Entry<K, V> a, Map.Entry<K, V> b) -> a.getKey().compareTo(b.getKey());
         }
 
         static <K, V extends Comparable<? super V>> Comparator<Map.Entry<K, V>> comparingByValue() {
-            return (Map.Entry<K, V> a, Map.Entry<K, V> b) -> a.getValue().compareTo(b.getValue());
+            return (Comparator<Map.Entry<K, V>> & Serializable) (Map.Entry<K, V> a, Map.Entry<K, V> b) -> a.getValue().compareTo(b.getValue());
         }
 
         static <K, V> Comparator<Map.Entry<K, V>> comparingByKey(Comparator<? super K> order) {
             Objects.requireNonNull(order);
-            return (Map.Entry<K, V> a, Map.Entry<K, V> b) -> order.compare(a.getKey(), b.getKey());
+            return (Comparator<Map.Entry<K, V>> & Serializable) (Map.Entry<K, V> a, Map.Entry<K, V> b) -> order.compare(a.getKey(), b.getKey());
         }
 
         static <K, V> Comparator<Map.Entry<K, V>> comparingByValue(Comparator<? super V> order) {
             Objects.requireNonNull(order);
-            return (Map.Entry<K, V> a, Map.Entry<K, V> b) -> order.compare(a.getValue(), b.getValue());
+            return (Comparator<Map.Entry<K, V>> & Serializable) (Map.Entry<K, V> a, Map.Entry<K, V> b) -> order.compare(a.getValue(), b.getValue());
         }
     }
 

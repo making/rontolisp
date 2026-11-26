@@ -13113,14 +13113,42 @@ class JvmLispCompilerTest {
 	@Test
 	void compilePackedGeneralArrayNilAndSentinelInteger() throws Exception {
 		// A fresh element reads nil (the packed sentinel), an explicit nil store
-		// reads back nil, and storing the sentinel integer itself (most-negative
-		// long) widens rather than aliasing nil.
+		// reads back nil, and the sentinel integer itself (most-negative long) is held
+		// by the list at its slot, the array packed: every reader of the packed shape
+		// tells it from nil -- the copies the bulk runtime makes or declines, a sort's
+		// elements, a widening that comes later, a view and a rank-2 array -- and a
+		// later store over it is the integer stored (.kb/adjustable-arrays.md).
 		assertThat(compileAndRun("""
 				(defparameter *a* (make-array 3 :initial-element 1))
 				(setf (aref *a* 0) nil)
 				(setf (aref *a* 1) -9223372036854775808)
 				(print (list (aref *a* 0) (aref *a* 1) (aref *a* 2) (array-element-type *a*)))
-				""")).isEqualTo("(NIL -9223372036854775808 1 T)");
+				(defparameter *p* (make-array 4))
+				(setf (aref *p* 1) -9223372036854775808)
+				(setf (aref *p* 2) 5)
+				(print (list *p* (copy-seq *p*) (subseq *p* 1 3) (reverse *p*) (position -9223372036854775808 *p*)))
+				(print (list (let ((q (make-array 4 :initial-element 0))) (replace q *p*))
+				             (let ((q (vector 9 9 9 9))) (replace q *p*))
+				             (sort (vector 3 1 -9223372036854775808) #'<)
+				             (let ((k (vector 2 1)) (e (make-array 2 :initial-element 0))
+				                   (out (make-array 2 :adjustable t :fill-pointer 2)))
+				               (setf (aref e 0) -9223372036854775808)
+				               (%sort-by-keys k e out nil)
+				               out)))
+				(setf (aref *p* 1) 7)
+				(setf (aref *p* 3) -9223372036854775808)
+				(setf (aref *p* 0) 'x)
+				(defparameter *m* (make-array '(2 2) :initial-element 0))
+				(setf (aref *m* 1 1) -9223372036854775808)
+				(defparameter *v* (make-array 2 :displaced-to *m* :displaced-index-offset 2))
+				(setf (aref *v* 0) -9223372036854775808)
+				(print (list *p* *m* (aref *v* 1) (row-major-aref *m* 2)))
+				""")).isEqualTo(
+				"""
+						(NIL -9223372036854775808 1 T)
+						(#(NIL -9223372036854775808 5 NIL) #(NIL -9223372036854775808 5 NIL) #(-9223372036854775808 5) #(NIL 5 -9223372036854775808 NIL) 1)
+						(#(NIL -9223372036854775808 5 NIL) #(NIL -9223372036854775808 5 NIL) #(-9223372036854775808 1 3) #(0 -9223372036854775808))
+						(#(X 7 5 -9223372036854775808) #2A((0 0) (-9223372036854775808 -9223372036854775808)) -9223372036854775808 -9223372036854775808)""");
 	}
 
 	@Test
@@ -17991,6 +18019,20 @@ class JvmLispCompilerTest {
 		}
 		assertThat(rhoCalls).isEmpty();
 		assertThat(lanesFused).first().isEqualTo("J");
+		// .kb/jvm-int-fusion.md, "Declared arrays": sched's stores into its declared
+		// arrays are fused methods answering nothing, each reading the arrays raw, so
+		// its loops call nothing else -- no generic read or store, no string arm, no box.
+		List<String> schedCalls = new java.util.ArrayList<>();
+		for (java.lang.classfile.MethodModel method : model.methods()) {
+			if (method.methodName().equalsString("SCHED")) {
+				for (java.lang.classfile.CodeElement element : method.code().orElseThrow()) {
+					if (element instanceof java.lang.classfile.instruction.InvokeInstruction invoke) {
+						schedCalls.add(invoke.name().stringValue() + invoke.typeSymbol().descriptorString());
+					}
+				}
+			}
+		}
+		assertThat(schedCalls).hasSize(4).allMatch(call -> call.startsWith("_fx$") && !call.endsWith("Object;"));
 		assertThat(runClass(fast)).isEqualTo(expected);
 		assertThat(runClass(small)).isEqualTo(expected);
 	}

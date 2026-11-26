@@ -3,11 +3,12 @@
 // (.kb/java-frontend-provenance.md). Lowered with every program that names it.
 package java.time.temporal;
 
+import java.io.Serializable;
 import java.time.DateTimeException;
 
 // The values a field takes: from a smallest to a largest, either of which may itself
 // vary (a month's last day is 28 to 31).
-public final class ValueRange {
+public final class ValueRange implements Serializable {
 
     private final long minSmallest;
 

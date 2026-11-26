@@ -156,11 +156,13 @@ final class JvmBodyOutliner {
 				case Cleanup cleanup -> cleanup.action().run();
 				case EffectForm effect -> {
 					// "Value, then pop" is what compileForEffect does for everything
-					// but an inert statement and a statement assignment -- said as two
+					// but an inert statement, a statement assignment and a statement
+					// store -- said as two
 					// items so a nested body still joins the spine and the pop lands
 					// after it.
 					if (!JvmExprCompiler.isInertStatement(effect.form())
-							&& !JvmExprCompiler.compileStatementSetq(effect.form(), ctx, className)) {
+							&& !JvmExprCompiler.compileStatementSetq(effect.form(), ctx, className)
+							&& !JvmExprCompiler.compileStatementStore(effect.form(), ctx, className)) {
 						tail.pushFront(List.of(new ValueForm(effect.form()), new PopValue()), ctx);
 					}
 				}

@@ -6,7 +6,9 @@
 // on every target, with no compare-and-swap of the host's.
 package java.util.concurrent.atomic;
 
-public class AtomicBoolean {
+import java.io.Serializable;
+
+public class AtomicBoolean implements Serializable {
 
     private boolean value;
 

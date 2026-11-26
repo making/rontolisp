@@ -3,6 +3,7 @@
 // (.kb/java-frontend-provenance.md). Lowered with every program that names it.
 package rontolisp.internal;
 
+import java.io.Serializable;
 import java.util.Comparator;
 
 // String.CASE_INSENSITIVE_ORDER: one object, made where a program first reads the field.
@@ -11,7 +12,7 @@ public final class CaseInsensitive {
     private CaseInsensitive() {
     }
 
-    private static final Comparator<String> ORDER = (String a, String b) -> a.compareToIgnoreCase(b);
+    private static final Comparator<String> ORDER = (Comparator<String> & Serializable) (String a, String b) -> a.compareToIgnoreCase(b);
 
     public static Comparator<String> order() {
         return ORDER;

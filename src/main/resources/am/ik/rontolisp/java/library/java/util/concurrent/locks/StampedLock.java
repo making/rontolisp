@@ -11,9 +11,10 @@
 // lock's. A thread holding the lock that asks for it again waits for itself.
 package java.util.concurrent.locks;
 
+import java.io.Serializable;
 import java.util.concurrent.TimeUnit;
 
-public class StampedLock {
+public class StampedLock implements Serializable {
 
     private static final long WRITING = 128L;
 

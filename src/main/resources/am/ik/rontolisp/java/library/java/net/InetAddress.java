@@ -8,7 +8,9 @@
 // answers to a probe.
 package java.net;
 
-public class InetAddress {
+import java.io.Serializable;
+
+public class InetAddress implements Serializable {
 
     private final String name;
 

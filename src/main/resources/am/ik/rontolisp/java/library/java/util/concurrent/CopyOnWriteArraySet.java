@@ -3,6 +3,7 @@
 // (.kb/java-frontend-provenance.md). Lowered with every program that names it.
 package java.util.concurrent;
 
+import java.io.Serializable;
 import java.util.AbstractSet;
 import java.util.Collection;
 import java.util.Iterator;
@@ -12,7 +13,7 @@ import java.util.function.Predicate;
 
 // A set over a CopyOnWriteArrayList: the elements in the order they were added, a
 // read with no lock, an iterator that walks what there was when it was made.
-public class CopyOnWriteArraySet<E> extends AbstractSet<E> {
+public class CopyOnWriteArraySet<E> extends AbstractSet<E> implements Serializable {
 
     private final CopyOnWriteArrayList<E> held = new CopyOnWriteArrayList<>();
 

@@ -412,7 +412,7 @@ class JavaReactorTest {
 	 * ends the call in a trap, and the run time's index or nil is nil apart from the
 	 * index 0. Where the program leaves the subset it is refused by name, at the Java
 	 * position: a read of an object, a {@code float}'s text (a ratio), a command, a
-	 * component.
+	 * component of no {@code @WitExport} world.
 	 */
 	@Test
 	void aReactorOfScalarValuesCompilesWithNoGcAndWhatLeavesTheSubsetIsRefusedByName() throws Exception {
@@ -449,7 +449,9 @@ class JavaReactorTest {
 				""", "--no-gc makes a reactor, whose entry points are its exports, and the program exports nothing");
 		assertThatThrownBy(() -> HostBoundaryRuns.cli(tally.toString(), "-o", this.dir.resolve("c.wasm").toString(),
 				"--no-gc", "--component"))
-			.hasMessageContaining("a Java program compiles --no-gc to a core module");
+			.hasMessageContaining("no main method found in Tally")
+			.hasMessageContaining(
+					"or the exports of the @WitExport classes of its source tree, which a component exports");
 		assumeTrue(HostBoundaryRuns.nodeAvailable(), "no node on PATH");
 		HostBoundaryRuns.cli(tally.toString(), "-o", this.dir.resolve("tally.wasm").toString(), "--no-gc");
 		write("package.json", "{ \"type\": \"module\" }\n");

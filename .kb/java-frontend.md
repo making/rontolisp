@@ -1401,7 +1401,10 @@ exports the component's entry points.** The user's request (2026-11-24): the opp
 - **Uncaught** (`JavaLowering.reportingExports`): the top level is `(%reporting-uncaught
   #'line nil init..)`, so an export call, and the initialization its first call runs, write
   the line a command writes (`Exception in thread "main" ...`) and trap; `after` is nil, a
-  host call ending as a trap. It is what a command pays, on wasm-GC EH mode: measured
+  host call ending as a trap. Not on a reactor (`JavaBoundary.reportsUncaught`): a
+  `--component --no-wasi` component imports nothing, its standard error a sink (the counter
+  7,202 -> 6,748 B without the report, 2026-11-26), and `--no-gc` has no condition to write a
+  line from. It is what a command pays, on wasm-GC EH mode: measured
   2026-11-25, `examples/java/rust-calls-java`'s counter 7,853 -> 15,056 B, gzip 4,006 -> 6,961
   (EH mode and the `%warn` +4.1 KB, `%java-uncaught-line` and the host-report readers +3.1 KB), a counter
   that throws 3,898 -> 43,738 B, the same code as a command 49,226 B. The `--no-wasi`
@@ -1412,7 +1415,7 @@ exports the component's entry points.** The user's request (2026-11-24): the opp
   Lisp one of `examples/wit/rust-calls-lisp` 3,879 B over `(find c "aeiouAEIOU")`.
 - **Pinned by** `JavaWitImportTest.aClassImplementsTheWorldAComponentExports` (each scalar kind,
   an interface, static state, each refusal, no `wasi:cli/exit`; JDK, interpreter, JVM,
-  component) and
+  component, the `--no-gc` component and its bare trap) and
   `examples.yaml`'s `java/rust-calls-java`; by hand, the example's `CounterTest` under
   `rontolisp test`, `MavenBuildE2eTest` with no `<mainClass>`.
 
@@ -1490,12 +1493,17 @@ is a trap", "Exact mode"), so no backend learns a Java name.**
   structure (Point)`), an array of another element type, a lambda, a box (its null test), a
   `StringBuilder`, `try` (`handler-case`), a lazy class (its `<clinit>` catches to wrap in an
   `ExceptionInInitializerError`), `toUpperCase`, a static `String` assigned during a call (the
-  call's memory is given back when it ends). At the innermost form
-  the lowering locates, or with the chain of methods that reached a library's function.
+  call's memory is given back when it ends). At the innermost form the lowering locates, or
+  with the chain of methods that reached a library's function.
 - **A command is refused** (`exports nothing`): a `main` makes one, and the scalar module is a
-  reactor (`.todo/111`). **`--component` is refused by name** (`CompileFrontend.run`): a Java
-  component's exports are a `@WitExport` world, whose uncaught report needs a condition --
-  `.todo/m47-a-java-witexport-world-on-no-gc-component.md`.
+  reactor (`.todo/111`).
+- **`--component`: a `@WitExport` world** ("WIT exports"), the lowering the GC component's but
+  for the report (`JavaBoundary.reportsUncaught`, false on every reactor): the initialization
+  is the top level as is, the start function's, and an uncaught exception the bare trap.
+  Measured 2026-11-26: `rust-calls-java`'s counter with `indexOf(char)` written as `==`s 2,040
+  / 1,075 B gzip against 12,988 / 5,913 as a wasm-GC component (the example as written,
+  15,076, stops at `position` in `%java-index-of-char`: the nil-or-integer of `indexOf`);
+  `JavaWitImportTest`'s `Kinds` with its `StringBuilder` a `String`, 2,226 B.
 - **Pinned by** `JavaReactorTest.aReactorOfScalarValuesCompilesWithNoGcAndWhatLeavesTheSubsetIsRefusedByName`
   (a JDK against the module under node, no glue; the traps; the refusals),
   `RontoLispCliStreamsTest.aJavaFileRunsCompilesAndIsRefusedWhereItCannot` (a command).
@@ -4544,8 +4552,8 @@ names throw). Written from the standards and JDK 25's answers to probes.
   shared by shape) carry. Hoisting SHA-3's 59 round temporaries out of its loop changed
   nothing (389 ms); a declared local read mostly raw is one `long` slot, a tree over such slots
   computed in place (l73, [jvm-int-fusion.md](jvm-int-fusion.md), "Exact locals"): SHA3-256
-  62-112 ms on Graal, 85-203 on C2. SHA-512 is unchanged on Graal, its arrays' reads and
-  stores still boxed (`.todo/m28`).
+  62-112 ms on Graal, 85-203 on C2. Their arrays read and stored raw: SHA-512 Graal 120-132 ->
+  91-106 ms, C2 335-504 -> 138-161 ([jvm-int-fusion.md](jvm-int-fusion.md), "Declared arrays").
 - **Sizes** (Preview 1 / component / JVM class, bytes): a program naming no digest is
   byte-identical: l72 left `NoDigest`, `RandomOnly`, `Constant`, `Computed`, `Login` and
   `RandomText` so in all three forms, `examples/java/shop` on wasm (324,175 / 335,139; its JVM
@@ -4732,9 +4740,10 @@ once.
   enhanced `for` take `(the (simple-array E (*)) (or a (%java-npe)))`. A null array's access
   evaluates its index (and a store its value) before the backends' check raises what
   `%java-exception-of` makes `NullPointerException` (`.kb/declarations-type-checks.md`,
-  "Declaration-driven array emission"). The interpreter and the JVM read no array declaration;
-  the wasm kinds and a general array's integer elements do (`.kb/wasm-int-fusion.md`, "Ranges,
-  and sites with nothing to bail on"). Measured on wasm: a
+  "Declaration-driven array emission"). The interpreter reads no array declaration; the wasm
+  kinds and a general array's integer elements do (`.kb/wasm-int-fusion.md`, "Ranges, and sites
+  with nothing to bail on"), and the JVM's fused reads and stores take the pinned arm
+  (`.kb/jvm-int-fusion.md`, "Declared arrays"). Measured on wasm: a
   `long[1000]` summed 10^5 times 93.8 -> 1.44 s, 2,000,000 zone offsets 4.83 -> 2.59 s. **The
   premise (the dispatch's bytes) held only where nothing had pinned the array**: the type-test
   fold had already cut each undeclared site to the general arm, `make-array` inits made arrays
@@ -4874,10 +4883,27 @@ a class that does not override it reaches an override below.**
   `BigInteger`), `Boolean`, `Character`. Measured (2026-11-26): a program naming no
   `Serializable` is byte-identical on wasm and component (`.class` of a Java program differs
   run to run, 140,778 / 140,782 B from one jar); `instanceof Serializable` over strings and
-  boxes costs 776 B of wasm in a 117 KB program (also holding `ArrayList` and `BigInteger`). The
-  library's Java-source classes (`ArrayList`, ...) do not declare it yet: `.todo/m54`.
-- Pins: java-spec `an-object-is-copied-by-clone-where-its-class-is-cloneable` (the intrinsics'
-  `Serializable`), `the-library-s-collections-clone-what-they-hold`, the `refused:` cases `clone-*`,
+  boxes costs 776 B of wasm in a 117 KB program (also holding `ArrayList` and `BigInteger`).
+  **The library's Java-source classes declare it where a JDK 25 does** (2026-11-26; surveyed by
+  a probe: `Serializable.class.isAssignableFrom` of each library class against the JDK's, the
+  nested public classes through `getClasses()`, the factories' results through `instanceof` in
+  one program run on the JDK and here): the roots (`Throwable`, `Enum`, `Class`, the collections,
+  `Duration`, `Locale`, `Random`, `Pattern`, the atomics, the locks, the
+  `Clock`s ...), the internal classes standing for a JDK's serializable one (`Collections`'s
+  `Few*`, `SetFromMap`, `UnmodifiableCollection`; `ImmutableCollections`' `ListN`, `SetN`,
+  `MapN`, `ListView`, `Entries`, `SequencedView`; `Synchronized`'s `Each`, `MapOf`;
+  `TreeMap.View`, `ConcurrentSkipListMap.SubMap`), and the library's comparator lambdas, cast
+  `(Comparator<T> & Serializable)` (free: `Comparator.comparing(..).reversed()` is
+  byte-identical). **Measured**: a program naming no `Serializable` is byte-identical on wasm
+  with `ArrayList`, `HashMap`, `TreeSet`, `ArrayDeque`, `LinkedList`, enums, exceptions,
+  `Comparator`, `List.of`, `Collections.unmodifiableList`, `Arrays.asList`, `Set.of`, `Map.of`;
+  `Collections.synchronizedList` costs 20 B; naming `Serializable` costs 688 B in a 182 KB
+  program holding a dozen of the classes. **Where the library still differs** (each answers
+  `true` where a JDK 25 answers `false`, from a view class extending a serializable one):
+  `List.of(..).subList`, `Map.of(..).keySet()`, `TreeMap.keySet()`/`navigableKeySet()`,
+  `ConcurrentSkipListMap.keySet()`.
+- Pins: java-spec `an-object-is-copied-by-clone-where-its-class-is-cloneable` (`Serializable` of the
+  intrinsics and of the library's classes), `the-library-s-collections-clone-what-they-hold`, the `refused:` cases `clone-*`,
   `an-override-of-clone-*` and `an-enum-*`, the reflection case's `int[]`; `JavaLoweringTest`
   (`Process`, the final method of a static member class, a weaker access);
   `java-http-server-spec.yaml`'s servlet case

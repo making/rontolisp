@@ -3,11 +3,13 @@
 // (.kb/java-frontend-provenance.md). Lowered with every program that names it.
 package java.lang;
 
+import java.io.Serializable;
+
 // The cause is unset until a constructor or initCause sets it, and then fixed; a trace
 // is the exception with its causes (what getCause answers, which a subclass may
 // override) and the exceptions it suppressed, with no frame: what printStackTrace
 // prints, and what is reported of an exception nothing caught.
-public class Throwable {
+public class Throwable implements Serializable {
 
     private String message;
 

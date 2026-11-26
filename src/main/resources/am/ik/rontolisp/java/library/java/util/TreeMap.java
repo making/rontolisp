@@ -3,6 +3,7 @@
 // (.kb/java-frontend-provenance.md). Lowered with every program that names it.
 package java.util;
 
+import java.io.Serializable;
 import java.util.function.BiConsumer;
 import java.util.function.BiFunction;
 import java.util.function.Function;
@@ -15,7 +16,7 @@ import rontolisp.internal.Splits;
 // program holds and the node an iterator stands on stay what they were. A view -- a
 // range of keys, the keys against their order, or both -- is the tree and its bounds.
 // Which keys a comparator is asked about follows this tree's shape, not a JDK's.
-public class TreeMap<K, V> extends AbstractMap<K, V> implements NavigableMap<K, V>, Cloneable {
+public class TreeMap<K, V> extends AbstractMap<K, V> implements NavigableMap<K, V>, Cloneable, Serializable {
 
     static final class Entry<K, V> implements Map.Entry<K, V> {
 
@@ -956,7 +957,7 @@ public class TreeMap<K, V> extends AbstractMap<K, V> implements NavigableMap<K, 
     // The keys between two bounds (each one there or not, holding its key or not), in
     // the tree's order or against it. The bounds and the order are the tree's own:
     // against it, the low bound is where the view ends.
-    static final class View<K, V> extends AbstractMap<K, V> implements NavigableMap<K, V> {
+    static final class View<K, V> extends AbstractMap<K, V> implements NavigableMap<K, V>, Serializable {
 
         final TreeMap<K, V> tree;
 

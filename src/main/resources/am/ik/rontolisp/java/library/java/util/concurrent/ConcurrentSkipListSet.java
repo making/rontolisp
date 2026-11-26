@@ -3,6 +3,7 @@
 // (.kb/java-frontend-provenance.md). Lowered with every program that names it.
 package java.util.concurrent;
 
+import java.io.Serializable;
 import java.util.AbstractSet;
 import java.util.Collection;
 import java.util.Comparator;
@@ -14,7 +15,7 @@ import java.util.Spliterator;
 
 // A set over the keys of a ConcurrentSkipListMap, or of a view of one: a view of a set
 // is a set over the view of its map.
-public class ConcurrentSkipListSet<E> extends AbstractSet<E> implements NavigableSet<E>, Cloneable {
+public class ConcurrentSkipListSet<E> extends AbstractSet<E> implements NavigableSet<E>, Cloneable, Serializable {
 
     ConcurrentNavigableMap<E, Object> map;
 

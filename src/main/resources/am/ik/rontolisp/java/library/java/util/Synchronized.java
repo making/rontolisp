@@ -3,6 +3,7 @@
 // (.kb/java-frontend-provenance.md). Lowered with every program that names it.
 package java.util;
 
+import java.io.Serializable;
 import java.util.function.BiConsumer;
 import java.util.function.BiFunction;
 import java.util.function.Consumer;
@@ -19,7 +20,7 @@ final class Synchronized {
     private Synchronized() {
     }
 
-    static class Each<E> implements Collection<E> {
+    static class Each<E> implements Collection<E>, Serializable {
 
         final Collection<E> held;
 
@@ -248,7 +249,7 @@ final class Synchronized {
         }
     }
 
-    static class MapOf<K, V> implements Map<K, V> {
+    static class MapOf<K, V> implements Map<K, V>, Serializable {
 
         private final Map<K, V> held;
 

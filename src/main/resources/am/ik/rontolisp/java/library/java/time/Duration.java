@@ -8,6 +8,7 @@
 // and a fraction of the same sign (whole(), fraction()).
 package java.time;
 
+import java.io.Serializable;
 import java.time.format.DateTimeParseException;
 import java.time.temporal.ChronoField;
 import java.time.temporal.ChronoUnit;
@@ -17,7 +18,7 @@ import java.time.temporal.TemporalUnit;
 import java.time.temporal.UnsupportedTemporalTypeException;
 import java.util.List;
 
-public final class Duration implements TemporalAmount, Comparable<Duration> {
+public final class Duration implements TemporalAmount, Comparable<Duration>, Serializable {
 
     public static final Duration ZERO = new Duration(0, 0);
 

@@ -10,6 +10,7 @@
 // elements there were when it was made.
 package java.util.concurrent;
 
+import java.io.Serializable;
 import java.util.AbstractCollection;
 import java.util.ArrayDeque;
 import java.util.ArrayList;
@@ -21,7 +22,7 @@ import java.util.stream.Stream;
 import rontolisp.internal.ObjectFlow;
 import rontolisp.internal.Splits;
 
-public class LinkedTransferQueue<E> extends AbstractCollection<E> implements TransferQueue<E> {
+public class LinkedTransferQueue<E> extends AbstractCollection<E> implements TransferQueue<E>, Serializable {
 
     /** An element in the queue, or a thread's wait for one. */
     private static final class Slot<E> {

@@ -8,9 +8,10 @@
 // so a task waiting for the tasks it forked needs no thread but its own.
 package java.util.concurrent;
 
+import java.io.Serializable;
 import java.util.Collection;
 
-public abstract class ForkJoinTask<V> implements Future<V> {
+public abstract class ForkJoinTask<V> implements Future<V>, Serializable {
 
     private static final int WAITING = 0;
 

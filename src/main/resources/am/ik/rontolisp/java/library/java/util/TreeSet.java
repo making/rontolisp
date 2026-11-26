@@ -3,9 +3,11 @@
 // (.kb/java-frontend-provenance.md). Lowered with every program that names it.
 package java.util;
 
+import java.io.Serializable;
+
 // A set over the keys of a TreeMap, or of a view of one: a view of a set is a set over
 // the view of its map.
-public class TreeSet<E> extends AbstractSet<E> implements NavigableSet<E>, Cloneable {
+public class TreeSet<E> extends AbstractSet<E> implements NavigableSet<E>, Cloneable, Serializable {
 
     NavigableMap<E, Object> map;
 

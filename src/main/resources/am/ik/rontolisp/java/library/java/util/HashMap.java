@@ -3,6 +3,7 @@
 // (.kb/java-frontend-provenance.md). Lowered with every program that names it.
 package java.util;
 
+import java.io.Serializable;
 import java.util.function.BiFunction;
 import java.util.function.Function;
 import rontolisp.internal.Splits;
@@ -13,7 +14,7 @@ import rontolisp.internal.Splits;
 // are used; a chain is in the order its keys were put, and a doubling keeps that order
 // in the two chains a chain becomes. The table is made when the first key is put. Not
 // kept: the order of a chain of more than eight keys in a table of 64 or more.
-public class HashMap<K, V> extends AbstractMap<K, V> implements Cloneable {
+public class HashMap<K, V> extends AbstractMap<K, V> implements Cloneable, Serializable {
 
     static class Node<K, V> implements Map.Entry<K, V> {
 

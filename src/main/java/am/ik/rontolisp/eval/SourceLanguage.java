@@ -282,10 +282,8 @@ public enum SourceLanguage {
 	 * them -- a WASM target's does ({@code .kb/java-frontend.md}, "WIT imports").
 	 */
 	static JavaHostBoundary javaBoundary(@Nullable SourceLoader loader, Features features, @Nullable String file) {
-		// a reactor that is no component: --no-wasi (the scalar backend takes no Java)
 		return new JavaHostBoundary(loader, features.contains("rontolisp-wasm"), features.contains(Features.COMPONENT),
-				features.contains("rontolisp-reactor") && !features.contains(Features.COMPONENT),
-				features.contains(Features.WASI_LOGGING), file);
+				features.contains("rontolisp-reactor"), features.contains(Features.WASI_LOGGING), file);
 	}
 
 	/**
