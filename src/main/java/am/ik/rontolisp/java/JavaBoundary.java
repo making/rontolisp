@@ -78,7 +78,7 @@ public interface JavaBoundary {
 	 * The exports of a WIT world a {@code rontolisp:wit-export} of it checks a program
 	 * against, read from the first of the paths that names a file or a directory, after
 	 * every check that does not read the program: the world exists and exports something,
-	 * each label is one, each type crosses the export boundary.
+	 * each label is one, each type is one a component's export carries.
 	 * @param wit the WIT as the annotation writes it, for a message
 	 * @param paths where the WIT may be, as {@link #importInterface} reads them
 	 * @param world the world's name
@@ -244,9 +244,12 @@ public interface JavaBoundary {
 	 * @param result its result, or {@code null} for none
 	 * @param async whether it is an {@code async func}
 	 * @param at the WIT file and line declaring it ({@code path:line})
+	 * @param canonical whether a type of it is outside the flat set (a record, a list, a
+	 * variant ...), so that the directive lowers it through the canonical ABI and its
+	 * function takes and answers the values of the settled mapping
 	 */
 	record Export(String name, @Nullable String iface, String key, List<Param> params, @Nullable Type result,
-			boolean async, String at) {
+			boolean async, String at, boolean canonical) {
 	}
 
 	/**

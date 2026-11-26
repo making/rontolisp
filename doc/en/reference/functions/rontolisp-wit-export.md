@@ -73,7 +73,7 @@ wasmtime run --invoke 'greet("world")' greet.wasm
   `(:ok . value)` or `(:error . value)` itself, instead of the ok value with
   `rontolisp:wit-error` signalled for the error arm
   ([Compound types](#compound-types)). The Clojure front end's `rontolisp.wit/export`
-  passes it.
+  and the Java front end's `@WitExport` pass it.
 
 Everything else comes from the world: `rontolisp:wasm-export`'s `:params`,
 `:param-names`, `:returns` and `:async` are all filled in from it, so the

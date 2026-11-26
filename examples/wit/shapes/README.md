@@ -48,8 +48,17 @@ wasmtime run --invoke 'summarize([1.5, 2.5])' shapes.wasm
 # {count: 2, total: 4}
 ```
 
-and [`build.sh`](build.sh) plugs it into the command, which then prints the lines
-above:
+[`Shapes.java`](Shapes.java) implements the same world as a Java class, the WIT's
+types its member records, enum and sealed interface; its component answers the
+same calls:
+
+```bash
+rontolisp Shapes.java --java-source-path ../../../rontolisp-java-api/src/main/java \
+  -o shapes.wasm --component
+```
+
+[`build.sh`](build.sh) plugs the Lisp one into the command, which then prints the
+lines above (`SHAPES=Shapes.java ./build.sh` plugs the Java one):
 
 ```bash
 RONTOLISP=../../../target/rontolisp ./build.sh

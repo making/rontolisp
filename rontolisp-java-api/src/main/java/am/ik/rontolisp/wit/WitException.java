@@ -5,7 +5,8 @@ package am.ik.rontolisp.wit;
  * answers, where the method declares the ok arm as its answer (otherwise it answers a
  * {@link WitResult}): the function throws it in place of a value, carrying the error. A
  * provider throws it for its error arm; the host's binding rontolisp compiles throws it
- * for the host's.
+ * for the host's. A method of a {@link WitExport} class declaring its ok arm throws it
+ * the same way, and the component answers the error arm.
  */
 public class WitException extends RuntimeException {
 

@@ -67,8 +67,8 @@ wasmtime run --invoke 'greet("world")' greet.wasm
   オプションと同じ意味です)。
 - `:envelope` — `t` を指定すると、WIT の結果が `result` の関数は、ok の値を返して error 側で
   `rontolisp:wit-error` を通知する代わりに、`(:ok . 値)` か `(:error . 値)` を自分で
-  返します ([複合型](#compound-types))。Clojure フロントエンドの `rontolisp.wit/export` が
-  これを渡します。
+  返します ([複合型](#compound-types))。Clojure フロントエンドの `rontolisp.wit/export` と
+  Java フロントエンドの `@WitExport` がこれを渡します。
 
 それ以外はすべて world から得られます。`rontolisp:wasm-export` の `:params`、
 `:param-names`、`:returns`、`:async` はすべて world から埋められるため、`defun`

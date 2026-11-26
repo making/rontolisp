@@ -521,8 +521,10 @@ public final class WitExportDirective {
 			String witPath, WitLocations locations, WitItem item, WitResolver resolver, WitItem.InterfaceDef scope) {
 		BoundaryType boundary = flatDesignator(type, resolver, scope);
 		if (boundary != null) {
+			// the primitive it resolves to, which is also what it is defined as
 			String wit = java.util.Objects.requireNonNull(boundary.witName());
-			return new WitTypeMapper.Shape(WitTypeMapper.rep(new WitType.Prim(wit)), null, wit);
+			return new WitTypeMapper.Shape(WitTypeMapper.rep(new WitType.Prim(wit)), null, wit, null, List.of(), wit,
+					false);
 		}
 		requireCanonical(type, exportName, what, witPath, locations, item, Backend.OTHER, resolver, scope);
 		if (func.async()) {

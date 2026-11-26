@@ -307,7 +307,9 @@ wasmtime run --invoke 'vowel-count("hello world")' counter.wasm   # 3
 スカラー値のクラス（[`--no-gc` のリアクタ](index.md#a-reactor-on---no-gc)）は、`--no-gc` を
 付けてもコンパイルできます。できるのはスカラーのバックエンドのコンポーネントで、static の初期化は
 インスタンス化のときに実行されます。上のカウンタの `indexOf` を比較に書き換えたものは、そこで
-2,040 バイト、`--no-gc` なしで 12,988 バイトです。
+2,040 バイト、`--no-gc` なしで 12,988 バイトです。`bool`、整数、`f64`、`string` 以外の型を
+受け渡す world は、そこでは WIT の行で拒否されます。スカラーのバックエンドには、レコードや
+リストにあたる値がないためです。
 
 JDK、インタプリタ、JVM では、アノテーションは何もしません。`vowelCount` は普通の static
 メソッドで、プログラムやテストから呼びます。`main` のないプログラムは、そこでは拒否されます。
@@ -325,9 +327,91 @@ Counter.java:6:24: vowelCount (vowel-count of world counter, wit/vowels.wit:4): 
 is s32, which is int in Java, not long
 ```
 
-型は、[上の表](#the-types)のうち world のエクスポートで使える `bool`、整数、`f64`、`string`
-です。それ以外の型は WIT の行で拒否されます。Lisp のプログラムの `rontolisp:wit-export` は
-レコード、リスト、バリアントを受け渡せますが、Java の world のエクスポートはまだ受け渡せません。
+### エクスポートの型
+
+型は[上の表](#the-types)のとおりです。ただし、world のエクスポートが受け渡せない型は、
+WIT の行で拒否されます。リソース、`stream`、`future` です。名前の付いた型は、インポートする
+インタフェースの場合と同じくメンバー型です。
+world が定義する型はアノテーションを付けたクラスのメンバー型で、エクスポートするインタフェースが
+定義する型は、そのインタフェースのメンバークラスのメンバー型です。world やインタフェースが
+`use` でほかのインタフェースから取り込んだ型も、`use` 句が与えた名前のメンバー型です。tuple はプログラムのレコードで、
+どこに宣言してもかまいません。
+
+```console
+interface geometry {
+  record point { x: s32, y: s32 }
+  variant shape { circle(f64), rect(point), dot }
+
+  flip: func(p: point) -> point;
+  area: func(s: shape) -> result<f64, string>;
+}
+
+world shapes {
+  record summary { count: u32, total: f64 }
+
+  export geometry;
+  export summarize: func(areas: list<f64>) -> summary;
+}
+```
+
+```console
+@WitExport(value = "shapes", wit = "wit/shapes.wit")
+public class Shapes {
+
+    public record Summary(int count, double total) {
+    }
+
+    public static Summary summarize(List<Double> areas) {
+        ...
+    }
+
+    public static class Geometry {
+
+        public record Point(int x, int y) {
+        }
+
+        public sealed interface Shape {
+
+            record Circle(double value) implements Shape {
+            }
+
+            record Rect(Point value) implements Shape {
+            }
+
+            record Dot() implements Shape {
+            }
+        }
+
+        public static Point flip(Point p) {
+            return new Point(p.y(), p.x());
+        }
+
+        public static double area(Shape s) {
+            if (s instanceof Shape.Dot) {
+                throw new WitException("a dot has no area", "a dot has no area");
+            }
+            ...
+        }
+    }
+}
+```
+
+```bash
+wasmtime run --invoke 'flip({x: 1, y: 2})' shapes.wasm   # {x: 2, y: 1}
+wasmtime run --invoke 'area(dot)' shapes.wasm            # err("a dot has no area")
+```
+
+`result` を返すメソッドは、インポートするインタフェースのメソッドと同じく、`WitResult<T, E>` か
+ok 側の型（値がなければ `void`）を宣言します。ok 側の型を宣言したメソッドは、エラー側を
+`WitException` として投げます。その `error()` が、対応する Java の型のエラーです（値がなければ
+`null`）。それ以外の例外は、エクスポートが捕まえなかった例外として扱われます
+（[制限](#limitations)）。`Optional`、`List`、レコード、`WitResult` の代わりに `null` を返すと、
+同じ扱いの `NullPointerException` になります。
+
+[`examples/wit/shapes/Shapes.java`](https://github.com/making/rontolisp/tree/develop/examples/wit/shapes)
+は、隣にある Lisp の例と同じ world を実装します。その例の Lisp のコマンドは、どちらの
+コンポーネントと合成しても、同じ行を出力します。
+
 符号なし整数は、同じ幅の Java の型にビットのまま入ります。これはどちらの向きでも同じです。
 `u32` の 4294967295 は `int` の -1 になり、`u32` を返すエクスポートが `int` の -1 を返すと
 4294967295 になります。
@@ -335,7 +419,8 @@ is s32, which is int in Java, not long
 `async func` のエクスポートも、ほかと同じく値を返す static メソッドです。コンポーネントはこれを
 async で lift するので、`Thread.sleep` や、インポートした `async func` の呼び出しのように
 メソッドがブロックする箇所で、呼び出しは待てます。同期のエクスポートがブロックするとトラップに
-なります（`cannot block a synchronous task`）。使える型は上と同じで、`--no-gc` では拒否されます
+なります（`cannot block a synchronous task`）。使える型は `bool`、整数、`f64`、`string` だけで
+（`async func` にそれ以外の型があると WIT の行で拒否されます）、`--no-gc` では拒否されます
 （[`rontolisp:wit-export`](../reference/functions/rontolisp-wit-export.md)）。
 
 ```console
@@ -357,7 +442,9 @@ public static int pause(int ms) throws InterruptedException {
   モジュールでは `flags` 以外のすべての型です。
   それ以外の型を持つメンバーは、プログラムが呼ぶ場合に限り、`wit-import` と同じく WIT の行を
   示して拒否されます。
-- `Long.MAX_VALUE` を超える `u64` は、どの WASM の境界も越えません。
+- `Long.MAX_VALUE` を超える `u64` は、どの WASM の境界も越えず、呼び出しはトラップになります。
+  例外は、エクスポートが返す複合型の値の中（レコードのフィールド、リストの要素）です。そこでは、
+  負の `long` が同じビットの `u64` になります。
 - ネイティブ実行ファイル（`--native`）は Preview 1 のモジュールを動かしますが、そのランナーは
   WIT インタフェースを提供しません。そのため、WIT インタフェースを呼ぶプログラムはそこでは起動しません。
 - 宣言の位置で拒否されるもの: プログラムがホストに渡す `stream` と `future`、`stream<u8>`、
@@ -365,10 +452,9 @@ public static int pause(int ms) throws InterruptedException {
   future と境界が見分けられないため）。`bool`、`list`、`flags`、`option` を要素とする `option`
   （境界がその none を見分けられないため）。ほかのインタフェースのリソース。`WitException` として
   投げるエラーの型にある tuple（型を書く場所がないため。`WitResult` の戻り値なら書けます）。
-- world のエクスポートで使える型は、`bool`、整数、`f64`、`string` です。`async func` の
-  エクスポートは `--no-gc` では拒否されます。同じラベルのエクスポート 2 つ（world の関数と
-  インタフェースの関数、または 2 つのインタフェースの関数）は、それぞれのクラスの 2 つの
-  メソッドです。
+- world のエクスポートは、リソース、`stream`、`future` を受け渡せません。`async func` のエクスポートで使える型は `bool`、整数、`f64`、`string` だけで、
+  `--no-gc` では拒否されます。同じラベルのエクスポート 2 つ（world の関数とインタフェースの
+  関数、または 2 つのインタフェースの関数）は、それぞれのクラスの 2 つのメソッドです。
 - エクスポートが捕まえなかった例外は、JDK が書く行（`Exception in thread "main"
   java.lang.IllegalStateException: ...`）を標準エラー出力に書いてからトラップになります。
   最初の呼び出しが実行する static 初期化が捕まえなかった例外も同じです。標準エラー出力を

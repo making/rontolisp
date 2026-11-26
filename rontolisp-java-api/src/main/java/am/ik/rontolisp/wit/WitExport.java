@@ -27,8 +27,25 @@ import java.lang.annotation.Target;
  * An interface the world exports is a static member class named after the interface in
  * upper camel case ({@code export docs:adder/add;} is {@code Add}), its static methods
  * the interface's functions. The types are those {@link WitImport} maps, of the ones a
- * world's export carries: {@code bool}, the integers (an unsigned one holding its bits in
- * the Java type of its width), {@code f64} and {@code string}.
+ * world's export carries -- every one but {@code flags}, a resource, a {@code stream} and
+ * a {@code future}: a record, a variant or an enum the world defines is a member type of
+ * the class, one an exported interface defines a member type of the interface's member
+ * class.
+ *
+ * <pre>
+ * // record point { x: s32, y: s32 }
+ * // flip: func(p: point) -&gt; point;
+ * public record Point(int x, int y) {
+ * }
+ *
+ * public static Point flip(Point p) {
+ *     return new Point(p.y(), p.x());
+ * }
+ * </pre>
+ *
+ * <p>
+ * A method answering a {@code result<T, E>} declares a {@link WitResult}, or its ok arm:
+ * the error arm is then a {@link WitException} the method throws.
  *
  * <p>
  * Under a JDK, and on rontolisp's interpreter and JVM, the annotation does nothing: the

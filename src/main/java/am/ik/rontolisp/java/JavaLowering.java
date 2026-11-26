@@ -2727,6 +2727,9 @@ final class JavaLowering implements JavaEmitter.Context {
 		}
 		this.classes.exports.entries = true;
 		startsNowhere();
+		// generated source is lowered as far as it is reached: the conversions around
+		// the exports of compound types, each an entry point
+		this.classes.exports.wrappers().values().forEach(this::reach);
 	}
 
 	/**
