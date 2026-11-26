@@ -439,20 +439,32 @@ either component, composed with it, and prints the same lines.
 An unsigned integer is the Java type of its width holding its bits both ways: a `u32` of
 4294967295 is the `int` -1, and the `int` -1 an export answers for a `u32` is 4294967295.
 
-An `async func` export is a static method answering its value, as any other. The component
-lifts it async, so the call may wait where the method blocks, as in a `Thread.sleep` or a call
-of an imported `async func`; a sync export that blocks traps (`cannot block a synchronous
-task`). It takes the types any other export takes, and `--no-gc` refuses it
-([`rontolisp:wit-export`](../reference/functions/rontolisp-wit-export.md)).
+An `async func` export is a static method answering its value, as any other, and it takes
+the types any other export takes: a record, a list, a variant or a `result` crosses an
+`async func` as it crosses a `func`. What each output makes of it:
+
+| Output | An `async func` export |
+| --- | --- |
+| `--component` | lifted async: the call may wait where the method blocks, as in a `Thread.sleep` or a call of an imported `async func`. A plain `func` that blocks traps (`cannot block a synchronous task`) |
+| `--component --no-wasi` | lifted async too, but the component imports no clock: a method that sleeps traps |
+| `--no-gc --component` | refused at its WIT line ([`rontolisp:wit-export`](../reference/functions/rontolisp-wit-export.md)) |
+| a module (`-o out.wasm` alone, `--no-wasi`), `--native` | exported nowhere, as every export: a world is exported by a component |
+| a JDK, the interpreter, the JVM | the method, called as any other |
 
 ```console
 export pause: async func(ms: u32) -> u32;
+export summarize: async func(areas: list<f64>) -> summary;
 ```
 
 ```console
 public static int pause(int ms) throws InterruptedException {
     Thread.sleep(ms);
     return ms;
+}
+
+public static Summary summarize(List<Double> areas) throws InterruptedException {
+    Thread.sleep(1);
+    ...
 }
 ```
 

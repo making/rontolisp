@@ -226,7 +226,8 @@ note under `Task.enter_implicit_thread`):
   popped to the WAITING call's mark and cleared it -- below what that call still held. Measured:
   an async export waiting in its own async import (the place the answer is written into is
   staged above the mark), one sync call of a record meanwhile, and the answered string came
-  back with its pointer pair written into its 17th byte ("invalid utf8 encoding").
+  back with its pointer pair written into its 17th byte ("invalid utf8 encoding"); a flat
+  `:string` pair of exports the same, at its 25th.
   **An async export that touches memory holds its mark in three locals while its function
   runs** (`WasmExportCompiler.waitsOverMemory`, `emitBody`): cells to locals and the mark
   cleared on the way in, back on the way out before the result is staged, so a call made
@@ -236,6 +237,10 @@ note under `Task.enter_implicit_thread`):
 - Not measured (`.todo/178-component-shared-memory-map-collision.md`): whether a waiting call
   holds anything else the call made meanwhile can write over -- bytes staged past the heap
   top, the adapter's page-5 cells.
+- `--no-gc`'s post-return pops to the heap BASE (`NoGcWasmCompiler.postReturnBody`): right
+  while no call of an instance waits beside another (a printing program's exports are all
+  async-typed, so serialized), wrong for a sync-typed export beside an async-typed one that
+  waits.
 - Pins: `WitOracleE2eTest.aComponentCallsWhatAnotherExportsOverCompoundTypes` (three composed
   components, the sync call made while the async one waits).
 

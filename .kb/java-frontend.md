@@ -1499,7 +1499,10 @@ exports the component's entry points.** The user's request (2026-11-24): the opp
   `wit-export`'s check at the WIT line. A sleeping export imports `wasi:cli/exit`:
   `Thread.currentThread()` makes a `Thread`, whose id counter is `synchronized`, and the wasm
   monitor entry reaches `%java-unforeseen`. A compound type crosses it as any export's (the
-  wrapper class's method, `.kb/wit.md`, "An `async func`").
+  wrapper class's method, `.kb/wit.md`, "An `async func`"): `examples/wit/shapes/Shapes.java`
+  with three functions made async (a list, a record and a `result` answered) answers the same
+  on `--component` and `--component --no-wasi`, 174,323 -> 174,491 B (56 B an export, the mark
+  it holds: `.kb/wasi-component.md`).
 - **The lowering**: a flat export's `u8`, `u16` or `u32` crosses through a `defun`
   `<function>%wit` converting it; a `u64` past `Long.MAX_VALUE` traps (`.kb/wit.md`). An EAGER class is initialized in the
   top level, which the reactor runs in the first export call, a LAZY one at the top of its
