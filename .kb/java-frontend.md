@@ -1618,7 +1618,9 @@ JDK in the front end's semantics, the library and the host.
   parameter of JUnit's type (`ArgumentsAccessor`, `TestInfo`, `Named`), which JUnit makes
   (a `TestInfo`'s display name would show the arguments), an orderer other than
   `OrderAnnotation`/`MethodName`/`DisplayName`, a `RepetitionInfo` given around a test that
-  is not repeated (JUnit: a `ParameterResolutionException` of that test).
+  is not repeated (JUnit: a `ParameterResolutionException` of that test), a text a
+  `@ValueSource(strings)` or `@CsvSource` gives a `Class` parameter (JUnit's `Class.forName`
+  of a computed name, which finds a class only through reachability metadata here).
 - **JUnit's rules for a source written twice and a `Named` argument**
   (`doc/en/java/testing.md`), pinned by `p.FifthTest` of the corpus case: measured,
   `@CsvSource("a") @ValueSource("b") @CsvSource("c")` runs a, c, b (javac's container;
@@ -1668,10 +1670,13 @@ JDK in the front end's semantics, the library and the host.
   backlog), then `URLClassLoader` and TLS (`SSLContext`, `KeyStore`); `ServletContainerTest`
   and `DiscoveryTest` at Tomcat's and Jetty's classes (`Container.java`) and `javax.tools`;
   `PostgresDriverTest` at Testcontainers; `ConformanceTest` (webmvc-fn-lite) at
-  `javax.tools.JavaCompiler`; `KeyValueSessionStoreTest` (with `servlet-httpserver` and
-  `rontolisp-java-api` on the source path) at `KeyValueStore.Bucket` not found from the test
-  file, then the recursive comparison, and on Preview 1 the `@WitImport` store
-  (`.todo/m61`, `.todo/m62`). A program that is no run of tests holds none of it: the lowering changes
+  `javax.tools.JavaCompiler`; `KeyValueSessionStoreTest` at `java.net.CookieManager` (the
+  source path its module's `src/main/java` AND `src/main/resources`, which holds the
+  `@WitImport`'s WIT, `servlet-httpserver`'s and `rontolisp-java-api`'s, with
+  `--java-source-dep jakarta.servlet:jakarta.servlet-api:6.1.0`): measured 2026-11-26, with
+  no cookie handler, no `usingRecursiveComparison` and no `asInstanceOf` (`.todo/m62`) both
+  tests run on the interpreter and fail only where those edits change them --
+  `KeyValueStore.Bucket` is found. A program that is no run of tests holds none of it: the lowering changes
   only where `javaTests` is set or a test package of the library's is named
   (`examples/java/shop` 323,921 B, byte-identical across l87).
 - **Past one instance a test and the order declared: measured** (JUnit 6.0.3, 2026-11-26;
@@ -1702,6 +1707,48 @@ JDK in the front end's semantics, the library and the host.
   `getTestMethod` costs only where called), `@RepeatedTest` +11.1 KB; a run with none of it,
   the two tree suites and `examples/java/shop` byte-identical (`TestRun.repetition` is a
   method of its own for that).
+- **An argument converted as JUnit converts it: measured** (JUnit 6.0.3, 2026-11-26; pinned by
+  the corpus case's `q/ConvertedTest.java`, four backends against the oracle). By the
+  parameter's STATIC type in the generated code (`JavaTests.argument`): a primitive type or
+  its box, `String` and `Object` by methods of `TestSources`; any other class type by
+  `TestSources.converted` handed `instanceof` and a lambda converting a text: JUnit's
+  conversion of a JDK type (`JavaTests.CONVERSIONS`: `Locale.forLanguageTag`, `URL` through
+  `URI.create(..).toURL()`, a number's `_` dropped, `BigDecimal`'s too), an enum's
+  `valueOf`, else the type's own (`JavaTests.factory`): its ONE static non-private method
+  taking a `String` and returning exactly the type, inherited ones counted; else its
+  non-private `String` constructor (not of an abstract, inner or local class); else the same
+  of `CharSequence` -- two `String` factories fall to the constructor, a factory returning a
+  subclass is none. Widening only to a primitive type (byte to short to int to long to float
+  to double, char to int); a box takes its own box or a text, never another (`Integer` from
+  a `Byte` is an error). What is not converted throws JUnit's chain:
+  `ParameterResolutionException: Error converting parameter at index N: M`, caused by
+  `ArgumentConversionException: M`, caused for a text by `ConversionException: M`, caused by
+  what the conversion threw (`PreconditionViolationException: String must have length of
+  1: ab` / `String must be 'true' or 'false' (ignoring case): yes` for a char and a boolean);
+  M is `Failed to convert String "x" to type T`, `No built-in converter for source type S and
+  target type T` or `Cannot convert null to primitive value of type int`, T a binary name.
+  **Differences kept**: S of an array is `[C` where JUnit writes `char[]`
+  (`Class.getTypeName` costs every parameterized test 10 KB of wasm: `UrlCodecTest` 251,963
+  against 241,703 B); a row shorter than the parameters is `IllegalArgumentException: No
+  argument for the parameter at index ..` where JUnit says `No ParameterResolver registered
+  for parameter [int arg1] in method [..]`; no rows is `IllegalStateException`, JUnit 6's
+  `TemplateInvocationValidationException` (5.11 has no such class) with the same text; the
+  valid names of an `@EnumSource` in the order declared, JUnit's a JDK `HashSet`'s (`[XL, L,
+  M]`), which the library's does not keep. `@FieldSource` (measured): a field of the test's
+  class or one above, not of the class around a `@Nested` one (`Could not find field named
+  [..] in class [..]`, a compile error here as a missing `@MethodSource` method is); static,
+  or of the shared instance under `PER_CLASS`; a `Supplier` is called first (`Object must not
+  be null`); an `Iterable`, an array of objects or of a primitive type, a stream from a
+  `Supplier`; a stream or an `Iterator` field refused (`must not be a stream`, `must not be an
+  Iterator`), anything else `must be convertible to a Stream`; `"Class#field"` refused as
+  `"Class#method"` is. `TestSources.field` is an overload per static type, so a `List` field
+  reaches no stream class. `@EnumSource`'s `from`/`to`: the range first (`Invalid enum range:
+  'from' (L) must come before 'to' (M) in the natural order of enum constants.`), an unknown
+  bound `Enum.valueOf`'s `No enum constant C.X`, names checked against the range (the
+  annotation written as a JDK's `toString` writes it: `mode, from, to, names, value`). Cost:
+  `UrlCodecTest` 238,387 -> 241,703 B wasm (the three exception classes), `SqlTest`,
+  `ScramTest` and `examples/java/shop` byte-identical; JUnit 5.11.4's sources run the same
+  file to the same bytes.
 - **Skips, `@TempDir`, closed arguments: measured** (JUnit 6.0.3, surefire 3.6.0, 2026-11-25).
   Surefire counts a skipped CLASS as its direct children (each test, a parameterized test
   one, each `@Nested` class one): `@Disabled` on a class of two tests is `Tests run: 2,
